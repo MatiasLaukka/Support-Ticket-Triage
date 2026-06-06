@@ -1,4 +1,8 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  ResourceTemplate,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import type { NoteStore, NoteSummary } from "./note-store.js";
@@ -64,6 +68,25 @@ async function asToolResult(action: () => Promise<string>) {
   }
 }
 
+async function asResourceResult<T>(action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!isKnownDomainError(error)) {
+      console.error("Unexpected local storage error:", error);
+    }
+
+    throw new McpError(
+      isKnownDomainError(error)
+        ? ErrorCode.InvalidParams
+        : ErrorCode.InternalError,
+      isKnownDomainError(error)
+        ? error.message
+        : "Unexpected local storage error.",
+    );
+  }
+}
+
 function formatSummaries(notes: NoteSummary[]): string {
   return notes.map((note) => `${note.id}: ${note.title}`).join("\n");
 }
@@ -72,6 +95,85 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
   const server = new McpServer(
     { name: "local-knowledge-desk", version: "1.0.0" },
     { instructions: SERVER_INSTRUCTIONS },
+  );
+
+  server.registerResource(
+    "note",
+    new ResourceTemplate("note://{id}", {
+      list: async () => ({
+        resources: (await store.list()).map((note) => ({
+          uri: `note://${note.id}`,
+          name: note.title,
+          description: `Local note ${note.id}`,
+          mimeType: "text/markdown",
+        })),
+      }),
+    }),
+    {
+      title: "Local note",
+      description: "A Markdown note stored by the Local Knowledge Desk",
+      mimeType: "text/markdown",
+    },
+    async (uri, variables) =>
+      asResourceResult(async () => {
+        const id = variables.id;
+        if (typeof id !== "string") {
+          throw new Error('Invalid note ID: "".');
+        }
+        const note = await store.read(id);
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "text/markdown",
+              text: `# ${note.title}\n\n${note.body}`,
+            },
+          ],
+        };
+      }),
+  );
+
+  server.registerPrompt(
+    "daily_review",
+    {
+      description:
+        "Review local notes to identify the day's most important priorities.",
+    },
+    async () => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: "Call list_notes, inspect the relevant notes, identify the highest priorities, and return a concise daily review that cites note IDs.",
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    "research_digest",
+    {
+      description:
+        "Research a topic across local notes and produce a sourced digest.",
+      argsSchema: {
+        topic: z
+          .string()
+          .describe("The research topic to investigate in local notes."),
+      },
+    },
+    async ({ topic }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Research topic: ${topic}\n\nCall search_notes for this topic, read matching notes with read_note, synthesize the findings, and cite every source note ID.`,
+          },
+        },
+      ],
+    }),
   );
 
   server.registerTool(

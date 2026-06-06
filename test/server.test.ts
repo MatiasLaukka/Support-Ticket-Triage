@@ -318,4 +318,130 @@ describe("knowledge desk MCP tools", () => {
     ]);
     await expect(client.listTools()).resolves.toHaveProperty("tools");
   });
+
+  it("lists stored notes as resources and advertises the note template", async () => {
+    await store.create({
+      id: "mcp-resources",
+      title: "MCP Resources",
+      body: "Resources expose local context.",
+    });
+
+    const listed = await client.listResources();
+    expect(listed.resources).toEqual([
+      {
+        uri: "note://mcp-resources",
+        name: "MCP Resources",
+        title: "Local note",
+        description: "Local note mcp-resources",
+        mimeType: "text/markdown",
+      },
+    ]);
+
+    const templates = await client.listResourceTemplates();
+    expect(templates.resourceTemplates).toEqual([
+      {
+        uriTemplate: "note://{id}",
+        name: "note",
+        title: "Local note",
+        description: "A Markdown note stored by the Local Knowledge Desk",
+        mimeType: "text/markdown",
+      },
+    ]);
+  });
+
+  it("reads exact Markdown through the note resource", async () => {
+    await store.create({
+      id: "resource-read",
+      title: "Resource Read",
+      body: "Exact body.",
+    });
+
+    const result = await client.readResource({
+      uri: "note://resource-read",
+    });
+
+    expect(result.contents).toEqual([
+      {
+        uri: "note://resource-read",
+        mimeType: "text/markdown",
+        text: "# Resource Read\n\nExact body.",
+      },
+    ]);
+  });
+
+  it("rejects missing and invalid note resources without leaking internals", async () => {
+    await expect(
+      client.readResource({ uri: "note://missing" }),
+    ).rejects.toThrow('Note "missing" does not exist.');
+    await expect(
+      client.readResource({ uri: "note://bad_id" }),
+    ).rejects.toThrow('Invalid note ID: "bad_id".');
+
+    vi.spyOn(store, "read").mockRejectedValueOnce(
+      new Error("EACCES C:\\secret\\resource"),
+    );
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      client.readResource({ uri: "note://private" }),
+    ).rejects.toThrow("Unexpected local storage error.");
+    expect(stderr).toHaveBeenCalled();
+  });
+
+  it("advertises the two review prompts with argument metadata", async () => {
+    const result = await client.listPrompts();
+
+    expect(result.prompts.map((prompt) => prompt.name)).toEqual([
+      "daily_review",
+      "research_digest",
+    ]);
+    expect(result.prompts).toEqual([
+      expect.objectContaining({
+        name: "daily_review",
+        description: expect.stringMatching(/review/i),
+        arguments: undefined,
+      }),
+      expect.objectContaining({
+        name: "research_digest",
+        description: expect.stringMatching(/research|digest/i),
+        arguments: [
+          {
+            name: "topic",
+            description: expect.stringMatching(/topic/i),
+            required: true,
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it("returns workflow instructions for both prompts", async () => {
+    const daily = await client.getPrompt({
+      name: "daily_review",
+      arguments: {},
+    });
+    expect(daily.messages).toHaveLength(1);
+    expect(daily.messages[0]).toMatchObject({
+      role: "user",
+      content: {
+        type: "text",
+        text: expect.stringMatching(/list_notes[\s\S]*cite[\s\S]*note IDs/i),
+      },
+    });
+
+    const research = await client.getPrompt({
+      name: "research_digest",
+      arguments: { topic: "MCP resource design" },
+    });
+    expect(research.messages).toHaveLength(1);
+    expect(research.messages[0]).toMatchObject({
+      role: "user",
+      content: {
+        type: "text",
+        text: expect.stringMatching(
+          /MCP resource design[\s\S]*search_notes[\s\S]*read[\s\S]*cite[\s\S]*note ID/i,
+        ),
+      },
+    });
+  });
 });
