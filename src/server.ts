@@ -16,16 +16,48 @@ function textResult(text: string) {
   };
 }
 
+const KNOWN_DOMAIN_ERRORS = new Set([
+  "Title must be a single line.",
+  "Title is required.",
+  "Body is required.",
+  "Search query is required.",
+  "Notes directory must not be a symbolic link.",
+  "Notes directory must be a directory.",
+  "Deletion requires confirm=true.",
+]);
+
+const KNOWN_NOTE_ERROR_PATTERNS = [
+  /^Invalid note ID: "[\s\S]*"\.$/,
+  /^Note "[a-z0-9-]+" already exists\.$/,
+  /^Note "[a-z0-9-]+" does not exist\.$/,
+  /^Note "[a-z0-9-]+" must be a regular file\.$/,
+  /^Note "[a-z0-9-]+" has a malformed Markdown heading\.$/,
+];
+
+function isKnownDomainError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    (KNOWN_DOMAIN_ERRORS.has(error.message) ||
+      KNOWN_NOTE_ERROR_PATTERNS.some((pattern) => pattern.test(error.message)))
+  );
+}
+
 async function asToolResult(action: () => Promise<string>) {
   try {
     return textResult(await action());
   } catch (error) {
+    if (!isKnownDomainError(error)) {
+      console.error("Unexpected local storage error:", error);
+    }
+
     return {
       isError: true,
       content: [
         {
           type: "text" as const,
-          text: error instanceof Error ? error.message : String(error),
+          text: isKnownDomainError(error)
+            ? error.message
+            : "Unexpected local storage error.",
         },
       ],
     };
@@ -53,6 +85,12 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
         title: z.string(),
         body: z.string(),
       },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
     async ({ id, title, body }) =>
       asToolResult(async () => {
@@ -67,6 +105,12 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
       title: "List notes",
       description: "List local note IDs and titles.",
       inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async () =>
       asToolResult(async () => {
@@ -81,6 +125,12 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
       title: "Read note",
       description: "Read one local Markdown note by ID.",
       inputSchema: { id: z.string() },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ id }) =>
       asToolResult(async () => {
@@ -95,6 +145,12 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
       title: "Search notes",
       description: "Search local note titles and bodies.",
       inputSchema: { query: z.string() },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ query }) =>
       asToolResult(async () => {
@@ -111,6 +167,12 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
       title: "Workspace summary",
       description: "Summarize the number and titles of local notes.",
       inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async () =>
       asToolResult(async () => {
@@ -133,7 +195,10 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
         confirm: z.boolean(),
       },
       annotations: {
+        readOnlyHint: false,
         destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
       },
     },
     async ({ id, confirm }) =>
