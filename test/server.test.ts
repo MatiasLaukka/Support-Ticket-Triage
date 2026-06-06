@@ -349,6 +349,46 @@ describe("knowledge desk MCP tools", () => {
     ]);
   });
 
+  it("updates listed resources after notes are created and deleted", async () => {
+    expect((await client.listResources()).resources).toEqual([]);
+
+    await store.create({
+      id: "dynamic-resource",
+      title: "Dynamic Resource",
+      body: "Appears through discovery.",
+    });
+    expect((await client.listResources()).resources).toEqual([
+      expect.objectContaining({
+        uri: "note://dynamic-resource",
+        name: "Dynamic Resource",
+      }),
+    ]);
+
+    await store.delete("dynamic-resource");
+    expect((await client.listResources()).resources).toEqual([]);
+  });
+
+  it("does not expose unexpected storage errors while listing resources", async () => {
+    vi.spyOn(store, "list").mockRejectedValueOnce(
+      new Error("EACCES C:\\secret\\resource-list"),
+    );
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    let rejection: unknown;
+    try {
+      await client.listResources();
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain(
+      "Unexpected local storage error.",
+    );
+    expect(String(rejection)).not.toContain("C:\\secret\\resource-list");
+    expect(stderr).toHaveBeenCalled();
+  });
+
   it("reads exact Markdown through the note resource", async () => {
     await store.create({
       id: "resource-read",
@@ -425,7 +465,9 @@ describe("knowledge desk MCP tools", () => {
       role: "user",
       content: {
         type: "text",
-        text: expect.stringMatching(/list_notes[\s\S]*cite[\s\S]*note IDs/i),
+        text: expect.stringMatching(
+          /list_notes[\s\S]*read_note[\s\S]*cite[\s\S]*note IDs/i,
+        ),
       },
     });
 
@@ -443,5 +485,18 @@ describe("knowledge desk MCP tools", () => {
         ),
       },
     });
+  });
+
+  it.each([
+    ["missing", {}],
+    ["empty", { topic: "" }],
+    ["whitespace-only", { topic: "   " }],
+  ])("rejects a %s research digest topic", async (_case, args) => {
+    await expect(
+      client.getPrompt({
+        name: "research_digest",
+        arguments: args,
+      }),
+    ).rejects.toThrow(/invalid arguments/i);
   });
 });

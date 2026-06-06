@@ -87,6 +87,22 @@ async function asResourceResult<T>(action: () => Promise<T>): Promise<T> {
   }
 }
 
+async function asResourceListResult<T>(action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!isKnownDomainError(error)) {
+      console.error("Unexpected local storage error:", error);
+    }
+
+    throw new Error(
+      isKnownDomainError(error)
+        ? error.message
+        : "Unexpected local storage error.",
+    );
+  }
+}
+
 function formatSummaries(notes: NoteSummary[]): string {
   return notes.map((note) => `${note.id}: ${note.title}`).join("\n");
 }
@@ -100,14 +116,15 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
   server.registerResource(
     "note",
     new ResourceTemplate("note://{id}", {
-      list: async () => ({
-        resources: (await store.list()).map((note) => ({
-          uri: `note://${note.id}`,
-          name: note.title,
-          description: `Local note ${note.id}`,
-          mimeType: "text/markdown",
+      list: async () =>
+        asResourceListResult(async () => ({
+          resources: (await store.list()).map((note) => ({
+            uri: `note://${note.id}`,
+            name: note.title,
+            description: `Local note ${note.id}`,
+            mimeType: "text/markdown",
+          })),
         })),
-      }),
     }),
     {
       title: "Local note",
@@ -145,7 +162,7 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
           role: "user",
           content: {
             type: "text",
-            text: "Call list_notes, inspect the relevant notes, identify the highest priorities, and return a concise daily review that cites note IDs.",
+            text: "Call list_notes, call read_note for the relevant notes, identify the highest priorities, and return a concise daily review that cites note IDs.",
           },
         },
       ],
@@ -160,6 +177,8 @@ export function createKnowledgeDeskServer(store: NoteStore): McpServer {
       argsSchema: {
         topic: z
           .string()
+          .trim()
+          .min(1)
           .describe("The research topic to investigate in local notes."),
       },
     },
