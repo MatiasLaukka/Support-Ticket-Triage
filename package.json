@@ -1,6 +1,6 @@
 {
   "name": "local-knowledge-desk-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,17 +8,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --dir test",
+    "test:watch": "vitest --dir test",
     "start": "node dist/src/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "latest",
-    "zod": "latest"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest",
-    "vitest": "latest"
+    "@types/node": "^25.9.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }
