@@ -1,7 +1,16 @@
-import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 
 export const NOTE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const WINDOWS_RESERVED_ID_PATTERN =
+  /^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])$/i;
 
 export interface NoteInput {
   id: string;
@@ -32,6 +41,9 @@ export class NoteStore {
     const title = input.title.trim();
     const body = input.body.trim();
 
+    if (/[\r\n]/.test(input.title)) {
+      throw new Error("Title must be a single line.");
+    }
     if (!title) {
       throw new Error("Title is required.");
     }
@@ -57,31 +69,65 @@ export class NoteStore {
   }
 
   async read(id: string): Promise<Note> {
-    const notePath = this.resolveNotePath(id);
-    let markdown: string;
-
     try {
-      markdown = await readFile(notePath, "utf8");
+      return await this.readNote(id);
     } catch (error) {
       if (this.hasCode(error, "ENOENT")) {
         throw new Error(`Note "${id}" does not exist.`);
       }
       throw error;
     }
-
-    const match = /^# ([^\r\n]+)\r?\n\r?\n([\s\S]*?)\r?\n?$/.exec(markdown);
-    if (!match) {
-      throw new Error(`Note "${id}" has a malformed Markdown heading.`);
-    }
-
-    return {
-      id,
-      title: match[1],
-      body: match[2],
-    };
   }
 
   async list(): Promise<NoteSummary[]> {
+    const notes = await this.readSortedNotes();
+    return notes.map(({ id, title }) => ({ id, title }));
+  }
+
+  async search(query: string): Promise<NoteSummary[]> {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      throw new Error("Search query is required.");
+    }
+
+    const notes = await this.readSortedNotes();
+    const matches: NoteSummary[] = [];
+
+    for (const note of notes) {
+      if (
+        note.title.toLowerCase().includes(normalizedQuery) ||
+        note.body.toLowerCase().includes(normalizedQuery)
+      ) {
+        matches.push({ id: note.id, title: note.title });
+      }
+    }
+
+    return matches;
+  }
+
+  async summary(): Promise<{ count: number; notes: NoteSummary[] }> {
+    const notes = await this.readSortedNotes();
+    return {
+      count: notes.length,
+      notes: notes.map(({ id, title }) => ({ id, title })),
+    };
+  }
+
+  async delete(id: string): Promise<void> {
+    const notePath = this.resolveNotePath(id);
+
+    try {
+      await this.assertRegularFile(notePath, id);
+      await unlink(notePath);
+    } catch (error) {
+      if (this.hasCode(error, "ENOENT")) {
+        throw new Error(`Note "${id}" does not exist.`);
+      }
+      throw error;
+    }
+  }
+
+  private async readSortedNotes(): Promise<Note[]> {
     let entries;
 
     try {
@@ -96,63 +142,58 @@ export class NoteStore {
     const ids = entries
       .filter(
         (entry) =>
-          entry.isFile() &&
           entry.name.endsWith(".md") &&
-          NOTE_ID_PATTERN.test(entry.name.slice(0, -3)),
+          NOTE_ID_PATTERN.test(entry.name.slice(0, -3)) &&
+          !WINDOWS_RESERVED_ID_PATTERN.test(entry.name.slice(0, -3)),
       )
       .map((entry) => entry.name.slice(0, -3))
-      .sort((left, right) => left.localeCompare(right));
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
-    return Promise.all(
+    const notes = await Promise.all(
       ids.map(async (id) => {
-        const note = await this.read(id);
-        return { id: note.id, title: note.title };
+        try {
+          return await this.readNote(id);
+        } catch (error) {
+          if (this.hasCode(error, "ENOENT")) {
+            return undefined;
+          }
+          throw error;
+        }
       }),
     );
+
+    return notes.filter((note): note is Note => note !== undefined);
   }
 
-  async search(query: string): Promise<NoteSummary[]> {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) {
-      throw new Error("Search query is required.");
-    }
-
-    const summaries = await this.list();
-    const matches: NoteSummary[] = [];
-
-    for (const summary of summaries) {
-      const note = await this.read(summary.id);
-      if (
-        note.title.toLowerCase().includes(normalizedQuery) ||
-        note.body.toLowerCase().includes(normalizedQuery)
-      ) {
-        matches.push(summary);
-      }
-    }
-
-    return matches;
-  }
-
-  async summary(): Promise<{ count: number; notes: NoteSummary[] }> {
-    const notes = await this.list();
-    return { count: notes.length, notes };
-  }
-
-  async delete(id: string): Promise<void> {
+  private async readNote(id: string): Promise<Note> {
     const notePath = this.resolveNotePath(id);
+    await this.assertRegularFile(notePath, id);
+    const markdown = await readFile(notePath, "utf8");
+    const match = /^# ([^\r\n]+)\r?\n\r?\n([\s\S]*?)\r?\n?$/.exec(markdown);
 
-    try {
-      await unlink(notePath);
-    } catch (error) {
-      if (this.hasCode(error, "ENOENT")) {
-        throw new Error(`Note "${id}" does not exist.`);
-      }
-      throw error;
+    if (!match) {
+      throw new Error(`Note "${id}" has a malformed Markdown heading.`);
+    }
+
+    return {
+      id,
+      title: match[1],
+      body: match[2],
+    };
+  }
+
+  private async assertRegularFile(notePath: string, id: string): Promise<void> {
+    const stats = await lstat(notePath);
+    if (!stats.isFile()) {
+      throw new Error(`Note "${id}" must be a regular file.`);
     }
   }
 
   private resolveNotePath(id: string): string {
-    if (!NOTE_ID_PATTERN.test(id)) {
+    if (
+      !NOTE_ID_PATTERN.test(id) ||
+      WINDOWS_RESERVED_ID_PATTERN.test(id)
+    ) {
       throw new Error(`Invalid note ID: "${id}".`);
     }
 
