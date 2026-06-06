@@ -1,4 +1,5 @@
 import * as fsPromises from "node:fs/promises";
+import { constants } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -49,6 +50,7 @@ describe("NoteStore", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(tempDirectory, { recursive: true, force: true });
   });
 
@@ -123,14 +125,63 @@ describe("NoteStore", () => {
     ]);
   });
 
-  it("reads each note only once while searching", async () => {
+  it("opens and reads each note only once while searching", async () => {
     await store.create({ id: "alpha", title: "Alpha", body: "Needle" });
     await store.create({ id: "beta", title: "Beta", body: "Needle" });
+    vi.mocked(fsPromises.open).mockClear();
     vi.mocked(fsPromises.readFile).mockClear();
 
     await store.search("needle");
 
-    expect(fsPromises.readFile).toHaveBeenCalledTimes(2);
+    expect(fsPromises.open).toHaveBeenCalledTimes(2);
+    expect(fsPromises.readFile).not.toHaveBeenCalled();
+    const expectedFlags =
+      constants.O_RDONLY |
+      (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
+    expect(fsPromises.open).toHaveBeenCalledWith(
+      expect.anything(),
+      expectedFlags,
+    );
+  });
+
+  it("rejects a configured notes directory that is a symbolic link", async (context) => {
+    const targetDirectory = path.join(tempDirectory, "target-notes");
+    const linkedDirectory = path.join(tempDirectory, "linked-notes");
+    await mkdir(targetDirectory);
+
+    try {
+      await symlink(
+        targetDirectory,
+        linkedDirectory,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "EPERM"
+      ) {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
+
+    const linkedStore = new NoteStore(linkedDirectory);
+    await expect(
+      linkedStore.create({ id: "linked", title: "Linked", body: "Body" }),
+    ).rejects.toThrow("Notes directory must not be a symbolic link.");
+  });
+
+  it("rejects a configured notes path that is not a directory", async () => {
+    const filePath = path.join(tempDirectory, "notes-file");
+    await writeFile(filePath, "not a directory", "utf8");
+
+    const fileStore = new NoteStore(filePath);
+    await expect(
+      fileStore.create({ id: "invalid", title: "Invalid", body: "Body" }),
+    ).rejects.toThrow("Notes directory must be a directory.");
   });
 
   it("summarizes the notes", async () => {

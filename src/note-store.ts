@@ -1,7 +1,8 @@
+import { constants } from "node:fs";
 import {
   lstat,
   mkdir,
-  readFile,
+  open,
   readdir,
   unlink,
   writeFile,
@@ -11,6 +12,9 @@ import path from "node:path";
 export const NOTE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const WINDOWS_RESERVED_ID_PATTERN =
   /^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])$/i;
+const READ_ONLY_NO_FOLLOW_FLAGS =
+  constants.O_RDONLY |
+  (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
 
 export interface NoteInput {
   id: string;
@@ -51,7 +55,7 @@ export class NoteStore {
       throw new Error("Body is required.");
     }
 
-    await mkdir(this.rootDirectory, { recursive: true });
+    await this.ensureRoot();
 
     try {
       await writeFile(notePath, `# ${title}\n\n${body}\n`, {
@@ -70,6 +74,7 @@ export class NoteStore {
 
   async read(id: string): Promise<Note> {
     try {
+      await this.ensureRoot();
       return await this.readNote(id);
     } catch (error) {
       if (this.hasCode(error, "ENOENT")) {
@@ -117,6 +122,7 @@ export class NoteStore {
     const notePath = this.resolveNotePath(id);
 
     try {
+      await this.ensureRoot();
       await this.assertRegularFile(notePath, id);
       await unlink(notePath);
     } catch (error) {
@@ -131,6 +137,7 @@ export class NoteStore {
     let entries;
 
     try {
+      await this.ensureRoot();
       entries = await readdir(this.rootDirectory, { withFileTypes: true });
     } catch (error) {
       if (this.hasCode(error, "ENOENT")) {
@@ -168,7 +175,25 @@ export class NoteStore {
   private async readNote(id: string): Promise<Note> {
     const notePath = this.resolveNotePath(id);
     await this.assertRegularFile(notePath, id);
-    const markdown = await readFile(notePath, "utf8");
+    let handle;
+    let markdown: string;
+
+    try {
+      handle = await open(notePath, READ_ONLY_NO_FOLLOW_FLAGS);
+      const stats = await handle.stat();
+      if (!stats.isFile()) {
+        throw new Error(`Note "${id}" must be a regular file.`);
+      }
+      markdown = await handle.readFile({ encoding: "utf8" });
+    } catch (error) {
+      if (this.hasCode(error, "ELOOP")) {
+        throw new Error(`Note "${id}" must be a regular file.`);
+      }
+      throw error;
+    } finally {
+      await handle?.close();
+    }
+
     const match = /^# ([^\r\n]+)\r?\n\r?\n([\s\S]*?)\r?\n?$/.exec(markdown);
 
     if (!match) {
@@ -186,6 +211,24 @@ export class NoteStore {
     const stats = await lstat(notePath);
     if (!stats.isFile()) {
       throw new Error(`Note "${id}" must be a regular file.`);
+    }
+  }
+
+  private async ensureRoot(): Promise<void> {
+    try {
+      await mkdir(this.rootDirectory, { recursive: true });
+    } catch (error) {
+      if (!this.hasCode(error, "EEXIST")) {
+        throw error;
+      }
+    }
+
+    const stats = await lstat(this.rootDirectory);
+    if (stats.isSymbolicLink()) {
+      throw new Error("Notes directory must not be a symbolic link.");
+    }
+    if (!stats.isDirectory()) {
+      throw new Error("Notes directory must be a directory.");
     }
   }
 
