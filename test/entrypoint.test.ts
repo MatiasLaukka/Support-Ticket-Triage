@@ -1,71 +1,117 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import { expect, it } from "vitest";
 
-function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
-  }
+const OPERATION_TIMEOUT_MS = 3_000;
 
-  return new Promise((resolve) => {
-    child.once("exit", () => resolve());
-  });
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-async function expectProcessToRemainAlive(
-  child: ChildProcess,
-  durationMs: number,
-  getStderr: () => string,
-): Promise<void> {
-  const deadline = Date.now() + durationMs;
-
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(
-        `Entrypoint exited early with code ${child.exitCode} and signal ${child.signalCode}.\n${getStderr()}`,
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-it("starts the stdio server without writing to stdout", async () => {
-  const tempDirectory = await mkdtemp(
-    path.join(tmpdir(), "knowledge-desk-entrypoint-"),
-  );
-  const entrypoint = path.resolve("dist/src/index.js");
-  const child = spawn(process.execPath, [entrypoint], {
-    env: {
-      ...process.env,
-      KNOWLEDGE_DESK_NOTES_DIR: path.join(tempDirectory, "notes"),
-    },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr?.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
+async function withTimeout<T>(
+  operation: Promise<T>,
+  label: string,
+  diagnostics: () => string,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
 
   try {
-    await expectProcessToRemainAlive(child, 200, () => stderr);
-
-    expect(child.exitCode, stderr).toBeNull();
-    expect(stdout).toBe("");
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${OPERATION_TIMEOUT_MS}ms.`));
+        }, OPERATION_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (error) {
+    const details = diagnostics();
+    throw new Error(
+      `${label} failed: ${describeError(error)}${details ? `\n${details}` : ""}`,
+      { cause: error },
+    );
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-    }
-    await waitForExit(child);
-    await rm(tempDirectory, { recursive: true, force: true });
+    clearTimeout(timeout);
   }
-});
+}
+
+it(
+  "completes the stdio MCP handshake and advertises all note tools",
+  async () => {
+    const tempDirectory = await mkdtemp(
+      path.join(tmpdir(), "knowledge-desk-entrypoint-"),
+    );
+    const entrypoint = path.resolve("dist/src/index.js");
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entrypoint],
+      cwd: process.cwd(),
+      env: {
+        ...getDefaultEnvironment(),
+        KNOWLEDGE_DESK_NOTES_DIR: path.join(tempDirectory, "notes"),
+      },
+      stderr: "pipe",
+    });
+    const client = new Client({
+      name: "entrypoint-test-client",
+      version: "1.0.0",
+    });
+    let stderr = "";
+    let transportError: Error | undefined;
+
+    transport.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    transport.onerror = (error) => {
+      transportError = error;
+    };
+
+    const diagnostics = () =>
+      [
+        transportError
+          ? `Transport error: ${describeError(transportError)}`
+          : "",
+        stderr.trim() ? `Server stderr:\n${stderr.trim()}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+    try {
+      await withTimeout(client.connect(transport), "MCP connect", diagnostics);
+
+      expect(client.getServerVersion()).toEqual({
+        name: "local-knowledge-desk",
+        version: "1.0.0",
+      });
+
+      const result = await withTimeout(
+        client.listTools(),
+        "MCP tools/list",
+        diagnostics,
+      );
+      expect(transportError, diagnostics()).toBeUndefined();
+      expect(result.tools.map((tool) => tool.name).sort()).toEqual([
+        "create_note",
+        "delete_note",
+        "list_notes",
+        "read_note",
+        "search_notes",
+        "workspace_summary",
+      ]);
+    } finally {
+      try {
+        await withTimeout(client.close(), "MCP client close", diagnostics);
+      } finally {
+        await rm(tempDirectory, { recursive: true, force: true });
+      }
+    }
+  },
+  12_000,
+);
