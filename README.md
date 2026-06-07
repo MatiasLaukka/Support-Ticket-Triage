@@ -4,9 +4,10 @@ Local Knowledge Desk is a small TypeScript server that teaches the core ideas
 behind the Model Context Protocol (MCP). It lets Codex create, list, read,
 search, summarize, and delete local Markdown notes.
 
-The demo is fully local: everything runs on your machine. It needs no API keys,
-database, hosted service, or server account. Notes remain ordinary files that
-you can inspect with any text editor.
+The MCP server and its note data are fully local. The server needs no API key,
+database, hosted service, or separate account. Codex may still use its normal
+authenticated model service. Notes remain ordinary files that you can inspect
+with any text editor.
 
 ## MCP mental model
 
@@ -64,13 +65,18 @@ by Git, so it does not exist in a fresh checkout. Codex cannot launch
 `dist/src/index.js` until `npm run build` has created it.
 
 If `npm install` fails behind a corporate TLS proxy with
-`UNABLE_TO_VERIFY_LEAF_SIGNATURE`, tell Node to use the operating system's CA
-store for the current PowerShell session, then retry:
+`UNABLE_TO_VERIFY_LEAF_SIGNATURE` and your Node version supports
+`--use-system-ca`, tell Node to use the operating system's CA store for the
+current PowerShell session, then retry:
 
 ```powershell
 $env:NODE_OPTIONS='--use-system-ca'
 npm install
 ```
+
+Check `node --help` for `--use-system-ca`. On older Node releases, update Node
+or ask your administrator for the proxy certificate and configure
+`NODE_EXTRA_CA_CERTS` instead.
 
 ## Connect Codex
 
@@ -89,9 +95,10 @@ enabled = true
 This tells Codex to start the compiled server with Node, communicate over
 stdio, and use the repository root as the working directory.
 
-After building, open a **new Codex session from this repository**. Project MCP
-configuration is loaded when a session starts; an already-open session may not
-notice a newly built server or changed configuration.
+Make sure the repository is trusted in Codex so project-scoped configuration
+can load. After building, open a **new Codex session from this repository**.
+Project MCP configuration is loaded when a session starts; an already-open
+session may not notice a newly built server or changed configuration.
 
 ## Try the demo
 
@@ -164,10 +171,11 @@ Each file uses this format:
 Note body.
 ```
 
-The filename is the note ID, such as `mcp-basics.md`. You can inspect, back up,
-or version these files with normal local tools. The server creates
-`data/notes/` when needed. Set `KNOWLEDGE_DESK_NOTES_DIR` before launching the
-server to use another notes directory.
+The filename is the note ID, such as `mcp-basics.md`. You can inspect or back
+up these files with normal local tools. Runtime notes are ignored by Git by
+default; change `.gitignore` deliberately if you want to version them. The
+server creates `data/notes/` when needed. Set `KNOWLEDGE_DESK_NOTES_DIR` before
+launching the server to use another notes directory.
 
 ## Project guide
 
@@ -240,6 +248,7 @@ stronger OS-level isolation and filesystem controls.
 
 - Confirm `npm run build` completed successfully.
 - Confirm `dist/src/index.js` exists.
+- Confirm the repository is trusted so Codex may load `.codex/config.toml`.
 - Start a new Codex session from the repository root so
   `.codex/config.toml` is loaded.
 - Check that Node.js 20 or newer is available as `node`.
@@ -272,13 +281,17 @@ JSON strings, for example `D:\\Projects\\local-knowledge-desk`.
 
 ### npm reports a TLS certificate error
 
-For `UNABLE_TO_VERIFY_LEAF_SIGNATURE` behind a managed corporate proxy, retry
-in PowerShell with:
+For `UNABLE_TO_VERIFY_LEAF_SIGNATURE` behind a managed corporate proxy, first
+check whether `node --help` lists `--use-system-ca`. If it does, retry in
+PowerShell with:
 
 ```powershell
 $env:NODE_OPTIONS='--use-system-ca'
 npm install
 ```
+
+If that flag is unavailable, update Node or configure your organization's CA
+certificate through `NODE_EXTRA_CA_CERTS`.
 
 ## Optional: Claude Desktop
 
