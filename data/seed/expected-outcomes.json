@@ -1,0 +1,411 @@
+[
+  {
+    "ticketId": "TKT-1001",
+    "category": "incident",
+    "acceptablePriorities": [
+      "P1"
+    ],
+    "team": "incident-response",
+    "requiredEscalations": [
+      "outage",
+      "sla"
+    ],
+    "knowledgeArticleIds": [
+      "incident-response",
+      "api-errors",
+      "sla-policy"
+    ],
+    "duplicateGroup": "eu-api-503"
+  },
+  {
+    "ticketId": "TKT-1002",
+    "category": "incident",
+    "acceptablePriorities": [
+      "P1"
+    ],
+    "team": "incident-response",
+    "requiredEscalations": [
+      "outage",
+      "sla"
+    ],
+    "knowledgeArticleIds": [
+      "incident-response",
+      "api-errors",
+      "sla-policy"
+    ],
+    "duplicateGroup": "eu-api-503"
+  },
+  {
+    "ticketId": "TKT-1003",
+    "category": "incident",
+    "acceptablePriorities": [
+      "P1"
+    ],
+    "team": "incident-response",
+    "requiredEscalations": [
+      "outage",
+      "sla"
+    ],
+    "knowledgeArticleIds": [
+      "incident-response",
+      "api-errors",
+      "sla-policy"
+    ],
+    "duplicateGroup": "eu-api-503"
+  },
+  {
+    "ticketId": "TKT-1004",
+    "category": "security",
+    "acceptablePriorities": [
+      "P1"
+    ],
+    "team": "security",
+    "requiredEscalations": [
+      "security",
+      "missing-information"
+    ],
+    "knowledgeArticleIds": [
+      "security-escalation"
+    ]
+  },
+  {
+    "ticketId": "TKT-1005",
+    "category": "authentication",
+    "acceptablePriorities": [
+      "P2"
+    ],
+    "team": "identity",
+    "requiredEscalations": [
+      "policy-conflict"
+    ],
+    "knowledgeArticleIds": [
+      "account-access",
+      "triage-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1006",
+    "category": "billing",
+    "acceptablePriorities": [
+      "P3",
+      "P4"
+    ],
+    "team": "billing",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "billing-refunds",
+      "vip-communications"
+    ]
+  },
+  {
+    "ticketId": "TKT-1007",
+    "category": "integration",
+    "acceptablePriorities": [
+      "P2"
+    ],
+    "team": "integrations",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "integration-webhooks"
+    ],
+    "duplicateGroup": "webhook-signature-failure"
+  },
+  {
+    "ticketId": "TKT-1008",
+    "category": "integration",
+    "acceptablePriorities": [
+      "P2"
+    ],
+    "team": "integrations",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "integration-webhooks"
+    ],
+    "duplicateGroup": "webhook-signature-failure"
+  },
+  {
+    "ticketId": "TKT-1009",
+    "category": "authentication",
+    "acceptablePriorities": [
+      "P1",
+      "P2"
+    ],
+    "team": "identity",
+    "requiredEscalations": [
+      "sla"
+    ],
+    "knowledgeArticleIds": [
+      "account-access",
+      "sla-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1010",
+    "category": "other",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "support",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "triage-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1011",
+    "category": "billing",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "billing",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "billing-refunds"
+    ],
+    "duplicateGroup": "duplicate-invoice-2048"
+  },
+  {
+    "ticketId": "TKT-1012",
+    "category": "billing",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "billing",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "billing-refunds"
+    ],
+    "duplicateGroup": "duplicate-invoice-2048"
+  },
+  {
+    "ticketId": "TKT-1013",
+    "category": "performance",
+    "acceptablePriorities": [
+      "P2",
+      "P3"
+    ],
+    "team": "product",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "performance"
+    ],
+    "duplicateGroup": "slow-analytics-dashboard"
+  },
+  {
+    "ticketId": "TKT-1014",
+    "category": "performance",
+    "acceptablePriorities": [
+      "P2",
+      "P3"
+    ],
+    "team": "product",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "performance"
+    ],
+    "duplicateGroup": "slow-analytics-dashboard"
+  },
+  {
+    "ticketId": "TKT-1015",
+    "category": "account-access",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "identity",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "account-access"
+    ]
+  },
+  {
+    "ticketId": "TKT-1016",
+    "category": "feature-request",
+    "acceptablePriorities": [
+      "P4"
+    ],
+    "team": "product",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "triage-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1017",
+    "category": "api",
+    "acceptablePriorities": [
+      "P2",
+      "P3"
+    ],
+    "team": "api-platform",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "api-errors"
+    ]
+  },
+  {
+    "ticketId": "TKT-1018",
+    "category": "integration",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "integrations",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "integration-webhooks"
+    ]
+  },
+  {
+    "ticketId": "TKT-1019",
+    "category": "security",
+    "acceptablePriorities": [
+      "P1"
+    ],
+    "team": "security",
+    "requiredEscalations": [
+      "security",
+      "missing-information"
+    ],
+    "knowledgeArticleIds": [
+      "security-escalation",
+      "account-access"
+    ]
+  },
+  {
+    "ticketId": "TKT-1020",
+    "category": "performance",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "product",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "performance"
+    ]
+  },
+  {
+    "ticketId": "TKT-1021",
+    "category": "incident",
+    "acceptablePriorities": [
+      "P2"
+    ],
+    "team": "incident-response",
+    "requiredEscalations": [
+      "sla"
+    ],
+    "knowledgeArticleIds": [
+      "incident-response",
+      "sla-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1022",
+    "category": "account-access",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "support",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "account-access"
+    ]
+  },
+  {
+    "ticketId": "TKT-1023",
+    "category": "authentication",
+    "acceptablePriorities": [
+      "P2"
+    ],
+    "team": "identity",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "account-access"
+    ]
+  },
+  {
+    "ticketId": "TKT-1024",
+    "category": "billing",
+    "acceptablePriorities": [
+      "P4"
+    ],
+    "team": "billing",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "billing-refunds"
+    ]
+  },
+  {
+    "ticketId": "TKT-1025",
+    "category": "feature-request",
+    "acceptablePriorities": [
+      "P3",
+      "P4"
+    ],
+    "team": "product",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "triage-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1026",
+    "category": "other",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "support",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "triage-policy"
+    ]
+  },
+  {
+    "ticketId": "TKT-1027",
+    "category": "api",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "api-platform",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "api-errors"
+    ]
+  },
+  {
+    "ticketId": "TKT-1028",
+    "category": "integration",
+    "acceptablePriorities": [
+      "P2",
+      "P3"
+    ],
+    "team": "integrations",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "integration-webhooks",
+      "performance"
+    ]
+  },
+  {
+    "ticketId": "TKT-1029",
+    "category": "performance",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "product",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "performance"
+    ]
+  },
+  {
+    "ticketId": "TKT-1030",
+    "category": "account-access",
+    "acceptablePriorities": [
+      "P3"
+    ],
+    "team": "identity",
+    "requiredEscalations": [],
+    "knowledgeArticleIds": [
+      "account-access"
+    ]
+  }
+]
