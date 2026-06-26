@@ -1,0 +1,7 @@
+[mcp_servers.support-ticket-triage]
+command = "node"
+args = ["dist/src/index.js"]
+cwd = "."
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+enabled = true
