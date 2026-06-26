@@ -32,9 +32,14 @@ export async function loadExpectedOutcomes(
 ): Promise<ReadonlyMap<string, ExpectedOutcome>> {
   const raw = await readFile(path, "utf8");
   const outcomes = ExpectedOutcomesSchema.parse(JSON.parse(raw));
-  return new Map(
-    outcomes.map((outcome) => [outcome.ticketId, outcome] as const),
-  );
+  const byTicketId = new Map<string, ExpectedOutcome>();
+  for (const outcome of outcomes) {
+    if (byTicketId.has(outcome.ticketId)) {
+      throw new Error(`Duplicate expected outcome for ${outcome.ticketId}.`);
+    }
+    byTicketId.set(outcome.ticketId, outcome);
+  }
+  return byTicketId;
 }
 
 export function buildApprovalDeskRecommendationInput(input: {
@@ -45,6 +50,11 @@ export function buildApprovalDeskRecommendationInput(input: {
   const { ticket, outcome, actor } = input;
   if (outcome === undefined) {
     throw new Error(`No expected outcome exists for ${ticket.id}.`);
+  }
+  if (outcome.ticketId !== ticket.id) {
+    throw new Error(
+      `Expected outcome ${outcome.ticketId} does not match ticket ${ticket.id}.`,
+    );
   }
 
   const escalationReasons = outcome.requiredEscalations;
