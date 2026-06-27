@@ -376,7 +376,7 @@ export const approvalDeskHtml = `<!doctype html>
           button.innerHTML =
             '<span class="ticket-id">' + escapeHtml(ticket.id) + '</span>' +
             '<strong>' + escapeHtml(ticket.subject) + '</strong>' +
-            '<span class="meta">' + escapeHtml(ticket.customer.name) + ' · rev ' + ticket.revision + '</span>';
+            '<span class="meta">' + escapeHtml(ticket.customer.name) + ' · rev ' + escapeHtml(ticket.revision) + '</span>';
           button.addEventListener('click', function () {
             void selectTicket(ticket.id);
           });
@@ -425,8 +425,17 @@ export const approvalDeskHtml = `<!doctype html>
             card('Assignee', recommendation.assignee === undefined ? 'unchanged' : String(recommendation.assignee)) +
             card('Status', recommendation.ticketStatus ?? 'unchanged') +
             card('Tags', Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : 'unchanged') +
+            card('Confidence', String(recommendation.confidence)) +
+            card('knowledgeArticleIds', formatList(recommendation.knowledgeArticleIds)) +
+            card('Outage risk', recommendation.outageRisk) +
+            card('Security risk', recommendation.securityRisk) +
+            card('SLA risk', recommendation.slaRisk) +
+            card('Escalation required', recommendation.escalationRequired ? 'yes' : 'no') +
+            card('Escalation reasons', formatList(recommendation.escalationReasons)) +
+            card('Missing information', formatList(recommendation.missingInformation)) +
           '</div>' +
           '<div class="card description"><strong>Rationale</strong>' + escapeHtml(recommendation.rationale) + '</div>' +
+          '<div class="card description"><strong>Duplicate candidates</strong>' + escapeHtml(formatDuplicateCandidates(recommendation.duplicateCandidates)) + '</div>' +
           '<div class="card description"><strong>Draft customerResponse</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
           '<div class="card description"><strong>Next action</strong>' + escapeHtml(recommendation.recommendedNextAction) + '</div>';
         els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
@@ -439,9 +448,12 @@ export const approvalDeskHtml = `<!doctype html>
         const fields = selectedFields();
         const hasFields = fields.length > 0;
         const confirmed = els.confirmApproval.checked;
+        const customerResponseReady =
+          !fields.includes('customerResponse') ||
+          els.editedCustomerResponse.value.trim().length > 0;
         const feedbackPresent = els.feedback.value.trim().length > 0;
 
-        els.approveButton.disabled = !(hasRecommendation && actorPresent && confirmed && hasFields);
+        els.approveButton.disabled = !(hasRecommendation && actorPresent && confirmed && hasFields && customerResponseReady);
         els.rejectButton.disabled = !(hasRecommendation && actorPresent && feedbackPresent);
       }
 
@@ -454,9 +466,9 @@ export const approvalDeskHtml = `<!doctype html>
         setResult(data);
       }
 
-      async function loadMetrics() {
+      async function loadMetrics(actionResult) {
         const metrics = await requestJson('/api/metrics');
-        setResult(metrics);
+        setResult(actionResult === undefined ? metrics : { action: actionResult, metrics });
       }
 
       async function selectTicket(id) {
@@ -502,11 +514,10 @@ export const approvalDeskHtml = `<!doctype html>
           body: JSON.stringify(body)
         });
         state.selectedTicket = data.ticket;
-        state.recommendation = data.recommendation ?? state.recommendation;
+        resetRecommendationState();
         renderTicket();
         renderRecommendation();
-        setResult(data);
-        await loadMetrics();
+        await loadMetrics(data);
       }
 
       async function rejectRecommendation() {
@@ -521,8 +532,18 @@ export const approvalDeskHtml = `<!doctype html>
             feedback: els.feedback.value.trim()
           })
         });
-        setResult(data);
-        await loadMetrics();
+        resetRecommendationState();
+        renderRecommendation();
+        await loadMetrics(data);
+      }
+
+      function resetRecommendationState() {
+        state.recommendation = null;
+        for (const field of els.fieldChoices.querySelectorAll('input[type="checkbox"]:checked')) {
+          field.checked = false;
+        }
+        els.confirmApproval.checked = false;
+        els.feedback.value = '';
       }
 
       async function requestJson(path, init) {
@@ -542,6 +563,21 @@ export const approvalDeskHtml = `<!doctype html>
         return '<div class="card"><strong>' + escapeHtml(label) + '</strong>' + escapeHtml(value) + '</div>';
       }
 
+      function formatList(values) {
+        return Array.isArray(values) && values.length > 0 ? values.join(', ') : 'none';
+      }
+
+      function formatDuplicateCandidates(candidates) {
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+          return 'none';
+        }
+        return candidates
+          .map(function (candidate) {
+            return candidate.ticketId + ' (' + candidate.confidence + '): ' + candidate.evidence;
+          })
+          .join('\\n');
+      }
+
       function escapeHtml(value) {
         return String(value)
           .replaceAll('&', '&amp;')
@@ -553,6 +589,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       els.actor.addEventListener('input', updateControls);
       els.confirmApproval.addEventListener('change', updateControls);
+      els.editedCustomerResponse.addEventListener('input', updateControls);
       els.feedback.addEventListener('input', updateControls);
       els.fieldChoices.addEventListener('change', updateControls);
       els.refreshQueue.addEventListener('click', function () {
