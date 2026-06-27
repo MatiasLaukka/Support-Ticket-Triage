@@ -21,6 +21,7 @@ import { approvalDeskHtml } from "./ui.js";
 const DEFAULT_EXPECTED_OUTCOMES_PATH = resolve(
   "data/seed/expected-outcomes.json",
 );
+const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
 
 const TicketListQuerySchema = z
@@ -294,8 +295,16 @@ function optionalParam(
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > JSON_BODY_LIMIT_BYTES) {
+      throw invalidRequest(
+        `Request body must be ${JSON_BODY_LIMIT_BYTES} bytes or less.`,
+      );
+    }
+    chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (raw.trim() === "") {
@@ -304,15 +313,19 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   try {
     return JSON.parse(raw);
   } catch {
-    throw new z.ZodError([
-      {
-        code: "custom",
-        path: [],
-        message: "Request body must be valid JSON.",
-        input: raw,
-      },
-    ]);
+    throw invalidRequest("Request body must be valid JSON.", raw);
   }
+}
+
+function invalidRequest(message: string, input?: unknown): z.ZodError {
+  return new z.ZodError([
+    {
+      code: "custom",
+      path: [],
+      message,
+      input,
+    },
+  ]);
 }
 
 function text(
@@ -348,7 +361,7 @@ function handleError(response: ServerResponse, error: unknown): void {
     return;
   }
   if (error instanceof DomainError) {
-    json(response, error.code === "STALE_APPROVAL" ? 409 : 400, {
+    json(response, domainStatus(error), {
       error: { code: error.code, message: error.message },
     });
     return;
@@ -365,4 +378,16 @@ function handleError(response: ServerResponse, error: unknown): void {
       message: UNEXPECTED_ERROR_TEXT,
     },
   });
+}
+
+function domainStatus(error: DomainError): number {
+  switch (error.code) {
+    case "STALE_APPROVAL":
+      return 409;
+    case "TICKET_NOT_FOUND":
+    case "RECOMMENDATION_NOT_FOUND":
+      return 404;
+    default:
+      return 400;
+  }
 }

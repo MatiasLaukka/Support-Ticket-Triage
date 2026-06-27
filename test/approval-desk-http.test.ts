@@ -65,6 +65,36 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("maps missing tickets to 404", async () => {
+    const { json } = await startFixture();
+
+    const missing = await json("/api/tickets/TKT-9999");
+
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({
+      error: {
+        code: "TICKET_NOT_FOUND",
+        message: "Ticket was not found.",
+      },
+    });
+  });
+
+  it("maps missing recommendations to 404", async () => {
+    const { json } = await startFixture();
+
+    const missing = await json(
+      "/api/recommendations/11111111-1111-4111-8111-111111111111",
+    );
+
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({
+      error: {
+        code: "RECOMMENDATION_NOT_FOUND",
+        message: "Recommendation was not found.",
+      },
+    });
+  });
+
   it("creates a pending authentication recommendation without mutating the ticket", async () => {
     const { deps, json } = await startFixture();
 
@@ -83,6 +113,27 @@ describe("createApprovalDeskHttpServer", () => {
       createdAt: now.toISOString(),
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
+  });
+
+  it("rejects oversized JSON request bodies before normal route handling", async () => {
+    const { deps, json } = await startFixture();
+
+    const oversized = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "x".repeat(65_536) }),
+    });
+
+    expect(oversized.status).toBe(400);
+    expect(oversized.body).toEqual({
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Request body must be 65536 bytes or less.",
+      },
+    });
+    expect(await deps.recommendations.list()).toEqual([]);
+    expect(
+      await deps.audits.listPage({ ticketId: "TKT-1005", offset: 0, limit: 10 }),
+    ).toMatchObject({ total: 0, events: [] });
   });
 
   it("maps stale approval to 409 and leaves only the submission audit", async () => {
