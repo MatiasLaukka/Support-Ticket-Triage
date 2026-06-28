@@ -15,7 +15,8 @@
     "test:watch": "vitest --dir test",
     "generate:fixtures": "node dist/scripts/generate-fixtures.js",
     "evaluate": "node dist/scripts/evaluate.js",
-    "start": "node dist/src/index.js"
+    "start": "node dist/src/index.js",
+    "approval-desk": "node dist/src/approval-desk.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
