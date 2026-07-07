@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
+  AuditEventSchema,
   CategorySchema,
   PrioritySchema,
   TeamSchema,
@@ -16,6 +18,7 @@ import {
   buildApprovalDeskRecommendationInput,
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
+import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 
 const DEFAULT_EXPECTED_OUTCOMES_PATH = resolve(
@@ -76,6 +79,7 @@ const ApprovalBodySchema = z
       path: ["editedCustomerResponse"],
     },
   );
+type ApprovalBody = z.infer<typeof ApprovalBodySchema>;
 const RejectBodySchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -188,6 +192,10 @@ function matchRoute(
     return { status: 200, handle: getMetrics };
   }
 
+  if (method === "GET" && pathname === "/api/evidence") {
+    return { status: 200, handle: getEvidence };
+  }
+
   return undefined;
 }
 
@@ -261,11 +269,18 @@ async function approveRecommendation(
 ): Promise<unknown> {
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = ApprovalBodySchema.parse(await readJsonBody(request));
-  return deps.service.approve({
-    ...body,
-    recommendationId,
-    approvedAt: deps.now().toISOString(),
-  });
+  try {
+    return await deps.service.approve({
+      ...body,
+      recommendationId,
+      approvedAt: deps.now().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof DomainError && error.code === "STALE_APPROVAL") {
+      await appendApprovalRejectedAudit(deps, recommendationId, body, error);
+    }
+    throw error;
+  }
 }
 
 async function rejectRecommendation(
@@ -294,6 +309,51 @@ async function getMetrics({ deps }: RouteContext): Promise<unknown> {
     now: deps.now(),
     minutesPerAcceptedRecommendation: deps.minutesPerAcceptedRecommendation,
   });
+}
+
+async function getEvidence({ deps }: RouteContext): Promise<unknown> {
+  const generatedAt = deps.now();
+  const [tickets, recommendations, audits] = await Promise.all([
+    deps.tickets.snapshot(),
+    deps.recommendations.list(),
+    deps.audits.listPage({ offset: 0, limit: 50 }),
+  ]);
+  const metrics = calculateQueueMetrics({
+    tickets,
+    recommendations,
+    now: generatedAt,
+    minutesPerAcceptedRecommendation: deps.minutesPerAcceptedRecommendation,
+  });
+  return buildAutomationEvidenceReport({
+    metrics,
+    audits: audits.events,
+    generatedAt: generatedAt.toISOString(),
+  });
+}
+
+async function appendApprovalRejectedAudit(
+  deps: RuntimeDependencies,
+  recommendationId: string,
+  approval: ApprovalBody,
+  error: DomainError,
+): Promise<void> {
+  const recommendation = await deps.recommendations.get(recommendationId);
+  await deps.audits.append(
+    AuditEventSchema.parse({
+      id: randomUUID(),
+      timestamp: deps.now().toISOString(),
+      actor: approval.actor,
+      action: "approval-rejected",
+      ticketId: approval.ticketId,
+      recommendationId,
+      before: { expectedRevision: approval.expectedRevision },
+      after: {},
+      rationale: error.message,
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      result: "rejected",
+      rejectionReason: error.message,
+    }),
+  );
 }
 
 function optionalParam(
