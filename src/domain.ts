@@ -220,6 +220,16 @@ export const ApprovalSchema = z
         "editedCustomerResponse requires customerResponse to be approved.",
       path: ["editedCustomerResponse"],
     },
+  )
+  .refine(
+    (approval) =>
+      !approval.approvedFields.includes("customerResponse") ||
+      approval.editedCustomerResponse !== undefined,
+    {
+      message:
+        "editedCustomerResponse is required when customerResponse is approved.",
+      path: ["editedCustomerResponse"],
+    },
   );
 
 export const AuditActionSchema = z.enum([

@@ -251,6 +251,26 @@ The Skill lives at
 classification and escalation tables are in
 `.agents/skills/triaging-support-tickets/references/policy.md`.
 
+## Use The Local Approval Desk
+
+The Approval Desk is a local browser UI for the human decision layer. It uses
+the same synthetic fixtures, local repositories, and `TriageService` rules as
+the MCP server.
+
+```powershell
+npm ci
+npm run build
+npm run approval-desk
+```
+
+Open the printed `http://127.0.0.1:5177` URL. Select `TKT-1005`, create a
+recommendation, review the prompt-injection warning, select named fields, enter
+an actor, check the explicit confirmation box, and approve. The UI then reads
+back the updated ticket revision and audit event.
+
+The app is local-only. It does not send customer responses, connect to external
+support systems, or authenticate multiple users.
+
 Other useful trigger examples:
 
 ```text

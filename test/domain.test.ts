@@ -410,6 +410,20 @@ describe("domain contracts", () => {
     },
   );
 
+  it("rejects approving customerResponse without edited customer text", () => {
+    expect(
+      ApprovalSchema.safeParse({
+        recommendationId: recommendation.id,
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        approvedFields: ["customerResponse"],
+        actor: "casey",
+        confirm: true,
+        approvedAt: "2026-06-10T08:40:00.000Z",
+      }).success,
+    ).toBe(false);
+  });
+
   it.each([
     ["ticket createdAt", { ...ticket, createdAt: "2026-06-10T08:00:00" }],
     ["ticket updatedAt", { ...ticket, updatedAt: "2026-06-10T08:30:00" }],

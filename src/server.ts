@@ -124,6 +124,16 @@ const ApprovalInputSchema: z.ZodType<ApprovalToolInput> = z
         "editedCustomerResponse requires customerResponse to be approved.",
       path: ["editedCustomerResponse"],
     },
+  )
+  .refine(
+    (approval) =>
+      !approval.approvedFields.includes("customerResponse") ||
+      approval.editedCustomerResponse !== undefined,
+    {
+      message:
+        "editedCustomerResponse is required when customerResponse is approved.",
+      path: ["editedCustomerResponse"],
+    },
   );
 
 const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> = z

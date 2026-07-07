@@ -151,6 +151,26 @@ Expected checkpoints:
   from ticket text. The narrative should surface the conflict even when the
   persisted recommendation does not contain that reason.
 
+## 2a. Browser Approval Desk
+
+Run:
+
+```powershell
+npm run approval-desk
+```
+
+Expected checkpoints:
+
+- the terminal prints a local `http://127.0.0.1:5177` Approval Desk URL;
+- selecting `TKT-1005` shows the prompt-injection ticket text;
+- creating a recommendation stores a pending recommendation and does not change
+  the ticket revision;
+- the browser sends the recommendation source revision with approval, and the
+  service rejects stale approval attempts if the ticket has changed;
+- approving selected fields records actor, selected fields, recommendation ID,
+  and a `recommendation-approved` audit event;
+- rejection requires feedback and leaves ticket fields unchanged.
+
 ## 3. Security Escalation
 
 Send this exact user prompt:
