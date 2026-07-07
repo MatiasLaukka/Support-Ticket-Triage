@@ -1,8 +1,4 @@
-import type {
-  AuditEvent,
-  Ticket,
-  TriageRecommendation,
-} from "../domain.js";
+import type { AuditEvent } from "../domain.js";
 import type { QueueMetrics } from "../metrics.js";
 
 export interface AutomationEvidenceReport {
@@ -40,18 +36,12 @@ export interface EvidenceActivity {
   action: AuditEvent["action"];
   ticketId?: string;
   recommendationId?: string;
-  result: AuditEvent["result"] | "failure";
+  result: AuditEvent["result"];
 }
-
-export type EvidenceAuditEvent = Omit<AuditEvent, "result"> & {
-  result: AuditEvent["result"] | "failure";
-};
 
 export interface AutomationEvidenceInput {
   metrics: QueueMetrics;
-  tickets: readonly Ticket[];
-  recommendations: readonly TriageRecommendation[];
-  audits: readonly EvidenceAuditEvent[];
+  audits: readonly AuditEvent[];
   generatedAt: string;
 }
 
@@ -104,7 +94,10 @@ export function buildAutomationEvidenceReport(
 ): AutomationEvidenceReport {
   const recentActivity = input.audits
     .slice()
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+    .sort(
+      (left, right) =>
+        Date.parse(right.timestamp) - Date.parse(left.timestamp),
+    )
     .slice(0, 8)
     .map(toEvidenceActivity);
 
@@ -122,11 +115,11 @@ export function buildAutomationEvidenceReport(
     },
     guardrails: GUARDRAILS.map((guardrail) => ({ ...guardrail })),
     recentActivity,
-    metrics: input.metrics,
+    metrics: cloneMetrics(input.metrics),
   };
 }
 
-function toEvidenceActivity(event: EvidenceAuditEvent): EvidenceActivity {
+function toEvidenceActivity(event: AuditEvent): EvidenceActivity {
   return {
     timestamp: event.timestamp,
     action: event.action,
@@ -136,6 +129,16 @@ function toEvidenceActivity(event: EvidenceAuditEvent): EvidenceActivity {
   };
 }
 
-function isSafetyBlock(event: EvidenceAuditEvent): boolean {
-  return event.result === "failure" || event.action === "approval-rejected";
+function isSafetyBlock(event: AuditEvent): boolean {
+  return event.result === "rejected" && event.action === "approval-rejected";
+}
+
+function cloneMetrics(metrics: QueueMetrics): QueueMetrics {
+  return {
+    ...metrics,
+    ticketsByCategory: { ...metrics.ticketsByCategory },
+    ticketsByPriority: { ...metrics.ticketsByPriority },
+    ticketsByTeam: { ...metrics.ticketsByTeam },
+    escalationCounts: { ...metrics.escalationCounts },
+  };
 }

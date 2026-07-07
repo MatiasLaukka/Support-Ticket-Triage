@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { AuditEvent, Ticket, TriageRecommendation } from "../src/domain.js";
+import type { AuditEvent } from "../src/domain.js";
 import type { QueueMetrics } from "../src/metrics.js";
-import {
-  buildAutomationEvidenceReport,
-  type EvidenceAuditEvent,
-} from "../src/approval-desk/evidence-report.js";
+import { buildAutomationEvidenceReport } from "../src/approval-desk/evidence-report.js";
 
 const generatedAt = "2026-06-10T09:00:00.000Z";
 
@@ -16,16 +13,14 @@ describe("buildAutomationEvidenceReport", () => {
       approvedRecommendations: 2,
       rejectedRecommendations: 1,
       estimatedMinutesSaved: 16,
+      ticketsByCategory: { authentication: 2 },
+      ticketsByPriority: { P2: 2 },
+      ticketsByTeam: { identity: 2 },
+      escalationCounts: { total: 1, sla: 1 },
     });
 
     const report = buildAutomationEvidenceReport({
       metrics,
-      tickets: [makeTicket("TKT-1001"), makeTicket("TKT-1002")],
-      recommendations: [
-        makeRecommendation("11111111-1111-4111-8111-111111111111", "approved"),
-        makeRecommendation("22222222-2222-4222-8222-222222222222", "rejected"),
-        makeRecommendation("33333333-3333-4333-8333-333333333333", "pending"),
-      ],
       audits: [
         makeAudit({
           action: "recommendation-approved",
@@ -79,52 +74,76 @@ describe("buildAutomationEvidenceReport", () => {
         result: "rejected",
       },
     ]);
-    expect(report.metrics).toBe(metrics);
+    expect(report.metrics).toEqual(metrics);
+    expect(report.metrics).not.toBe(metrics);
+    expect(report.metrics.ticketsByCategory).not.toBe(metrics.ticketsByCategory);
+    expect(report.metrics.ticketsByPriority).not.toBe(metrics.ticketsByPriority);
+    expect(report.metrics.ticketsByTeam).not.toBe(metrics.ticketsByTeam);
+    expect(report.metrics.escalationCounts).not.toBe(metrics.escalationCounts);
+
+    metrics.openTickets = 99;
+    metrics.ticketsByCategory.authentication = 99;
+    metrics.ticketsByPriority.P2 = 99;
+    metrics.ticketsByTeam.identity = 99;
+    metrics.escalationCounts.total = 99;
+
+    expect(report.metrics.openTickets).toBe(7);
+    expect(report.metrics.ticketsByCategory.authentication).toBe(2);
+    expect(report.metrics.ticketsByPriority.P2).toBe(2);
+    expect(report.metrics.ticketsByTeam.identity).toBe(2);
+    expect(report.metrics.escalationCounts.total).toBe(1);
   });
 
   it("counts only provable blocked safety outcomes", () => {
     const report = buildAutomationEvidenceReport({
       metrics: makeMetrics(),
-      tickets: [],
-      recommendations: [],
       audits: [
         makeAudit({ action: "recommendation-rejected", result: "success" }),
-        makeAudit({ action: "recommendation-approved", result: "failure" }),
         makeAudit({ action: "approval-rejected", result: "rejected" }),
         makeAudit({ action: "recommendation-approved", result: "success" }),
       ],
       generatedAt,
     });
 
-    expect(report.summary.safetyBlocks).toBe(2);
+    expect(report.summary.safetyBlocks).toBe(1);
   });
 
-  it("sorts recent activity newest-first and limits it to eight events", () => {
-    const audits = Array.from({ length: 10 }, (_, index) =>
+  it("sorts recent activity by parsed timestamp newest-first and limits it to eight events", () => {
+    const timestamps = [
+      "2026-06-10T04:00:00.000+01:00",
+      "2026-06-10T03:30:00.000Z",
+      "2026-06-10T05:00:00.000+01:00",
+      "2026-06-10T04:30:00.000Z",
+      "2026-06-10T06:00:00.000+01:00",
+      "2026-06-10T05:30:00.000Z",
+      "2026-06-10T07:00:00.000+01:00",
+      "2026-06-10T06:30:00.000Z",
+      "2026-06-10T09:00:00.000+02:00",
+      "2026-06-10T08:30:00.000Z",
+    ];
+    const audits = timestamps.map((timestamp, index) =>
       makeAudit({
         id: `99999999-9999-4999-8999-9999999999${index.toString().padStart(2, "0")}`,
-        timestamp: `2026-06-10T09:${index.toString().padStart(2, "0")}:00.000Z`,
+        timestamp,
       }),
     );
 
     const report = buildAutomationEvidenceReport({
       metrics: makeMetrics(),
-      tickets: [],
-      recommendations: [],
       audits,
       generatedAt,
     });
 
     expect(report.recentActivity).toHaveLength(8);
     expect(report.recentActivity.map(({ timestamp }) => timestamp)).toEqual([
-      "2026-06-10T09:09:00.000Z",
-      "2026-06-10T09:08:00.000Z",
-      "2026-06-10T09:07:00.000Z",
-      "2026-06-10T09:06:00.000Z",
-      "2026-06-10T09:05:00.000Z",
-      "2026-06-10T09:04:00.000Z",
-      "2026-06-10T09:03:00.000Z",
-      "2026-06-10T09:02:00.000Z",
+      "2026-06-10T08:30:00.000Z",
+      "2026-06-10T09:00:00.000+02:00",
+      "2026-06-10T06:30:00.000Z",
+      "2026-06-10T07:00:00.000+01:00",
+      "2026-06-10T05:30:00.000Z",
+      "2026-06-10T06:00:00.000+01:00",
+      "2026-06-10T04:30:00.000Z",
+      "2026-06-10T05:00:00.000+01:00",
     ]);
   });
 });
@@ -153,66 +172,9 @@ function makeMetrics(overrides: Partial<QueueMetrics> = {}): QueueMetrics {
   };
 }
 
-function makeTicket(id: Ticket["id"]): Ticket {
-  return {
-    id,
-    createdAt: "2026-06-10T08:00:00.000Z",
-    updatedAt: "2026-06-10T08:30:00.000Z",
-    customer: {
-      name: "Northstar",
-      plan: "enterprise",
-      region: "eu",
-      vip: false,
-    },
-    subject: "Login issue",
-    description: "Cannot log in.",
-    status: "triage",
-    category: "authentication",
-    priority: "P2",
-    team: "identity",
-    tags: [],
-    sla: {
-      responseDueAt: "2026-06-10T10:00:00.000Z",
-      breached: false,
-    },
-    relatedTicketIds: [],
-    revision: 0,
-  };
-}
-
-function makeRecommendation(
-  id: TriageRecommendation["id"],
-  resolution: TriageRecommendation["resolution"],
-): TriageRecommendation {
-  return {
-    id,
-    ticketId: "TKT-1001",
-    sourceRevision: 0,
-    category: "authentication",
-    priority: "P2",
-    team: "identity",
-    duplicateCandidates: [],
-    outageRisk: "none",
-    securityRisk: "none",
-    slaRisk: "none",
-    missingInformation: [],
-    knowledgeArticleIds: ["account-access"],
-    draftCustomerResponse: "We are investigating.",
-    rationale: "Account access routing.",
-    confidence: 0.9,
-    recommendedNextAction: "Review evidence.",
-    escalationRequired: false,
-    escalationReasons: [],
-    resolution,
-    createdAt: "2026-06-10T09:00:00.000Z",
-  };
-}
-
 function makeAudit(
-  overrides: Partial<Omit<AuditEvent, "result">> & {
-    result?: AuditEvent["result"] | "failure";
-  },
-): EvidenceAuditEvent {
+  overrides: Partial<AuditEvent>,
+): AuditEvent {
   return {
     id: "44444444-4444-4444-8444-444444444444",
     timestamp: "2026-06-10T09:00:00.000Z",
