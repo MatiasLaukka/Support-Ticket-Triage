@@ -70,6 +70,51 @@ describe("approvalDeskHtml", () => {
     expect(rejectionApp.evidenceRequests()).toBe(3);
   });
 
+  it("keeps successful results visible when automatic evidence refresh fails", async () => {
+    const queueApp = await startApprovalDeskApp({ failEvidenceAfter: 1 });
+
+    await queueApp.refreshQueue();
+
+    expect(queueApp.parsedResult()).toMatchObject({
+      items: [{ id: "TKT-1001" }],
+      total: 1,
+    });
+    expect(queueApp.parsedResult()).not.toHaveProperty("error");
+
+    const approvalApp = await startApprovalDeskApp({ failEvidenceAfter: 2 });
+    await approvalApp.selectFirstTicket();
+    await approvalApp.createRecommendation();
+    approvalApp.field("category").checked = true;
+    approvalApp.el("confirmApproval").checked = true;
+    approvalApp.el("fieldChoices").dispatch("change");
+
+    await approvalApp.approve();
+
+    expect(approvalApp.parsedResult()).toMatchObject({
+      action: {
+        ticket: { id: "TKT-1001", revision: 1 },
+      },
+      metrics: { pendingRecommendations: 0 },
+    });
+    expect(approvalApp.parsedResult()).not.toHaveProperty("error");
+
+    const rejectionApp = await startApprovalDeskApp({ failEvidenceAfter: 2 });
+    await rejectionApp.selectFirstTicket();
+    await rejectionApp.createRecommendation();
+    rejectionApp.el("feedback").value = "Needs better evidence.";
+    rejectionApp.el("feedback").dispatch("input");
+
+    await rejectionApp.reject();
+
+    expect(rejectionApp.parsedResult()).toMatchObject({
+      action: {
+        auditEvent: { action: "recommendation-rejected" },
+      },
+      metrics: { pendingRecommendations: 0 },
+    });
+    expect(rejectionApp.parsedResult()).not.toHaveProperty("error");
+  });
+
   it("requires edited text before approving customerResponse", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -248,6 +293,7 @@ const fixtureEvidence = {
 };
 
 async function startApprovalDeskApp(options: {
+  failEvidenceAfter?: number;
   recommendation?: typeof fixtureRecommendation;
 } = {}) {
   const elements = createElements();
@@ -267,6 +313,18 @@ async function startApprovalDeskApp(options: {
       return jsonResponse(metrics);
     }
     if (path === "/api/evidence") {
+      const evidenceRequests = requests.filter(
+        (request) => request.path === "/api/evidence",
+      ).length;
+      if (
+        options.failEvidenceAfter !== undefined &&
+        evidenceRequests > options.failEvidenceAfter
+      ) {
+        return jsonResponse(
+          { error: { message: "Evidence service unavailable." } },
+          503,
+        );
+      }
       return jsonResponse(fixtureEvidence);
     }
     if (path === "/api/tickets/TKT-1001") {

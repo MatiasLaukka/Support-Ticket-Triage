@@ -525,9 +525,17 @@ export const approvalDeskHtml = `<!doctype html>
         setResult(actionResult === undefined ? metrics : { action: actionResult, metrics });
       }
 
-      async function loadEvidence() {
-        const report = await requestJson('/api/evidence');
+      async function loadEvidence(writeErrorToResult) {
+        const report = await requestJson('/api/evidence', undefined, { writeErrorToResult });
         renderEvidence(report);
+      }
+
+      async function refreshEvidenceBestEffort() {
+        try {
+          await loadEvidence(false);
+        } catch (error) {
+          renderEvidenceError(error);
+        }
       }
 
       function renderEvidence(report) {
@@ -544,6 +552,11 @@ export const approvalDeskHtml = `<!doctype html>
 
         renderGuardrails(report.guardrails);
         renderActivity(report.recentActivity);
+      }
+
+      function renderEvidenceError(error) {
+        const message = error instanceof Error ? error.message : 'Evidence refresh failed.';
+        els.evidencePanel.innerHTML = '<p class="warning">Automation evidence could not be refreshed: ' + escapeHtml(message) + '</p>';
       }
 
       function renderGuardrails(guardrails) {
@@ -605,7 +618,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.recommendation = data.recommendation;
         renderRecommendation();
         setResult(data);
-        await loadEvidence();
+        await refreshEvidenceBestEffort();
       }
 
       async function approveRecommendation() {
@@ -632,7 +645,7 @@ export const approvalDeskHtml = `<!doctype html>
         renderTicket();
         renderRecommendation();
         await loadMetrics(data);
-        await loadEvidence();
+        await refreshEvidenceBestEffort();
       }
 
       async function rejectRecommendation() {
@@ -650,7 +663,7 @@ export const approvalDeskHtml = `<!doctype html>
         resetRecommendationState();
         renderRecommendation();
         await loadMetrics(data);
-        await loadEvidence();
+        await refreshEvidenceBestEffort();
       }
 
       function resetRecommendationState() {
@@ -662,14 +675,16 @@ export const approvalDeskHtml = `<!doctype html>
         els.feedback.value = '';
       }
 
-      async function requestJson(path, init) {
+      async function requestJson(path, init, options) {
         const response = await fetch(path, {
           headers: { 'content-type': 'application/json' },
           ...init
         });
         const data = await response.json();
         if (!response.ok) {
-          setResult(data);
+          if (options?.writeErrorToResult !== false) {
+            setResult(data);
+          }
           throw new Error(data.error?.message ?? 'Request failed.');
         }
         return data;
@@ -714,7 +729,7 @@ export const approvalDeskHtml = `<!doctype html>
       els.fieldChoices.addEventListener('change', updateControls);
       els.refreshQueue.addEventListener('click', function () {
         void loadQueue()
-          .then(loadEvidence)
+          .then(refreshEvidenceBestEffort)
           .catch(function (error) { setResult({ error: error.message }); });
       });
       els.refreshEvidence.addEventListener('click', function () {
@@ -732,7 +747,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       void Promise.all([
         loadQueue().then(loadMetrics),
-        loadEvidence()
+        refreshEvidenceBestEffort()
       ])
         .catch(function (error) { setResult({ error: error.message }); });
       renderTicket();
