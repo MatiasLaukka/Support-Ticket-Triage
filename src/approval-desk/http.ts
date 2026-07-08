@@ -1,10 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
-  AuditEventSchema,
   CategorySchema,
   PrioritySchema,
   TeamSchema,
@@ -79,7 +77,6 @@ const ApprovalBodySchema = z
       path: ["editedCustomerResponse"],
     },
   );
-type ApprovalBody = z.infer<typeof ApprovalBodySchema>;
 const RejectBodySchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -269,18 +266,11 @@ async function approveRecommendation(
 ): Promise<unknown> {
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = ApprovalBodySchema.parse(await readJsonBody(request));
-  try {
-    return await deps.service.approve({
-      ...body,
-      recommendationId,
-      approvedAt: deps.now().toISOString(),
-    });
-  } catch (error) {
-    if (error instanceof DomainError && error.code === "STALE_APPROVAL") {
-      await appendApprovalRejectedAudit(deps, recommendationId, body, error);
-    }
-    throw error;
-  }
+  return deps.service.approve({
+    ...body,
+    recommendationId,
+    approvedAt: deps.now().toISOString(),
+  });
 }
 
 async function rejectRecommendation(
@@ -316,7 +306,7 @@ async function getEvidence({ deps }: RouteContext): Promise<unknown> {
   const [tickets, recommendations, audits] = await Promise.all([
     deps.tickets.snapshot(),
     deps.recommendations.list(),
-    deps.audits.listPage({ offset: 0, limit: 50 }),
+    deps.audits.list(),
   ]);
   const metrics = calculateQueueMetrics({
     tickets,
@@ -326,34 +316,9 @@ async function getEvidence({ deps }: RouteContext): Promise<unknown> {
   });
   return buildAutomationEvidenceReport({
     metrics,
-    audits: audits.events,
+    audits,
     generatedAt: generatedAt.toISOString(),
   });
-}
-
-async function appendApprovalRejectedAudit(
-  deps: RuntimeDependencies,
-  recommendationId: string,
-  approval: ApprovalBody,
-  error: DomainError,
-): Promise<void> {
-  const recommendation = await deps.recommendations.get(recommendationId);
-  await deps.audits.append(
-    AuditEventSchema.parse({
-      id: randomUUID(),
-      timestamp: deps.now().toISOString(),
-      actor: approval.actor,
-      action: "approval-rejected",
-      ticketId: approval.ticketId,
-      recommendationId,
-      before: { expectedRevision: approval.expectedRevision },
-      after: {},
-      rationale: error.message,
-      knowledgeArticleIds: recommendation.knowledgeArticleIds,
-      result: "rejected",
-      rejectionReason: error.message,
-    }),
-  );
 }
 
 function optionalParam(

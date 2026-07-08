@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
+import { AuditEventSchema } from "../src/domain.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
@@ -221,6 +222,35 @@ describe("createApprovalDeskHttpServer", () => {
         result: "rejected",
       }),
     );
+  });
+
+  it("counts evidence audit events and safety blocks beyond the first audit page", async () => {
+    const { deps, json } = await startFixture();
+    for (let index = 0; index < 51; index += 1) {
+      const suffix = index.toString(16).padStart(12, "0");
+      await deps.audits.append(
+        AuditEventSchema.parse({
+          id: `aaaaaaaa-aaaa-4aaa-8aaa-${suffix}`,
+          timestamp: now.toISOString(),
+          actor: "approval-desk",
+          action: "approval-rejected",
+          ticketId: "TKT-1005",
+          recommendationId: `bbbbbbbb-bbbb-4bbb-8bbb-${suffix}`,
+          before: {},
+          after: {},
+          rationale: "Approval revision is stale.",
+          knowledgeArticleIds: [],
+          result: "rejected",
+          rejectionReason: "Approval revision is stale.",
+        }),
+      );
+    }
+
+    const evidence = await json("/api/evidence");
+
+    expect(evidence.status).toBe(200);
+    expect(evidence.body.summary.auditEvents).toBe(51);
+    expect(evidence.body.summary.safetyBlocks).toBe(51);
   });
 
   it("approves selected fields and records the reviewer audit", async () => {

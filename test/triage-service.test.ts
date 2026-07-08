@@ -317,10 +317,12 @@ describe("TriageService", () => {
     });
   });
 
-  it("leaves state unchanged and appends no success event when approval validation fails", async () => {
+  it("appends a rejected audit and leaves state unchanged when approval revision is stale", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput());
     const before = structuredClone(await harness.tickets.get("TKT-1001"));
+    const recommendationBefore =
+      await harness.recommendations.get(recommendationId);
     const eventCount = harness.audit.events.length;
 
     await expect(
@@ -328,6 +330,54 @@ describe("TriageService", () => {
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
 
     expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+    expect(await harness.recommendations.get(recommendationId)).toEqual(
+      recommendationBefore,
+    );
+    expect(harness.audit.events).toHaveLength(eventCount + 1);
+    expect(harness.audit.events.at(-1)).toMatchObject({
+      action: "approval-rejected",
+      actor: "casey",
+      ticketId: "TKT-1001",
+      recommendationId,
+      result: "rejected",
+      rationale: "Approval revision is stale.",
+      rejectionReason: "Approval revision is stale.",
+    });
+  });
+
+  it("uses the recommendation ticket id for rejected audit evidence when approval names a different ticket", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+
+    await expect(
+      harness.service.approve(makeApproval({ ticketId: "TKT-1002" })),
+    ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+
+    expect(harness.audit.events.at(-1)).toMatchObject({
+      action: "approval-rejected",
+      ticketId: "TKT-1001",
+      recommendationId,
+      result: "rejected",
+      rejectionReason: "Recommendation cannot be applied.",
+    });
+  });
+
+  it("preserves stale approval semantics when rejected audit telemetry cannot be appended", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    const eventCount = harness.audit.events.length;
+    harness.audit.nextFailure = new DomainError(
+      "Audit event could not be persisted.",
+      "REPOSITORY_ERROR",
+    );
+
+    await expect(
+      harness.service.approve(makeApproval({ expectedRevision: 1 })),
+    ).rejects.toMatchObject({
+      code: "STALE_APPROVAL",
+      message: "Approval revision is stale.",
+    });
+
     expect(harness.audit.events).toHaveLength(eventCount);
   });
 
