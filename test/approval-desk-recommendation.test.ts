@@ -57,6 +57,46 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).toContain("investigating");
   });
 
+  it("uses customer-facing knowledge guidance in draft responses", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.knowledgeArticleIds).toEqual(["integration-webhooks"]);
+    expect(input.draftCustomerResponse).toContain("webhook signing");
+    expect(input.draftCustomerResponse).toContain("delivery timing");
+    expect(input.draftCustomerResponse).not.toContain("integration-webhooks");
+  });
+
+  it("keeps multiple knowledge IDs internal while combining customer guidance", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.knowledgeArticleIds).toEqual([
+      "account-access",
+      "triage-policy",
+    ]);
+    expect(input.draftCustomerResponse).toContain("sign-in details");
+    expect(input.draftCustomerResponse).toContain("reported behavior");
+    expect(input.draftCustomerResponse).not.toContain("account-access");
+    expect(input.draftCustomerResponse).not.toContain("triage-policy");
+  });
+
   it("throws when no expected outcome exists for the ticket", async () => {
     const ticket = TicketSchema.parse({
       ...(await loadSeedTicket("TKT-1005")),

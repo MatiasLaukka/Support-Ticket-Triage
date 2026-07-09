@@ -12,6 +12,28 @@ import {
 import type { SubmitRecommendationInput } from "../triage-service.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+const CUSTOMER_KNOWLEDGE_GUIDANCE: Readonly<Record<string, string>> = {
+  "account-access":
+    "affected account, workspace, sign-in details, and recent login history",
+  "api-errors":
+    "the affected endpoint, status code, request identifier, region, and timestamp",
+  "billing-refunds":
+    "invoice identifiers, charge status, and any duplicate billing records",
+  "incident-response":
+    "related service reports, affected region, time window, and customer-safe status details",
+  "integration-webhooks":
+    "webhook signing, delivery timing, and endpoint configuration",
+  performance:
+    "affected workflow, dataset size, observed duration, and baseline performance",
+  "security-escalation":
+    "potential credential exposure, access scope, and evidence needed for safe security routing",
+  "sla-policy":
+    "response deadlines and SLA risk so the next action is prioritized correctly",
+  "triage-policy":
+    "the reported behavior, expected behavior, timestamps, and reproduction details",
+  "vip-communications":
+    "business impact, next action, and update cadence",
+};
 
 const ExpectedOutcomeSchema = z
   .object({
@@ -75,9 +97,10 @@ export function buildApprovalDeskRecommendationInput(input: {
       ? [`Confirm the missing evidence for ${ticket.id} before approval.`]
       : [],
     knowledgeArticleIds,
-    draftCustomerResponse: `We are investigating ${ticket.id} and will use ${knowledgeArticleIds.join(
-      ", ",
-    )} to guide the next update.`,
+    draftCustomerResponse: buildDraftCustomerResponse(
+      ticket.id,
+      knowledgeArticleIds,
+    ),
     rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
       ", ",
     )}.`,
@@ -98,6 +121,24 @@ function buildTags(ticket: Ticket, outcome: ExpectedOutcome): string[] {
       ? ["policy-conflict"]
       : []),
   ]);
+}
+
+function buildDraftCustomerResponse(
+  ticketId: string,
+  knowledgeArticleIds: readonly string[],
+): string {
+  return `We are investigating ${ticketId}. We are checking ${formatCustomerGuidance(
+    knowledgeArticleIds,
+  )} and will share the next update once we have confirmed the details.`;
+}
+
+function formatCustomerGuidance(knowledgeArticleIds: readonly string[]): string {
+  const guidance = knowledgeArticleIds.map(
+    (id) =>
+      CUSTOMER_KNOWLEDGE_GUIDANCE[id] ??
+      "the support details relevant to this request",
+  );
+  return unique(guidance).join("; ");
 }
 
 function unique(values: string[]): string[] {
