@@ -156,12 +156,14 @@ Expected checkpoints:
 Run:
 
 ```powershell
-npm run approval-desk
+npm run demo:approval-desk
 ```
 
 Expected checkpoints:
 
 - the terminal prints a local `http://127.0.0.1:5177` Approval Desk URL;
+- the Automation Evidence dashboard shows open tickets, recommendation counts,
+  active guardrails, audit events, and estimated minutes saved;
 - selecting `TKT-1005` shows the prompt-injection ticket text;
 - creating a recommendation stores a pending recommendation and does not change
   the ticket revision;
@@ -169,6 +171,8 @@ Expected checkpoints:
   service rejects stale approval attempts if the ticket has changed;
 - approving selected fields records actor, selected fields, recommendation ID,
   and a `recommendation-approved` audit event;
+- after approval or rejection, the dashboard refreshes and the raw JSON result
+  still shows the service action;
 - rejection requires feedback and leaves ticket fields unchanged.
 
 ## 3. Security Escalation

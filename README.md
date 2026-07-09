@@ -263,6 +263,19 @@ npm run build
 npm run approval-desk
 ```
 
+For a repeatable walkthrough, run:
+
+```powershell
+npm ci
+npm run build
+npm run demo:approval-desk
+```
+
+The demo command resets local runtime data, starts the Approval Desk, and prints
+the local URL plus suggested steps. The Automation Evidence dashboard shows open
+tickets, recommendation counts, estimated minutes saved, audit events, safety
+blocks, and active guardrails.
+
 Open the printed `http://127.0.0.1:5177` URL. Select `TKT-1005`, create a
 recommendation, review the prompt-injection warning, select named fields, enter
 an actor, check the explicit confirmation box, and approve. The UI then reads
