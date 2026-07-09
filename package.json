@@ -16,7 +16,8 @@
     "generate:fixtures": "node dist/scripts/generate-fixtures.js",
     "evaluate": "node dist/scripts/evaluate.js",
     "start": "node dist/src/index.js",
-    "approval-desk": "node dist/src/approval-desk.js"
+    "approval-desk": "node dist/src/approval-desk.js",
+    "demo:approval-desk": "node dist/scripts/demo-approval-desk.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
