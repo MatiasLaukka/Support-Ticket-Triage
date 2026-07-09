@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
+import { AuditEventSchema } from "../src/domain.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
@@ -115,6 +116,42 @@ describe("createApprovalDeskHttpServer", () => {
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
 
+  it("reports automation evidence after recommendation submission", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const evidence = await json("/api/evidence");
+
+    expect(evidence.status).toBe(200);
+    expect(evidence.body.generatedAt).toBe(now.toISOString());
+    expect(evidence.body.summary).toEqual({
+      openTickets: 29,
+      pendingRecommendations: 1,
+      approvedRecommendations: 0,
+      rejectedRecommendations: 0,
+      estimatedMinutesSaved: 0,
+      auditEvents: 1,
+      safetyBlocks: 0,
+      activeGuardrails: 6,
+    });
+    expect(evidence.body.guardrails).toContainEqual(
+      expect.objectContaining({
+        id: "submission-is-not-mutation",
+        status: "active",
+      }),
+    );
+    expect(evidence.body.recentActivity).toContainEqual(
+      expect.objectContaining({
+        action: "recommendation-submitted",
+        recommendationId: created.body.recommendation.id,
+        result: "success",
+      }),
+    );
+  });
+
   it("rejects oversized JSON request bodies before normal route handling", async () => {
     const { deps, json } = await startFixture();
 
@@ -136,7 +173,7 @@ describe("createApprovalDeskHttpServer", () => {
     ).toMatchObject({ total: 0, events: [] });
   });
 
-  it("maps stale approval to 409 and leaves only the submission audit", async () => {
+  it("maps stale approval to 409 and exposes the safety block in evidence", async () => {
     const { deps, json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {
       method: "POST",
@@ -161,12 +198,59 @@ describe("createApprovalDeskHttpServer", () => {
       },
     );
     const detail = await json("/api/tickets/TKT-1005");
+    const evidence = await json("/api/evidence");
 
     expect(stale.status).toBe(409);
     expect(stale.body.error.code).toBe("STALE_APPROVAL");
     expect(detail.body.audits.events).toEqual([
-      expect.objectContaining({ action: "recommendation-submitted" }),
+      expect.objectContaining({
+        action: "recommendation-submitted",
+        result: "success",
+      }),
+      expect.objectContaining({
+        action: "approval-rejected",
+        recommendationId: created.body.recommendation.id,
+        result: "rejected",
+      }),
     ]);
+    expect(evidence.status).toBe(200);
+    expect(evidence.body.summary.safetyBlocks).toBe(1);
+    expect(evidence.body.recentActivity).toContainEqual(
+      expect.objectContaining({
+        action: "approval-rejected",
+        recommendationId: created.body.recommendation.id,
+        result: "rejected",
+      }),
+    );
+  });
+
+  it("counts evidence audit events and safety blocks beyond the first audit page", async () => {
+    const { deps, json } = await startFixture();
+    for (let index = 0; index < 51; index += 1) {
+      const suffix = index.toString(16).padStart(12, "0");
+      await deps.audits.append(
+        AuditEventSchema.parse({
+          id: `aaaaaaaa-aaaa-4aaa-8aaa-${suffix}`,
+          timestamp: now.toISOString(),
+          actor: "approval-desk",
+          action: "approval-rejected",
+          ticketId: "TKT-1005",
+          recommendationId: `bbbbbbbb-bbbb-4bbb-8bbb-${suffix}`,
+          before: {},
+          after: {},
+          rationale: "Approval revision is stale.",
+          knowledgeArticleIds: [],
+          result: "rejected",
+          rejectionReason: "Approval revision is stale.",
+        }),
+      );
+    }
+
+    const evidence = await json("/api/evidence");
+
+    expect(evidence.status).toBe(200);
+    expect(evidence.body.summary.auditEvents).toBe(51);
+    expect(evidence.body.summary.safetyBlocks).toBe(51);
   });
 
   it("approves selected fields and records the reviewer audit", async () => {

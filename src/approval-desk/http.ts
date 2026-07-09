@@ -16,6 +16,7 @@ import {
   buildApprovalDeskRecommendationInput,
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
+import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 
 const DEFAULT_EXPECTED_OUTCOMES_PATH = resolve(
@@ -188,6 +189,10 @@ function matchRoute(
     return { status: 200, handle: getMetrics };
   }
 
+  if (method === "GET" && pathname === "/api/evidence") {
+    return { status: 200, handle: getEvidence };
+  }
+
   return undefined;
 }
 
@@ -293,6 +298,26 @@ async function getMetrics({ deps }: RouteContext): Promise<unknown> {
     recommendations,
     now: deps.now(),
     minutesPerAcceptedRecommendation: deps.minutesPerAcceptedRecommendation,
+  });
+}
+
+async function getEvidence({ deps }: RouteContext): Promise<unknown> {
+  const generatedAt = deps.now();
+  const [tickets, recommendations, audits] = await Promise.all([
+    deps.tickets.snapshot(),
+    deps.recommendations.list(),
+    deps.audits.list(),
+  ]);
+  const metrics = calculateQueueMetrics({
+    tickets,
+    recommendations,
+    now: generatedAt,
+    minutesPerAcceptedRecommendation: deps.minutesPerAcceptedRecommendation,
+  });
+  return buildAutomationEvidenceReport({
+    metrics,
+    audits,
+    generatedAt: generatedAt.toISOString(),
   });
 }
 

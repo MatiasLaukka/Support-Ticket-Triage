@@ -11,12 +11,108 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Reject recommendation");
     expect(approvalDeskHtml).toContain("customerResponse");
     expect(approvalDeskHtml).toContain("prompt-injection");
+    expect(approvalDeskHtml).toContain("Automation Evidence");
+    expect(approvalDeskHtml).toContain("Estimated minutes saved");
   });
 
   it("uses only local API routes", () => {
     expect(approvalDeskHtml).toContain("/api/tickets");
     expect(approvalDeskHtml).toContain("/api/metrics");
+    expect(approvalDeskHtml).toContain("/api/evidence");
     expect(approvalDeskHtml).not.toContain("https://");
+  });
+
+  it("renders automation evidence cards and guardrails on initial load", async () => {
+    const app = await startApprovalDeskApp();
+
+    expect(app.el("evidencePanel").innerHTML).toContain("Open tickets");
+    expect(app.el("evidencePanel").innerHTML).toContain("3");
+    expect(app.el("evidencePanel").innerHTML).toContain(
+      "Estimated minutes saved",
+    );
+    expect(app.el("evidencePanel").innerHTML).toContain("42");
+    expect(app.el("evidencePanel").innerHTML).toContain("Safety blocks");
+    expect(app.el("guardrailsPanel").innerHTML).toContain("Approval required");
+    expect(app.el("guardrailsPanel").innerHTML).toContain(
+      "&lt;script&gt;nope&lt;/script&gt;",
+    );
+    expect(app.el("activityPanel").innerHTML).toContain(
+      "recommendation-submitted",
+    );
+    expect(app.el("activityPanel").innerHTML).toContain("TKT-1001");
+    expect(app.el("guardrailsPanel").innerHTML).not.toContain("<script>");
+  });
+
+  it("refreshes automation evidence on load and after queue and recommendation actions", async () => {
+    const app = await startApprovalDeskApp();
+
+    expect(app.evidenceRequests()).toBe(1);
+
+    await app.refreshQueue();
+    expect(app.evidenceRequests()).toBe(2);
+
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+    expect(app.evidenceRequests()).toBe(3);
+
+    app.field("category").checked = true;
+    app.el("confirmApproval").checked = true;
+    app.el("fieldChoices").dispatch("change");
+    await app.approve();
+    expect(app.evidenceRequests()).toBe(4);
+
+    const rejectionApp = await startApprovalDeskApp();
+    await rejectionApp.selectFirstTicket();
+    await rejectionApp.createRecommendation();
+    rejectionApp.el("feedback").value = "Needs better evidence.";
+    rejectionApp.el("feedback").dispatch("input");
+    await rejectionApp.reject();
+    expect(rejectionApp.evidenceRequests()).toBe(3);
+  });
+
+  it("keeps successful results visible when automatic evidence refresh fails", async () => {
+    const queueApp = await startApprovalDeskApp({ failEvidenceAfter: 1 });
+
+    await queueApp.refreshQueue();
+
+    expect(queueApp.parsedResult()).toMatchObject({
+      items: [{ id: "TKT-1001" }],
+      total: 1,
+    });
+    expect(queueApp.parsedResult()).not.toHaveProperty("error");
+
+    const approvalApp = await startApprovalDeskApp({ failEvidenceAfter: 2 });
+    await approvalApp.selectFirstTicket();
+    await approvalApp.createRecommendation();
+    approvalApp.field("category").checked = true;
+    approvalApp.el("confirmApproval").checked = true;
+    approvalApp.el("fieldChoices").dispatch("change");
+
+    await approvalApp.approve();
+
+    expect(approvalApp.parsedResult()).toMatchObject({
+      action: {
+        ticket: { id: "TKT-1001", revision: 1 },
+      },
+      metrics: { pendingRecommendations: 0 },
+    });
+    expect(approvalApp.parsedResult()).not.toHaveProperty("error");
+
+    const rejectionApp = await startApprovalDeskApp({ failEvidenceAfter: 2 });
+    await rejectionApp.selectFirstTicket();
+    await rejectionApp.createRecommendation();
+    rejectionApp.el("feedback").value = "Needs better evidence.";
+    rejectionApp.el("feedback").dispatch("input");
+
+    await rejectionApp.reject();
+
+    expect(rejectionApp.parsedResult()).toMatchObject({
+      action: {
+        auditEvent: { action: "recommendation-rejected" },
+      },
+      metrics: { pendingRecommendations: 0 },
+    });
+    expect(rejectionApp.parsedResult()).not.toHaveProperty("error");
   });
 
   it("requires edited text before approving customerResponse", async () => {
@@ -164,7 +260,40 @@ const fixtureRecommendation = {
   createdAt: "2026-06-10T08:35:00.000Z",
 };
 
+const fixtureEvidence = {
+  generatedAt: "2026-06-10T08:45:00.000Z",
+  summary: {
+    openTickets: 3,
+    pendingRecommendations: 1,
+    approvedRecommendations: 2,
+    rejectedRecommendations: 1,
+    estimatedMinutesSaved: 42,
+    auditEvents: 7,
+    safetyBlocks: 1,
+    activeGuardrails: 5,
+  },
+  guardrails: [
+    {
+      id: "approval-required",
+      label: "Approval required",
+      status: "active",
+      evidence: "<script>nope</script>",
+    },
+  ],
+  recentActivity: [
+    {
+      timestamp: "2026-06-10T08:40:00.000Z",
+      action: "recommendation-submitted",
+      ticketId: "TKT-1001",
+      recommendationId: "11111111-1111-4111-8111-111111111111",
+      result: "success",
+    },
+  ],
+  metrics: { pendingRecommendations: 1 },
+};
+
 async function startApprovalDeskApp(options: {
+  failEvidenceAfter?: number;
   recommendation?: typeof fixtureRecommendation;
 } = {}) {
   const elements = createElements();
@@ -182,6 +311,21 @@ async function startApprovalDeskApp(options: {
     }
     if (path === "/api/metrics") {
       return jsonResponse(metrics);
+    }
+    if (path === "/api/evidence") {
+      const evidenceRequests = requests.filter(
+        (request) => request.path === "/api/evidence",
+      ).length;
+      if (
+        options.failEvidenceAfter !== undefined &&
+        evidenceRequests > options.failEvidenceAfter
+      ) {
+        return jsonResponse(
+          { error: { message: "Evidence service unavailable." } },
+          503,
+        );
+      }
+      return jsonResponse(fixtureEvidence);
     }
     if (path === "/api/tickets/TKT-1001") {
       return jsonResponse({ ticket: fixtureTicket, audits: { events: [] } });
@@ -213,6 +357,8 @@ async function startApprovalDeskApp(options: {
 
   return {
     el: (id: string) => elements[id],
+    evidenceRequests: () =>
+      requests.filter((request) => request.path === "/api/evidence").length,
     field: (value: string) =>
       elements.fieldChoices.children.find((field) => field.value === value)!,
     requests,
@@ -223,6 +369,10 @@ async function startApprovalDeskApp(options: {
     },
     createRecommendation: async () => {
       elements.createRecommendation.dispatch("click");
+      await settle();
+    },
+    refreshQueue: async () => {
+      elements.refreshQueue.dispatch("click");
       await settle();
     },
     approve: async () => {
@@ -244,10 +394,14 @@ function createElements(): Record<string, FakeElement> {
       "confirmApproval",
       "createRecommendation",
       "editedCustomerResponse",
+      "evidencePanel",
       "feedback",
       "fieldChoices",
+      "guardrailsPanel",
+      "activityPanel",
       "queueStatus",
       "recommendationPanel",
+      "refreshEvidence",
       "refreshQueue",
       "rejectButton",
       "resultPanel",

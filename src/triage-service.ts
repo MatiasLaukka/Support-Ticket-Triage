@@ -266,15 +266,21 @@ export class TriageService {
       recommendation.resolution !== "pending" ||
       recommendation.ticketId !== approval.ticketId
     ) {
-      throw stale("Recommendation cannot be applied.");
+      const error = stale("Recommendation cannot be applied.");
+      await this.appendApprovalRejectedAudit(approval, recommendation, error);
+      throw error;
     }
 
-    const ticketBefore = await this.dependencies.tickets.get(approval.ticketId);
+    const ticketBefore = await this.dependencies.tickets.get(
+      recommendation.ticketId,
+    );
     if (
       ticketBefore.revision !== approval.expectedRevision ||
       recommendation.sourceRevision !== approval.expectedRevision
     ) {
-      throw stale("Approval revision is stale.");
+      const error = stale("Approval revision is stale.");
+      await this.appendApprovalRejectedAudit(approval, recommendation, error);
+      throw error;
     }
 
     validateApprovedFields(recommendation, approval.approvedFields);
@@ -357,6 +363,37 @@ export class TriageService {
       );
 
     return { ticket: updated, auditEvent: committedAuditEvent };
+  }
+
+  private async appendApprovalRejectedAudit(
+    approval: Approval,
+    recommendation: TriageRecommendation,
+    error: DomainError,
+  ): Promise<void> {
+    try {
+      await this.dependencies.audit.append(
+        AuditEventSchema.parse({
+          id: this.uuid(),
+          timestamp: approval.approvedAt,
+          actor: approval.actor,
+          action: "approval-rejected",
+          ticketId: recommendation.ticketId,
+          recommendationId: recommendation.id,
+          before: {
+            expectedRevision: approval.expectedRevision,
+            sourceRevision: recommendation.sourceRevision,
+            resolution: recommendation.resolution,
+          },
+          after: {},
+          rationale: error.message,
+          knowledgeArticleIds: recommendation.knowledgeArticleIds,
+          result: "rejected",
+          rejectionReason: error.message,
+        }),
+      );
+    } catch {
+      // Rejected approval telemetry is best-effort; keep the original stale error.
+    }
   }
 
   private async rejectValidated(

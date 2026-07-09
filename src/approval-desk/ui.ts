@@ -171,6 +171,23 @@ export const approvalDeskHtml = `<!doctype html>
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
+      .evidence-dashboard {
+        margin-bottom: 1rem;
+      }
+
+      .evidence-grid {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .evidence-lists {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-top: 1rem;
+      }
+
       .card {
         background: #fbfcff;
         border: 1px solid var(--line);
@@ -181,6 +198,10 @@ export const approvalDeskHtml = `<!doctype html>
       .card strong {
         display: block;
         margin-bottom: 0.35rem;
+      }
+
+      .card p {
+        margin: 0.35rem 0 0;
       }
 
       .description,
@@ -242,7 +263,9 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       @media (max-width: 1100px) {
-        .layout {
+        .layout,
+        .evidence-grid,
+        .evidence-lists {
           grid-template-columns: 1fr;
         }
       }
@@ -254,6 +277,33 @@ export const approvalDeskHtml = `<!doctype html>
         <h1>Approval Desk</h1>
         <p><strong>No ticket changes happen until approval succeeds.</strong> Review evidence, approve named fields, or reject with feedback so every ticket update has an explicit human decision.</p>
       </header>
+
+      <section class="panel evidence-dashboard" aria-label="Automation Evidence">
+        <div class="split">
+          <div>
+            <h2>Automation Evidence</h2>
+            <p class="hint">Live guardrails, activity, and automation value from the local approval desk.</p>
+          </div>
+          <button id="refreshEvidence" type="button" class="secondary">Refresh evidence</button>
+        </div>
+        <div id="evidencePanel" class="evidence-grid">
+          <p class="hint">Loading automation evidence...</p>
+        </div>
+        <div class="evidence-lists">
+          <section class="card" aria-label="Guardrails Active">
+            <h3>Guardrails Active</h3>
+            <div id="guardrailsPanel">
+              <p class="hint">Loading guardrails...</p>
+            </div>
+          </section>
+          <section class="card" aria-label="Recent Activity">
+            <h3>Recent Activity</h3>
+            <div id="activityPanel">
+              <p class="hint">Loading recent activity...</p>
+            </div>
+          </section>
+        </div>
+      </section>
 
       <main class="layout">
         <section class="panel" aria-label="Ticket queue">
@@ -343,10 +393,14 @@ export const approvalDeskHtml = `<!doctype html>
         confirmApproval: document.getElementById('confirmApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
         editedCustomerResponse: document.getElementById('editedCustomerResponse'),
+        evidencePanel: document.getElementById('evidencePanel'),
         feedback: document.getElementById('feedback'),
         fieldChoices: document.getElementById('fieldChoices'),
+        guardrailsPanel: document.getElementById('guardrailsPanel'),
+        activityPanel: document.getElementById('activityPanel'),
         queueStatus: document.getElementById('queueStatus'),
         recommendationPanel: document.getElementById('recommendationPanel'),
+        refreshEvidence: document.getElementById('refreshEvidence'),
         refreshQueue: document.getElementById('refreshQueue'),
         rejectButton: document.getElementById('rejectButton'),
         resultPanel: document.getElementById('resultPanel'),
@@ -471,6 +525,78 @@ export const approvalDeskHtml = `<!doctype html>
         setResult(actionResult === undefined ? metrics : { action: actionResult, metrics });
       }
 
+      async function loadEvidence(writeErrorToResult) {
+        const report = await requestJson('/api/evidence', undefined, { writeErrorToResult });
+        renderEvidence(report);
+      }
+
+      async function refreshEvidenceBestEffort() {
+        try {
+          await loadEvidence(false);
+        } catch (error) {
+          renderEvidenceError(error);
+        }
+      }
+
+      function renderEvidence(report) {
+        const summary = report.summary ?? {};
+        els.evidencePanel.innerHTML =
+          card('Open tickets', formatEvidenceValue(summary.openTickets)) +
+          card('Pending recommendations', formatEvidenceValue(summary.pendingRecommendations)) +
+          card('Approved recommendations', formatEvidenceValue(summary.approvedRecommendations)) +
+          card('Rejected recommendations', formatEvidenceValue(summary.rejectedRecommendations)) +
+          card('Estimated minutes saved', formatEvidenceValue(summary.estimatedMinutesSaved)) +
+          card('Audit events', formatEvidenceValue(summary.auditEvents)) +
+          card('Safety blocks', formatEvidenceValue(summary.safetyBlocks)) +
+          card('Active guardrails', formatEvidenceValue(summary.activeGuardrails));
+
+        renderGuardrails(report.guardrails);
+        renderActivity(report.recentActivity);
+      }
+
+      function renderEvidenceError(error) {
+        const message = error instanceof Error ? error.message : 'Evidence refresh failed.';
+        els.evidencePanel.innerHTML = '<p class="warning">Automation evidence could not be refreshed: ' + escapeHtml(message) + '</p>';
+      }
+
+      function renderGuardrails(guardrails) {
+        if (!Array.isArray(guardrails) || guardrails.length === 0) {
+          els.guardrailsPanel.innerHTML = '<p class="hint">No active guardrail evidence yet.</p>';
+          return;
+        }
+
+        els.guardrailsPanel.innerHTML = guardrails
+          .map(function (guardrail) {
+            return '<div class="card description">' +
+              '<strong>' + escapeHtml(guardrail.label ?? guardrail.id ?? 'Guardrail') + '</strong>' +
+              '<span class="meta">' + escapeHtml(guardrail.id ?? 'unknown') + ' · ' + escapeHtml(guardrail.status ?? 'unknown') + '</span>' +
+              '<p>' + escapeHtml(guardrail.evidence ?? 'No evidence recorded.') + '</p>' +
+            '</div>';
+          })
+          .join('');
+      }
+
+      function renderActivity(activity) {
+        if (!Array.isArray(activity) || activity.length === 0) {
+          els.activityPanel.innerHTML = '<p class="hint">No recent automation activity yet.</p>';
+          return;
+        }
+
+        els.activityPanel.innerHTML = activity
+          .map(function (event) {
+            const details = [
+              event.ticketId === undefined ? null : 'ticket ' + event.ticketId,
+              event.recommendationId === undefined ? null : 'recommendation ' + event.recommendationId
+            ].filter(Boolean).join(' · ');
+            return '<div class="card description">' +
+              '<strong>' + escapeHtml(event.action ?? 'activity') + '</strong>' +
+              '<span class="meta">' + escapeHtml(event.timestamp ?? 'unknown time') + ' · ' + escapeHtml(event.result ?? 'unknown result') + '</span>' +
+              '<p>' + escapeHtml(details || 'No ticket or recommendation reference.') + '</p>' +
+            '</div>';
+          })
+          .join('');
+      }
+
       async function selectTicket(id) {
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
         state.selectedTicket = data.ticket;
@@ -492,6 +618,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.recommendation = data.recommendation;
         renderRecommendation();
         setResult(data);
+        await refreshEvidenceBestEffort();
       }
 
       async function approveRecommendation() {
@@ -518,6 +645,7 @@ export const approvalDeskHtml = `<!doctype html>
         renderTicket();
         renderRecommendation();
         await loadMetrics(data);
+        await refreshEvidenceBestEffort();
       }
 
       async function rejectRecommendation() {
@@ -535,6 +663,7 @@ export const approvalDeskHtml = `<!doctype html>
         resetRecommendationState();
         renderRecommendation();
         await loadMetrics(data);
+        await refreshEvidenceBestEffort();
       }
 
       function resetRecommendationState() {
@@ -546,14 +675,16 @@ export const approvalDeskHtml = `<!doctype html>
         els.feedback.value = '';
       }
 
-      async function requestJson(path, init) {
+      async function requestJson(path, init, options) {
         const response = await fetch(path, {
           headers: { 'content-type': 'application/json' },
           ...init
         });
         const data = await response.json();
         if (!response.ok) {
-          setResult(data);
+          if (options?.writeErrorToResult !== false) {
+            setResult(data);
+          }
           throw new Error(data.error?.message ?? 'Request failed.');
         }
         return data;
@@ -565,6 +696,10 @@ export const approvalDeskHtml = `<!doctype html>
 
       function formatList(values) {
         return Array.isArray(values) && values.length > 0 ? values.join(', ') : 'none';
+      }
+
+      function formatEvidenceValue(value) {
+        return value === undefined || value === null ? 'unknown' : String(value);
       }
 
       function formatDuplicateCandidates(candidates) {
@@ -593,7 +728,12 @@ export const approvalDeskHtml = `<!doctype html>
       els.feedback.addEventListener('input', updateControls);
       els.fieldChoices.addEventListener('change', updateControls);
       els.refreshQueue.addEventListener('click', function () {
-        void loadQueue().catch(function (error) { setResult({ error: error.message }); });
+        void loadQueue()
+          .then(refreshEvidenceBestEffort)
+          .catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.refreshEvidence.addEventListener('click', function () {
+        void loadEvidence().catch(function (error) { setResult({ error: error.message }); });
       });
       els.createRecommendation.addEventListener('click', function () {
         void createRecommendation().catch(function (error) { setResult({ error: error.message }); });
@@ -605,8 +745,10 @@ export const approvalDeskHtml = `<!doctype html>
         void rejectRecommendation().catch(function (error) { setResult({ error: error.message }); });
       });
 
-      void loadQueue()
-        .then(loadMetrics)
+      void Promise.all([
+        loadQueue().then(loadMetrics),
+        refreshEvidenceBestEffort()
+      ])
         .catch(function (error) { setResult({ error: error.message }); });
       renderTicket();
       updateControls();
