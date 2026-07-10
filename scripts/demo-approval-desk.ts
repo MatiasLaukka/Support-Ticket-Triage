@@ -51,11 +51,12 @@ export function buildDemoWalkthrough(url: string): string {
     "Approval Desk demo ready:",
     url,
     "Suggested walkthrough:",
-    "1. Select TKT-1005.",
+    "1. Select TKT-1001.",
     "2. Create a recommendation.",
-    "3. Review the evidence dashboard and prompt-injection warning.",
-    "4. Approve named fields with an actor and explicit confirmation.",
-    "5. Confirm dashboard metrics, safety blocks, and audit trail.",
+    "3. Review the GPT draft, retrieved context, and validator checks.",
+    "4. Point out the Why this draft is safe panel before approving.",
+    "5. Approve named fields with an actor and explicit confirmation.",
+    "6. Confirm dashboard metrics, safety blocks, and audit trail.",
     "Press Ctrl+C to stop the local demo server.",
   ].join("\n");
 }

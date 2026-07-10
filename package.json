@@ -17,7 +17,8 @@
     "evaluate": "node dist/scripts/evaluate.js",
     "start": "node dist/src/index.js",
     "approval-desk": "node dist/src/approval-desk.js",
-    "demo:approval-desk": "node dist/scripts/demo-approval-desk.js"
+    "demo:approval-desk": "node dist/scripts/demo-approval-desk.js",
+    "demo:showcase": "node dist/scripts/demo-approval-desk.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

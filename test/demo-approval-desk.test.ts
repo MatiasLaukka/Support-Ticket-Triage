@@ -90,14 +90,25 @@ describe("Approval Desk demo runner helpers", () => {
     const walkthrough = buildDemoWalkthrough("http://127.0.0.1:5177");
 
     expect(walkthrough).toContain("Approval Desk demo ready:");
-    expect(walkthrough).toContain("Select TKT-1005");
+    expect(walkthrough).toContain("Select TKT-1001");
     expect(walkthrough).toContain("Create a recommendation");
     expect(walkthrough).toContain(
-      "Review the evidence dashboard and prompt-injection warning",
+      "Review the GPT draft, retrieved context, and validator checks",
     );
+    expect(walkthrough).toContain("Why this draft is safe");
     expect(walkthrough).toContain("Approve named fields");
     expect(walkthrough).toContain("Confirm dashboard metrics");
     expect(walkthrough).toContain("audit trail");
     expect(walkthrough).toContain("Press Ctrl+C to stop the local demo server");
+  });
+
+  it("exposes the showcase demo as an npm script", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.["demo:showcase"]).toBe(
+      "node dist/scripts/demo-approval-desk.js",
+    );
   });
 });

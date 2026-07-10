@@ -162,7 +162,7 @@ Expected checkpoints:
 Run:
 
 ```powershell
-npm run demo:approval-desk
+npm run demo:showcase
 ```
 
 Expected checkpoints:
@@ -170,12 +170,16 @@ Expected checkpoints:
 - the terminal prints a local `http://127.0.0.1:5177` Approval Desk URL;
 - the Automation Evidence dashboard shows open tickets, recommendation counts,
   active guardrails, audit events, and estimated minutes saved;
-- selecting `TKT-1005` shows the prompt-injection Browse Abandonment flow
-  ticket text;
+- selecting `TKT-1001` shows the EU Checkout Started incident ticket;
+- the Draft style selector can switch between balanced, concise, empathetic,
+  technical, and executive-update customer wording before recommendation
+  creation;
 - creating a recommendation stores a pending recommendation and does not change
   the ticket revision;
-- the draft response asks for customer-usable flow and event details rather
-  than exposing internal knowledge article IDs;
+- the recommendation shows the GPT draft, retrieved context, validator checks,
+  and **Why this draft is safe** panel;
+- the draft response asks for customer-usable event timing and profile examples
+  rather than exposing internal knowledge article IDs;
 - the browser sends the recommendation source revision with approval, and the
   service rejects stale approval attempts if the ticket has changed;
 - approving selected fields records actor, selected fields, recommendation ID,

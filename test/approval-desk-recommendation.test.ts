@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { TicketSchema, type Ticket } from "../src/domain.js";
 import {
   buildApprovalDeskRecommendationInput,
+  buildApprovalDeskRecommendationInputWithDrafting,
   loadExpectedOutcomes,
 } from "../src/approval-desk/recommendation-builder.js";
 
@@ -199,6 +200,78 @@ describe("Approval Desk recommendation builder", () => {
     );
     expect(input.draftCustomerResponse).toContain("incident review");
     expect(input.draftCustomerResponse).toContain("event-ingestion");
+  });
+
+  it("uses a validated OpenAI draft provider response when available", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+      knowledgeArticles: [
+        {
+          id: "flow-trigger-troubleshooting",
+          title: "Flow trigger troubleshooting",
+          tags: ["flows"],
+          body: "Check the ecommerce platform, flow ID, and event ID before recommending a flow change.",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "We are checking why Viewed Product events did not place customers into the Browse Abandonment flow. Please send the ecommerce platform, flow ID, event ID, and one affected customer email so we can compare the storefront event with the flow setup.",
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("openai");
+    expect(input.draftCustomerResponse).toContain("Viewed Product events");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "no-internal-article-ids",
+        status: "pass",
+      }),
+    );
+  });
+
+  it("falls back to the deterministic response when an AI draft exposes internal details", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "We approved this using flow-trigger-troubleshooting and will close the ticket.",
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "We are checking why Viewed Product events",
+    );
+    expect(input.draftCustomerResponse).not.toContain(
+      "flow-trigger-troubleshooting",
+    );
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "fallback-used",
+        status: "warn",
+      }),
+    );
   });
 
   it("throws when no expected outcome exists for the ticket", async () => {

@@ -80,6 +80,50 @@ flowchart LR
     Seed --> Tickets
 ```
 
+### Hybrid Drafting Architecture
+
+```mermaid
+flowchart LR
+    Ticket["Synthetic ticket<br/>untrusted text"]
+    Outcome["Expected routing outcome"]
+    KB["Retrieved local KB articles"]
+    Rules["Deterministic triage rules"]
+    GPT["Optional OpenAI draft provider"]
+    Validators["Deterministic draft validators"]
+    Fallback["Local deterministic fallback"]
+    Reviewer["Human reviewer"]
+    Audit["Local audit trail"]
+
+    Ticket --> Rules
+    Outcome --> Rules
+    Ticket --> GPT
+    Outcome --> GPT
+    KB --> GPT
+    Rules --> Fallback
+    GPT --> Validators
+    Validators -->|pass| Reviewer
+    Validators -->|warn or provider error| Fallback
+    Fallback --> Reviewer
+    Reviewer -->|approve named fields| Audit
+```
+
+The important boundary is that GPT drafts only the customer-facing response.
+Routing, escalation, validator checks, approval, and audit recording remain
+deterministic local code.
+
+### What This Demonstrates
+
+- MCP tools can expose local business data and workflow actions to an AI
+  assistant without connecting to live customer systems.
+- Deterministic policy can own routing, escalation, validation, approval, and
+  audit guarantees while GPT handles only bounded language drafting.
+- Retrieved knowledge articles can ground a customer response without exposing
+  internal article IDs to the customer.
+- Human reviewers can edit and approve named fields, preserving accountability
+  instead of letting automation mutate tickets directly.
+- The same local demo can show success, fallback, stale-approval rejection, and
+  audit evidence in a repeatable way.
+
 The stdio entry point is `dist/src/index.js`. Its defaults are:
 
 | Setting | Default |
@@ -273,22 +317,68 @@ For a repeatable walkthrough, run:
 ```powershell
 npm ci
 npm run build
-npm run demo:approval-desk
+npm run demo:showcase
 ```
 
-The demo command resets local runtime data, starts the Approval Desk, and prints
-the local URL plus suggested steps. The Automation Evidence dashboard shows open
+`demo:showcase` is an alias for the local Approval Desk demo runner. It resets
+local runtime data, starts the Approval Desk, and prints the local URL plus a
+suggested presentation path. The Automation Evidence dashboard shows open
 tickets, recommendation counts, estimated minutes saved, audit events, safety
 blocks, and active guardrails.
 
-Open the printed `http://127.0.0.1:5177` URL. Select `TKT-1005`, create a
-recommendation, review the prompt-injection warning on the Browse Abandonment
-flow ticket, inspect the actionable draft customer response, select named
-fields, enter an actor, check the explicit confirmation box, and approve. The
-UI then reads back the updated ticket revision and audit event.
+Open the printed `http://127.0.0.1:5177` URL. Select `TKT-1001`, create a
+recommendation, review the GPT draft, retrieved context, validator checks, and
+**Why this draft is safe** panel, then select named fields, enter an actor,
+check the explicit confirmation box, and approve. The UI then reads back the
+updated ticket revision and audit event.
 
 The app is local-only. It does not send customer responses, connect to external
 support systems, or authenticate multiple users.
+
+### GPT Drafting Mode
+
+The Approval Desk can build draft customer responses in two modes:
+
+- default deterministic local drafting, which requires no network or API key;
+- optional OpenAI drafting, which uses the Responses API when
+  `APPROVAL_DRAFT_PROVIDER=openai` and `OPENAI_API_KEY` are set.
+
+Both modes keep the same approval and audit boundary. In OpenAI mode:
+
+1. The app retrieves the selected ticket, expected routing outcome, and cited
+   local knowledge articles.
+2. The OpenAI draft provider writes a customer response from that context only.
+3. Deterministic validators check the draft for unsafe promises, internal-only
+   IDs, approval-bypass language, and missing human-review boundaries.
+4. If the provider fails or the draft fails validation, the app falls back to
+   the deterministic local response.
+5. The human reviewer still edits and approves the response before anything is
+   recorded in the audit trail.
+
+Run the optional OpenAI drafting mode from PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY = 'sk-...'
+$env:APPROVAL_DRAFT_PROVIDER = 'openai'
+$env:OPENAI_MODEL = 'gpt-5.6-luna'
+$env:APPROVAL_RESPONSE_STYLE = 'balanced'
+npm run demo:showcase
+```
+
+`OPENAI_MODEL` is optional; the app defaults to `gpt-5.6-luna`. The draft
+source and validation checks appear in the Recommendation panel so reviewers
+can see whether the response came from deterministic rules, OpenAI, or a local
+fallback.
+
+The Approval Desk also includes a **Draft style** selector. Supported styles are
+`balanced`, `concise`, `empathetic`, `technical`, and `executive-update`.
+`APPROVAL_RESPONSE_STYLE` is still available as the startup default and falls
+back to `balanced`. These settings change only the GPT draft tone;
+deterministic routing, validation, approval, and audit behavior stay the same.
+
+Do not commit API keys, paste them into tickets, include them in screenshots, or
+store them in runtime audit data. The demo should remain usable without an API
+key by defaulting to the deterministic local provider.
 
 Other useful trigger examples:
 

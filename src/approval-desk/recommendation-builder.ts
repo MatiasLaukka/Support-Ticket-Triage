@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   CategorySchema,
+  type KnowledgeArticle,
+  type DraftCustomerResponseStyle,
   PrioritySchema,
   RequiredEscalationSchema,
   TeamSchema,
@@ -10,6 +12,10 @@ import {
   type Ticket,
 } from "../domain.js";
 import type { SubmitRecommendationInput } from "../triage-service.js";
+import {
+  draftCustomerResponseWithFallback,
+  type CustomerResponseDraftProvider,
+} from "./draft-response-provider.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const CUSTOMER_RESPONSE_TEMPLATES: Readonly<Record<string, string>> = {
@@ -88,6 +94,12 @@ export function buildApprovalDeskRecommendationInput(input: {
   const escalationReasons = outcome.requiredEscalations;
   const knowledgeArticleIds = outcome.knowledgeArticleIds;
 
+  const draftCustomerResponse = buildDraftCustomerResponse({
+    ticket,
+    knowledgeArticleIds,
+    escalationReasons,
+  });
+
   return {
     ticketId: ticket.id,
     sourceRevision: ticket.revision,
@@ -103,11 +115,17 @@ export function buildApprovalDeskRecommendationInput(input: {
       ? [`Confirm the missing evidence for ${ticket.id} before approval.`]
       : [],
     knowledgeArticleIds,
-    draftCustomerResponse: buildDraftCustomerResponse({
-      ticket,
-      knowledgeArticleIds,
-      escalationReasons,
-    }),
+    draftCustomerResponse,
+    draftCustomerResponseSource: "deterministic",
+    draftCustomerResponseStyle: "balanced",
+    draftCustomerResponseChecks: [
+      {
+        id: "deterministic-local-draft",
+        label: "Deterministic local draft",
+        status: "pass",
+        message: "Built from local rules without an external model call.",
+      },
+    ],
     rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
       ", ",
     )}.`,
@@ -117,6 +135,40 @@ export function buildApprovalDeskRecommendationInput(input: {
     escalationRequired: escalationReasons.length > 0,
     escalationReasons,
     actor,
+  };
+}
+
+export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
+  ticket: Ticket;
+  outcome?: ExpectedOutcome;
+  actor: string;
+  knowledgeArticles: readonly KnowledgeArticle[];
+  draftProvider?: CustomerResponseDraftProvider;
+  responseStyle?: DraftCustomerResponseStyle;
+}): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
+  const base = buildApprovalDeskRecommendationInput(input);
+  const outcome = input.outcome;
+  if (outcome === undefined) {
+    return base;
+  }
+
+  const draft = await draftCustomerResponseWithFallback({
+    provider: input.draftProvider,
+    draftInput: {
+      ticket: input.ticket,
+      outcome,
+      knowledgeArticles: input.knowledgeArticles,
+      deterministicDraft: base.draftCustomerResponse,
+      responseStyle: input.responseStyle ?? "balanced",
+    },
+  });
+
+  return {
+    ...base,
+    draftCustomerResponse: draft.response,
+    draftCustomerResponseSource: draft.source,
+    draftCustomerResponseStyle: input.responseStyle ?? "balanced",
+    draftCustomerResponseChecks: draft.checks,
   };
 }
 

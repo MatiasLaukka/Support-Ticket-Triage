@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   ApprovedFieldSchema,
   CategorySchema,
+  DraftCustomerResponseStyleSchema,
   PrioritySchema,
   TeamSchema,
   TicketIdSchema,
@@ -13,9 +14,13 @@ import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
 import {
-  buildApprovalDeskRecommendationInput,
+  buildApprovalDeskRecommendationInputWithDrafting,
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
+import {
+  createCustomerResponseDraftProviderFromEnv,
+  type CustomerResponseDraftProvider,
+} from "./draft-response-provider.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 
@@ -40,6 +45,7 @@ const RecommendationIdSchema = z.uuid();
 const SubmitBodySchema = z
   .object({
     actor: z.string().trim().min(1).default("approval-desk"),
+    responseStyle: DraftCustomerResponseStyleSchema.default("balanced"),
   })
   .strict();
 const ApprovalBodySchema = z
@@ -111,6 +117,7 @@ const RejectBodySchema = z
 
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
+  draftProvider?: CustomerResponseDraftProvider;
 }
 
 export function createApprovalDeskHttpServer(
@@ -263,10 +270,26 @@ async function createRecommendation(
       options.expectedOutcomesPath ?? DEFAULT_EXPECTED_OUTCOMES_PATH,
     ),
   ]);
-  const input = buildApprovalDeskRecommendationInput({
+  const outcome = outcomes.get(ticket.id);
+  const knowledgeArticles =
+    outcome === undefined
+      ? []
+      : await Promise.all(
+          outcome.knowledgeArticleIds.map((articleId) =>
+            deps.knowledge.get(articleId),
+          ),
+        );
+  const input = await buildApprovalDeskRecommendationInputWithDrafting({
     ticket,
-    outcome: outcomes.get(ticket.id),
+    outcome,
     actor: body.actor,
+    knowledgeArticles,
+    responseStyle: body.responseStyle,
+    draftProvider:
+      options.draftProvider ??
+      createCustomerResponseDraftProviderFromEnv(process.env, {
+        responseStyle: body.responseStyle,
+      }),
   });
   return {
     recommendation: await deps.service.submit({

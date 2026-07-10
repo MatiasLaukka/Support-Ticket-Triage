@@ -17,6 +17,9 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Developer/audit output");
     expect(approvalDeskHtml).toContain("Approve proposed changes");
     expect(approvalDeskHtml).toContain("Recommended value");
+    expect(approvalDeskHtml).toContain("Why this draft is safe");
+    expect(approvalDeskHtml).toContain("Draft style");
+    expect(approvalDeskHtml).toContain("Executive update");
   });
 
   it("uses only local API routes", () => {
@@ -161,6 +164,22 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("sends selected draft style when creating a recommendation", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+
+    app.el("draftStyle").value = "empathetic";
+    await app.createRecommendation();
+
+    const recommendationRequest = app.requests.find((request) =>
+      request.path.endsWith("/recommendations"),
+    );
+    expect(JSON.parse(String(recommendationRequest?.init?.body))).toMatchObject({
+      actor: "approval-desk",
+      responseStyle: "empathetic",
+    });
+  });
+
   it("clears finalized approval state and keeps action results visible with metrics", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -222,6 +241,11 @@ describe("approvalDeskHtml", () => {
     expect(html).toContain("Confidence");
     expect(html).toContain("0.87");
     expect(html).toContain("Draft Customer Response");
+    expect(html).toContain("Why this draft is safe");
+    expect(html).toContain("GPT draft passed validator checks");
+    expect(html).toContain("Style: empathetic");
+    expect(html).toContain("Human approval");
+    expect(html).toContain("Reviewer must approve or edit before use.");
     expect(html).toContain("Recommended Triage");
     expect(html).toContain("Evidence and internal details");
     expect(html).toContain("knowledgeArticleIds");
@@ -287,6 +311,22 @@ const fixtureRecommendation = {
   missingInformation: ["Confirm account owner."],
   knowledgeArticleIds: ["account-access-reset"],
   draftCustomerResponse: "We are checking the login issue.",
+  draftCustomerResponseSource: "openai",
+  draftCustomerResponseStyle: "empathetic",
+  draftCustomerResponseChecks: [
+    {
+      id: "non-empty-response",
+      label: "Non-empty response",
+      status: "pass",
+      message: "Passed.",
+    },
+    {
+      id: "no-internal-article-ids",
+      label: "No internal article IDs",
+      status: "pass",
+      message: "Passed.",
+    },
+  ],
   rationale: "Matches account access routing.",
   confidence: 0.87,
   recommendedNextAction: "Review evidence before approval.",
@@ -429,6 +469,7 @@ function createElements(): Record<string, FakeElement> {
       "approveButton",
       "confirmApproval",
       "createRecommendation",
+      "draftStyle",
       "editedCustomerResponse",
       "categoryOverride",
       "evidencePanel",
@@ -452,6 +493,7 @@ function createElements(): Record<string, FakeElement> {
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";
+  elements.draftStyle.value = "balanced";
   elements.approveButton.disabled = true;
   elements.rejectButton.disabled = true;
   elements.fieldChoices.children = [

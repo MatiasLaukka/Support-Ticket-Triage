@@ -34,6 +34,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       button,
       input,
+      select,
       textarea {
         font: inherit;
       }
@@ -58,6 +59,7 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       input,
+      select,
       textarea {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -410,6 +412,16 @@ export const approvalDeskHtml = `<!doctype html>
             Actor
             <input id="actor" value="approval-desk" autocomplete="off">
           </label>
+          <label>
+            Draft style
+            <select id="draftStyle">
+              <option value="balanced">Balanced</option>
+              <option value="concise">Concise</option>
+              <option value="empathetic">Empathetic</option>
+              <option value="technical">Technical</option>
+              <option value="executive-update">Executive update</option>
+            </select>
+          </label>
 
           <div class="fields" id="fieldChoices">
             <div class="approval-row">
@@ -482,6 +494,7 @@ export const approvalDeskHtml = `<!doctype html>
         categoryOverride: document.getElementById('categoryOverride'),
         confirmApproval: document.getElementById('confirmApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
+        draftStyle: document.getElementById('draftStyle'),
         editedCustomerResponse: document.getElementById('editedCustomerResponse'),
         evidencePanel: document.getElementById('evidencePanel'),
         feedback: document.getElementById('feedback'),
@@ -574,6 +587,17 @@ export const approvalDeskHtml = `<!doctype html>
         }
         els.recommendationPanel.innerHTML =
           '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
+          '<div class="hero-card"><strong>Why this draft is safe</strong>' +
+            '<div class="chips">' +
+              chip('Source: ' + (recommendation.draftCustomerResponseSource ?? 'legacy')) +
+              chip('Style: ' + (recommendation.draftCustomerResponseStyle ?? 'balanced')) +
+              chip('Checks: ' + formatDraftCheckSummary(recommendation.draftCustomerResponseChecks)) +
+              chip('Human approval: pending') +
+            '</div>' +
+            '<p>' + escapeHtml(formatDraftSafetyNarrative(recommendation)) + '</p>' +
+            '<p class="meta"><strong>Retrieved context</strong> ' + escapeHtml(formatList(recommendation.knowledgeArticleIds)) + '</p>' +
+            '<p class="meta"><strong>Human approval</strong> Reviewer must approve or edit before use.</p>' +
+          '</div>' +
           '<div class="hero-card"><strong>Recommended Triage</strong>' +
             '<div class="chips">' +
               chip('Category: ' + recommendation.category) +
@@ -598,6 +622,7 @@ export const approvalDeskHtml = `<!doctype html>
             '<div class="card description"><strong>Rationale</strong>' + escapeHtml(recommendation.rationale) + '</div>' +
             '<div class="card description"><strong>Duplicate candidates</strong>' + escapeHtml(formatDuplicateCandidates(recommendation.duplicateCandidates)) + '</div>' +
             '<div class="card description"><strong>Next action</strong>' + escapeHtml(recommendation.recommendedNextAction) + '</div>' +
+            '<div class="card description"><strong>Draft validation checks</strong>' + escapeHtml(formatDraftChecks(recommendation.draftCustomerResponseChecks)) + '</div>' +
           '</details>' +
           '<details><summary>All proposed ticket values</summary>' +
             '<div class="details-grid">' +
@@ -731,7 +756,10 @@ export const approvalDeskHtml = `<!doctype html>
         }
         const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/recommendations', {
           method: 'POST',
-          body: JSON.stringify({ actor: els.actor.value.trim() || 'approval-desk' })
+          body: JSON.stringify({
+            actor: els.actor.value.trim() || 'approval-desk',
+            responseStyle: els.draftStyle.value
+          })
         });
         state.recommendation = data.recommendation;
         renderRecommendation();
@@ -888,6 +916,42 @@ export const approvalDeskHtml = `<!doctype html>
         return candidates
           .map(function (candidate) {
             return candidate.ticketId + ' (' + candidate.confidence + '): ' + candidate.evidence;
+          })
+          .join('\\n');
+      }
+
+      function formatDraftCheckSummary(checks) {
+        if (!Array.isArray(checks) || checks.length === 0) {
+          return 'none';
+        }
+        const warnings = checks.filter(function (check) { return check.status === 'warn'; }).length;
+        return warnings === 0 ? checks.length + ' passed' : checks.length + ' checked, ' + warnings + ' warning(s)';
+      }
+
+      function formatDraftSafetyNarrative(recommendation) {
+        const checks = recommendation.draftCustomerResponseChecks;
+        const warnings = Array.isArray(checks)
+          ? checks.filter(function (check) { return check.status === 'warn'; }).length
+          : 0;
+        if (recommendation.draftCustomerResponseSource === 'openai' && warnings === 0) {
+          return 'GPT draft passed validator checks before reviewer approval.';
+        }
+        if (recommendation.draftCustomerResponseSource === 'fallback') {
+          return 'Local fallback was used because the AI draft provider failed or validator checks warned.';
+        }
+        if (recommendation.draftCustomerResponseSource === 'deterministic') {
+          return 'Deterministic local draft was generated without an external model call.';
+        }
+        return 'Draft is held for reviewer approval before any ticket update.';
+      }
+
+      function formatDraftChecks(checks) {
+        if (!Array.isArray(checks) || checks.length === 0) {
+          return 'none';
+        }
+        return checks
+          .map(function (check) {
+            return '[' + check.status + '] ' + check.label + ': ' + check.message;
           })
           .join('\\n');
       }

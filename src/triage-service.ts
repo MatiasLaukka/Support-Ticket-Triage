@@ -4,6 +4,9 @@ import {
   ApprovalSchema,
   AuditEventSchema,
   CategorySchema,
+  DraftCustomerResponseCheckSchema,
+  DraftCustomerResponseSourceSchema,
+  DraftCustomerResponseStyleSchema,
   DuplicateCandidateSchema,
   IsoTimestampSchema,
   PrioritySchema,
@@ -52,6 +55,11 @@ const SubmitRecommendationInputSchema = z
       z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     ),
     draftCustomerResponse: NonBlankStringSchema,
+    draftCustomerResponseSource: DraftCustomerResponseSourceSchema.optional(),
+    draftCustomerResponseStyle: DraftCustomerResponseStyleSchema.optional(),
+    draftCustomerResponseChecks: z
+      .array(DraftCustomerResponseCheckSchema)
+      .optional(),
     rationale: NonBlankStringSchema.max(500),
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -88,6 +96,15 @@ export interface SubmitRecommendationInput {
   missingInformation: string[];
   knowledgeArticleIds: string[];
   draftCustomerResponse: string;
+  draftCustomerResponseSource?: z.infer<
+    typeof DraftCustomerResponseSourceSchema
+  >;
+  draftCustomerResponseStyle?: z.infer<
+    typeof DraftCustomerResponseStyleSchema
+  >;
+  draftCustomerResponseChecks?: z.infer<
+    typeof DraftCustomerResponseCheckSchema
+  >[];
   rationale: string;
   confidence: number;
   recommendedNextAction: string;
@@ -184,6 +201,15 @@ export class TriageService {
       missingInformation: parsed.missingInformation,
       knowledgeArticleIds: parsed.knowledgeArticleIds,
       draftCustomerResponse: parsed.draftCustomerResponse,
+      ...(parsed.draftCustomerResponseSource === undefined
+        ? {}
+        : { draftCustomerResponseSource: parsed.draftCustomerResponseSource }),
+      ...(parsed.draftCustomerResponseStyle === undefined
+        ? {}
+        : { draftCustomerResponseStyle: parsed.draftCustomerResponseStyle }),
+      ...(parsed.draftCustomerResponseChecks === undefined
+        ? {}
+        : { draftCustomerResponseChecks: parsed.draftCustomerResponseChecks }),
       rationale: parsed.rationale,
       confidence: parsed.confidence,
       recommendedNextAction: parsed.recommendedNextAction,

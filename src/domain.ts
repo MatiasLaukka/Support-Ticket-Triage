@@ -47,6 +47,29 @@ export const RiskSchema = z.enum([
   "confirmed",
 ]);
 
+export const DraftCustomerResponseSourceSchema = z.enum([
+  "deterministic",
+  "openai",
+  "fallback",
+]);
+
+export const DraftCustomerResponseStyleSchema = z.enum([
+  "balanced",
+  "concise",
+  "empathetic",
+  "technical",
+  "executive-update",
+]);
+
+export const DraftCustomerResponseCheckSchema = z
+  .object({
+    id: SlugSchema,
+    label: NonBlankStringSchema,
+    status: z.enum(["pass", "warn"]),
+    message: NonBlankStringSchema,
+  })
+  .strict();
+
 export const RequiredEscalationSchema = z.enum([
   "security",
   "outage",
@@ -156,6 +179,11 @@ export const TriageRecommendationSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     knowledgeArticleIds: z.array(SlugSchema),
     draftCustomerResponse: NonBlankStringSchema,
+    draftCustomerResponseSource: DraftCustomerResponseSourceSchema.optional(),
+    draftCustomerResponseStyle: DraftCustomerResponseStyleSchema.optional(),
+    draftCustomerResponseChecks: z
+      .array(DraftCustomerResponseCheckSchema)
+      .optional(),
     rationale: NonBlankStringSchema,
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -326,6 +354,15 @@ export type Priority = z.infer<typeof PrioritySchema>;
 export type Team = z.infer<typeof TeamSchema>;
 export type TicketStatus = z.infer<typeof TicketStatusSchema>;
 export type Risk = z.infer<typeof RiskSchema>;
+export type DraftCustomerResponseSource = z.infer<
+  typeof DraftCustomerResponseSourceSchema
+>;
+export type DraftCustomerResponseStyle = z.infer<
+  typeof DraftCustomerResponseStyleSchema
+>;
+export type DraftCustomerResponseCheck = z.infer<
+  typeof DraftCustomerResponseCheckSchema
+>;
 export type Customer = z.infer<typeof CustomerSchema>;
 export type SLA = z.infer<typeof SLASchema>;
 export type Ticket = z.infer<typeof TicketSchema>;

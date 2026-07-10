@@ -116,6 +116,51 @@ describe("createApprovalDeskHttpServer", () => {
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
 
+  it("creates recommendations with a provider draft from cited knowledge", async () => {
+    const seenArticleBodies: string[] = [];
+    const seenResponseStyles: string[] = [];
+    const { json } = await startFixture({
+      draftProvider: {
+        draft: async (input) => {
+          seenArticleBodies.push(
+            ...input.knowledgeArticles.map((article) => article.body),
+          );
+          seenResponseStyles.push(input.responseStyle);
+          return {
+            source: "openai",
+            response:
+              "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+          };
+        },
+      },
+    });
+
+    const created = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        responseStyle: "technical",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      ticketId: "TKT-1008",
+      draftCustomerResponseSource: "openai",
+      draftCustomerResponseStyle: "technical",
+      draftCustomerResponse:
+        "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+    });
+    expect(created.body.recommendation.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "no-internal-article-ids",
+        status: "pass",
+      }),
+    );
+    expect(seenArticleBodies.join("\n")).toContain("webhook");
+    expect(seenResponseStyles).toEqual(["technical"]);
+  });
+
   it("reports automation evidence after recommendation submission", async () => {
     const { json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {
@@ -396,7 +441,9 @@ describe("createApprovalDeskHttpServer", () => {
   });
 });
 
-async function startFixture(): Promise<{
+async function startFixture(
+  options: Parameters<typeof createApprovalDeskHttpServer>[1] = {},
+): Promise<{
   deps: Awaited<ReturnType<typeof createRuntimeDependencies>>;
   baseUrl: string;
   json: (
@@ -414,7 +461,10 @@ async function startFixture(): Promise<{
     },
     now: () => now,
   });
-  const server = createApprovalDeskHttpServer(deps, { expectedOutcomesPath });
+  const server = createApprovalDeskHttpServer(deps, {
+    expectedOutcomesPath,
+    ...options,
+  });
   servers.push(server);
   await new Promise<void>((resolveListen) => {
     server.listen(0, "127.0.0.1", resolveListen);
