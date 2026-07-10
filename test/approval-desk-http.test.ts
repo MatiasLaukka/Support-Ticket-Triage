@@ -288,6 +288,47 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("approves reviewer-edited field values through the local API", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const approved = await json(
+      `/api/recommendations/${created.body.recommendation.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          expectedRevision: 0,
+          approvedFields: ["category", "priority", "team"],
+          fieldOverrides: {
+            category: "incident",
+            priority: "P1",
+            team: "incident-response",
+          },
+          actor: "matias-reviewer",
+          confirm: true,
+        }),
+      },
+    );
+
+    expect(approved.status).toBe(200);
+    expect(approved.body.ticket).toMatchObject({
+      id: "TKT-1005",
+      revision: 1,
+      category: "incident",
+      priority: "P1",
+      team: "incident-response",
+    });
+    expect(approved.body.auditEvent.after).toMatchObject({
+      category: "incident",
+      priority: "P1",
+      team: "incident-response",
+    });
+  });
+
   it("rejects customer response approval without edited customer text", async () => {
     const { deps, json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {

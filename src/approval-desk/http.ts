@@ -52,6 +52,17 @@ const ApprovalBodySchema = z
       .refine((fields) => new Set(fields).size === fields.length, {
         message: "Approved fields must be unique.",
       }),
+    fieldOverrides: z
+      .object({
+        category: CategorySchema.optional(),
+        priority: PrioritySchema.optional(),
+        team: TeamSchema.optional(),
+        assignee: z.string().trim().min(1).nullable().optional(),
+        status: TicketStatusSchema.optional(),
+        tags: z.array(z.string().trim().min(1)).optional(),
+      })
+      .strict()
+      .optional(),
     editedCustomerResponse: z.string().trim().min(1).optional(),
     actor: z.string().trim().min(1),
     confirm: z.literal(true),
@@ -75,6 +86,19 @@ const ApprovalBodySchema = z
       message:
         "editedCustomerResponse is required when customerResponse is approved.",
       path: ["editedCustomerResponse"],
+    },
+  )
+  .refine(
+    (approval) =>
+      approval.fieldOverrides === undefined ||
+      Object.keys(approval.fieldOverrides).every((field) =>
+        approval.approvedFields.includes(
+          field as (typeof approval.approvedFields)[number],
+        ),
+      ),
+    {
+      message: "Field overrides require the matching field to be approved.",
+      path: ["fieldOverrides"],
     },
   );
 const RejectBodySchema = z

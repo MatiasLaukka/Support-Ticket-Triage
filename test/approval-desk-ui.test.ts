@@ -13,6 +13,10 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("prompt-injection");
     expect(approvalDeskHtml).toContain("Automation Evidence");
     expect(approvalDeskHtml).toContain("Estimated minutes saved");
+    expect(approvalDeskHtml).toContain("Technical ticket details");
+    expect(approvalDeskHtml).toContain("Developer/audit output");
+    expect(approvalDeskHtml).toContain("Approve proposed changes");
+    expect(approvalDeskHtml).toContain("Recommended value");
   });
 
   it("uses only local API routes", () => {
@@ -129,6 +133,34 @@ describe("approvalDeskHtml", () => {
     expect(app.el("approveButton").disabled).toBe(true);
   });
 
+  it("sends reviewer-edited approval field values", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    app.field("category").checked = true;
+    app.field("priority").checked = true;
+    app.field("team").checked = true;
+    app.el("categoryOverride").value = "incident";
+    app.el("priorityOverride").value = "P1";
+    app.el("teamOverride").value = "incident-response";
+    app.el("confirmApproval").checked = true;
+    app.el("fieldChoices").dispatch("change");
+    await app.approve();
+
+    const approvalRequest = app.requests.find((request) =>
+      request.path.endsWith("/approve"),
+    );
+    expect(JSON.parse(String(approvalRequest?.init?.body))).toMatchObject({
+      approvedFields: ["category", "priority", "team"],
+      fieldOverrides: {
+        category: "incident",
+        priority: "P1",
+        team: "incident-response",
+      },
+    });
+  });
+
   it("clears finalized approval state and keeps action results visible with metrics", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -145,6 +177,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("approveButton").disabled).toBe(true);
     expect(app.field("category").checked).toBe(false);
     expect(app.el("confirmApproval").checked).toBe(false);
+    expect(app.el("categoryOverride").value).toBe("");
     expect(app.parsedResult()).toMatchObject({
       action: {
         ticket: { id: "TKT-1001", revision: 1 },
@@ -188,6 +221,9 @@ describe("approvalDeskHtml", () => {
     const html = app.el("recommendationPanel").innerHTML;
     expect(html).toContain("Confidence");
     expect(html).toContain("0.87");
+    expect(html).toContain("Draft Customer Response");
+    expect(html).toContain("Recommended Triage");
+    expect(html).toContain("Evidence and internal details");
     expect(html).toContain("knowledgeArticleIds");
     expect(html).toContain("account-access-reset");
     expect(html).toContain("Outage risk");
@@ -394,17 +430,23 @@ function createElements(): Record<string, FakeElement> {
       "confirmApproval",
       "createRecommendation",
       "editedCustomerResponse",
+      "categoryOverride",
       "evidencePanel",
       "feedback",
       "fieldChoices",
       "guardrailsPanel",
       "activityPanel",
+      "priorityOverride",
       "queueStatus",
       "recommendationPanel",
       "refreshEvidence",
       "refreshQueue",
       "rejectButton",
       "resultPanel",
+      "statusOverride",
+      "assigneeOverride",
+      "tagsOverride",
+      "teamOverride",
       "ticketList",
       "ticketPanel",
     ].map((id) => [id, new FakeElement()]),

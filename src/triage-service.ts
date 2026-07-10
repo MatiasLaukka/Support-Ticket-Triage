@@ -290,7 +290,7 @@ export class TriageService {
       ticketBefore,
     );
     const resultingTeam = approval.approvedFields.includes("team")
-      ? recommendation.team
+      ? approvedFieldValue(recommendation, approval, "team")
       : ticketBefore.team;
     if (
       decision.requiredTeam !== undefined &&
@@ -502,11 +502,7 @@ function approvedValues(
   for (const field of approval.approvedFields) {
     before[field] =
       field === "customerResponse" ? null : ticketValue(ticket, field);
-    after[field] =
-      field === "customerResponse"
-        ? (approval.editedCustomerResponse ??
-          recommendation.draftCustomerResponse)
-        : recommendationValue(recommendation, field);
+    after[field] = approvedFieldValue(recommendation, approval, field);
   }
   return { before, after };
 }
@@ -544,6 +540,25 @@ function recommendationValue(
   }
 }
 
+function approvedFieldValue(
+  recommendation: TriageRecommendation,
+  approval: Approval,
+  field: ApprovedField,
+): unknown {
+  if (field === "customerResponse") {
+    return approval.editedCustomerResponse ?? recommendation.draftCustomerResponse;
+  }
+
+  if (
+    approval.fieldOverrides !== undefined &&
+    Object.hasOwn(approval.fieldOverrides, field)
+  ) {
+    return approval.fieldOverrides[field as keyof typeof approval.fieldOverrides];
+  }
+
+  return recommendationValue(recommendation, field);
+}
+
 function applyApprovedFields(
   ticket: Ticket,
   recommendation: TriageRecommendation,
@@ -554,26 +569,53 @@ function applyApprovedFields(
   for (const field of approval.approvedFields) {
     switch (field) {
       case "category":
-        updated.category = recommendation.category;
+        updated.category = approvedFieldValue(
+          recommendation,
+          approval,
+          field,
+        ) as Ticket["category"];
         break;
       case "priority":
-        updated.priority = recommendation.priority;
+        updated.priority = approvedFieldValue(
+          recommendation,
+          approval,
+          field,
+        ) as Ticket["priority"];
         break;
       case "team":
-        updated.team = recommendation.team;
+        updated.team = approvedFieldValue(
+          recommendation,
+          approval,
+          field,
+        ) as Ticket["team"];
         break;
       case "assignee":
-        if (recommendation.assignee === null) {
+        const assignee = approvedFieldValue(
+          recommendation,
+          approval,
+          field,
+        ) as Ticket["assignee"] | null;
+        if (assignee === null) {
           delete updated.assignee;
         } else {
-          updated.assignee = recommendation.assignee;
+          updated.assignee = assignee;
         }
         break;
       case "status":
-        updated.status = recommendation.ticketStatus!;
+        updated.status = approvedFieldValue(
+          recommendation,
+          approval,
+          field,
+        ) as Ticket["status"];
         break;
       case "tags":
-        updated.tags = [...recommendation.tags!];
+        updated.tags = [
+          ...(approvedFieldValue(
+            recommendation,
+            approval,
+            field,
+          ) as Ticket["tags"]),
+        ];
         break;
       case "customerResponse":
         break;
