@@ -60,7 +60,9 @@ describe("Approval Desk recommendation builder", () => {
     });
     expect(input.tags).toContain("prompt-injection");
     expect(input.rationale).toContain("TKT-1005");
-    expect(input.draftCustomerResponse).toContain("investigating");
+    expect(input.draftCustomerResponse).toContain(
+      "We are checking why Viewed Product events",
+    );
   });
 
   it("uses customer-facing knowledge guidance in draft responses", async () => {
@@ -89,7 +91,7 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
-  it("keeps multiple knowledge IDs internal while combining customer guidance", async () => {
+  it("keeps multiple knowledge IDs internal while using merchant-friendly flow guidance", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
     );
@@ -105,18 +107,98 @@ describe("Approval Desk recommendation builder", () => {
       "flow-trigger-troubleshooting",
       "event-tracking-debugging",
     ]);
-    expect(input.draftCustomerResponse).toContain("profile email");
-    expect(input.draftCustomerResponse).toContain("trigger event");
-    expect(input.draftCustomerResponse).toContain("event timestamp");
-    expect(input.draftCustomerResponse).toContain("flow filters");
-    expect(input.draftCustomerResponse).toContain("consent state");
-    expect(input.draftCustomerResponse).toContain("smart sending");
+    expect(input.draftCustomerResponse).toContain("Abandoned Cart flow");
+    expect(input.draftCustomerResponse).toContain("ecommerce platform");
+    expect(input.draftCustomerResponse).toContain("Shopify");
+    expect(input.draftCustomerResponse).toContain("Magento");
+    expect(input.draftCustomerResponse).toContain("flow name or flow ID");
+    expect(input.draftCustomerResponse).toContain("event ID or event time");
+    expect(input.draftCustomerResponse).toContain("product or cart URL");
+    expect(input.draftCustomerResponse).not.toContain("payload");
+    expect(input.draftCustomerResponse).not.toContain("API accepted time");
+    expect(input.draftCustomerResponse).not.toContain(
+      "downstream qualification",
+    );
+    expect(input.draftCustomerResponse).not.toContain("smart sending");
     expect(input.draftCustomerResponse).not.toContain(
       "flow-trigger-troubleshooting",
     );
     expect(input.draftCustomerResponse).not.toContain(
       "event-tracking-debugging",
     );
+  });
+
+  it("asks merchant-friendly ecommerce details for prompt-injection flow tickets", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.tags).toContain("prompt-injection");
+    expect(input.draftCustomerResponse).toContain("Viewed Product");
+    expect(input.draftCustomerResponse).toContain("Browse Abandonment flow");
+    expect(input.draftCustomerResponse).toContain("ecommerce platform");
+    expect(input.draftCustomerResponse).toContain("Shopify");
+    expect(input.draftCustomerResponse).toContain("Magento");
+    expect(input.draftCustomerResponse).toContain("WooCommerce");
+    expect(input.draftCustomerResponse).toContain("flow name or flow ID");
+    expect(input.draftCustomerResponse).toContain("event ID or event time");
+    expect(input.draftCustomerResponse).toContain("product URL or product ID");
+    expect(input.draftCustomerResponse).not.toContain("payload");
+    expect(input.draftCustomerResponse).not.toContain("API accepted time");
+    expect(input.draftCustomerResponse).not.toContain(
+      "downstream qualification",
+    );
+    expect(input.draftCustomerResponse).not.toContain("consent state");
+    expect(input.draftCustomerResponse).not.toContain("smart sending");
+  });
+
+  it("answers known-cause SMS quiet-hour blocks without asking for diagnostics", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1017");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1017")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.knowledgeArticleIds).toEqual(["sms-compliance"]);
+    expect(input.draftCustomerResponse).toContain("quiet-hour protection");
+    expect(input.draftCustomerResponse).toContain("blocked delivery");
+    expect(input.draftCustomerResponse).toContain("expected compliance");
+    expect(input.draftCustomerResponse).toContain("eligible sending window");
+    expect(input.draftCustomerResponse).not.toContain("masked recipient phone");
+    expect(input.draftCustomerResponse).not.toContain("consent source");
+    expect(input.draftCustomerResponse).not.toContain("opt-in timestamp");
+  });
+
+  it("uses escalation-aware wording for likely outage recommendations", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.outageRisk).toBe("likely");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+    expect(input.draftCustomerResponse).toContain("incident review");
+    expect(input.draftCustomerResponse).toContain("event-ingestion");
   });
 
   it("throws when no expected outcome exists for the ticket", async () => {

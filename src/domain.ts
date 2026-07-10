@@ -199,12 +199,24 @@ const ApprovedFieldsSchema = z
     message: "Approved fields must be unique.",
   });
 
+const ApprovalFieldOverridesSchema = z
+  .object({
+    category: CategorySchema.optional(),
+    priority: PrioritySchema.optional(),
+    team: TeamSchema.optional(),
+    assignee: NonBlankStringSchema.nullable().optional(),
+    status: TicketStatusSchema.optional(),
+    tags: UniqueNonBlankStringsSchema.optional(),
+  })
+  .strict();
+
 export const ApprovalSchema = z
   .object({
     recommendationId: z.uuid(),
     ticketId: TicketIdSchema,
     expectedRevision: z.number().int().nonnegative(),
     approvedFields: ApprovedFieldsSchema,
+    fieldOverrides: ApprovalFieldOverridesSchema.optional(),
     editedCustomerResponse: NonBlankStringSchema.optional(),
     actor: NonBlankStringSchema,
     confirm: z.literal(true),
@@ -229,6 +241,17 @@ export const ApprovalSchema = z
       message:
         "editedCustomerResponse is required when customerResponse is approved.",
       path: ["editedCustomerResponse"],
+    },
+  )
+  .refine(
+    (approval) =>
+      approval.fieldOverrides === undefined ||
+      Object.keys(approval.fieldOverrides).every((field) =>
+        approval.approvedFields.includes(field as ApprovedField),
+      ),
+    {
+      message: "Field overrides require the matching field to be approved.",
+      path: ["fieldOverrides"],
     },
   );
 

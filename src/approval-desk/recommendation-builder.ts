@@ -35,6 +35,12 @@ const CUSTOMER_RESPONSE_TEMPLATES: Readonly<Record<string, string>> = {
     "Please share the delivery ID, endpoint URL, failure timestamp, signing secret rotation time, timestamp tolerance, endpoint response code, and whether raw body handling changed recently. We will compare the signed payload, delivery headers, and retry history before recommending a code or configuration change.",
 };
 
+type ResponseStyle =
+  | "known-cause"
+  | "incident-or-escalation"
+  | "needs-diagnostics";
+type CustomerAudience = "merchant-admin" | "developer";
+
 const ExpectedOutcomeSchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -97,10 +103,11 @@ export function buildApprovalDeskRecommendationInput(input: {
       ? [`Confirm the missing evidence for ${ticket.id} before approval.`]
       : [],
     knowledgeArticleIds,
-    draftCustomerResponse: buildDraftCustomerResponse(
-      ticket.id,
+    draftCustomerResponse: buildDraftCustomerResponse({
+      ticket,
       knowledgeArticleIds,
-    ),
+      escalationReasons,
+    }),
     rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
       ", ",
     )}.`,
@@ -123,13 +130,134 @@ function buildTags(ticket: Ticket, outcome: ExpectedOutcome): string[] {
   ]);
 }
 
-function buildDraftCustomerResponse(
-  ticketId: string,
-  knowledgeArticleIds: readonly string[],
-): string {
-  return `We are investigating ${ticketId}. ${formatCustomerGuidance(
+function buildDraftCustomerResponse(input: {
+  ticket: Ticket;
+  knowledgeArticleIds: readonly string[];
+  escalationReasons: readonly string[];
+}): string {
+  const { ticket, knowledgeArticleIds, escalationReasons } = input;
+  const style = classifyResponseStyle(
+    ticket,
+    knowledgeArticleIds,
+    escalationReasons,
+  );
+
+  if (style === "known-cause") {
+    return buildKnownCauseResponse(ticket);
+  }
+
+  if (style === "incident-or-escalation") {
+    return buildEscalationResponse(ticket, escalationReasons);
+  }
+
+  if (
+    classifyCustomerAudience(ticket) === "merchant-admin" &&
+    isFlowEventGuidance(knowledgeArticleIds)
+  ) {
+    return buildMerchantFlowResponse(ticket);
+  }
+
+  return `We are investigating ${ticket.id}. ${formatCustomerGuidance(
     knowledgeArticleIds,
   )} We will share the next update once we have confirmed the details.`;
+}
+
+function classifyResponseStyle(
+  ticket: Ticket,
+  knowledgeArticleIds: readonly string[],
+  escalationReasons: readonly string[],
+): ResponseStyle {
+  const text = ticketText(ticket);
+  if (
+    knowledgeArticleIds.includes("sms-compliance") &&
+    text.includes("quiet-hour") &&
+    text.includes("blocked")
+  ) {
+    return "known-cause";
+  }
+
+  if (
+    escalationReasons.includes("outage") ||
+    escalationReasons.includes("security")
+  ) {
+    return "incident-or-escalation";
+  }
+
+  return "needs-diagnostics";
+}
+
+function buildKnownCauseResponse(ticket: Ticket): string {
+  const text = ticketText(ticket);
+  if (text.includes("quiet-hour") && text.includes("blocked")) {
+    return `We reviewed ${ticket.id}, and the dashboard message indicates quiet-hour protection blocked delivery. This looks like expected compliance behavior for an SMS campaign scheduled during restricted sending hours. Please reschedule the campaign for an eligible sending window or review the account quiet-hour settings before attempting another send.`;
+  }
+
+  return `We reviewed ${ticket.id} and found a likely explanation in the ticket details. We will confirm the safest next step and share an update before recommending any account change.`;
+}
+
+function buildEscalationResponse(
+  ticket: Ticket,
+  escalationReasons: readonly string[],
+): string {
+  if (escalationReasons.includes("security")) {
+    return `We are treating ${ticket.id} as a potential security issue. Our next step is containment review, including exposure scope, affected profiles, and any required key rotation or log preservation. We will share the next update after the security review is complete.`;
+  }
+
+  if (escalationReasons.includes("outage")) {
+    return `We are investigating ${ticket.id} as a possible platform delay affecting event processing. The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.`;
+  }
+
+  return `We are escalating ${ticket.id} for review and will share the next update after confirming impact, risk, and the safest next action.`;
+}
+
+function classifyCustomerAudience(ticket: Ticket): CustomerAudience {
+  const text = ticketText(ticket);
+  return [
+    "api",
+    "payload",
+    "webhook",
+    "endpoint",
+    "request id",
+    "logs",
+    "hmac",
+    "signature",
+  ].some((technicalTerm) => text.includes(technicalTerm))
+    ? "developer"
+    : "merchant-admin";
+}
+
+function isFlowEventGuidance(knowledgeArticleIds: readonly string[]): boolean {
+  return (
+    knowledgeArticleIds.includes("flow-trigger-troubleshooting") &&
+    knowledgeArticleIds.includes("event-tracking-debugging")
+  );
+}
+
+function buildMerchantFlowResponse(ticket: Ticket): string {
+  const flowLabel = ticketText(ticket).includes("browse abandonment")
+    ? "Browse Abandonment flow"
+    : "Abandoned Cart flow";
+  const eventLabel = ticketText(ticket).includes("viewed product")
+    ? "Viewed Product"
+    : "Added to Cart";
+  const productReference = eventLabel === "Viewed Product"
+    ? "product URL or product ID"
+    : "product or cart URL";
+
+  return `We are checking why ${eventLabel} events did not place customers into the ${flowLabel}. Please send the flow name or flow ID, the ecommerce platform you use such as Shopify, Magento, WooCommerce, or a custom store, one affected customer email, the ${eventLabel} event ID or event time, and the ${productReference}. We will compare the storefront event with the flow setup and let you know what needs to be corrected.`;
+}
+
+function ticketText(ticket: Ticket): string {
+  return [
+    ticket.subject,
+    ticket.description,
+    ticket.category,
+    ticket.priority,
+    ticket.team,
+    ...ticket.tags,
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 function formatCustomerGuidance(knowledgeArticleIds: readonly string[]): string {

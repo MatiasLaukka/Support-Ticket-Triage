@@ -398,6 +398,45 @@ describe("TriageService", () => {
     );
   });
 
+  it("applies reviewer override values for approved recommendation fields", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(
+      makeSubmitInput({
+        category: "api",
+        priority: "P2",
+        team: "api-platform",
+      }),
+    );
+
+    const result = await harness.service.approve(
+      makeApproval({
+        approvedFields: ["category", "priority", "team"],
+        fieldOverrides: {
+          category: "incident",
+          priority: "P1",
+          team: "incident-response",
+        },
+      }),
+    );
+
+    expect(result.ticket).toMatchObject({
+      category: "incident",
+      priority: "P1",
+      team: "incident-response",
+      revision: 3,
+    });
+    expect(result.auditEvent.before).toEqual({
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+    });
+    expect(result.auditEvent.after).toEqual({
+      category: "incident",
+      priority: "P1",
+      team: "incident-response",
+    });
+  });
+
   it("restores the ticket and leaves no success audit when approval resolution fails", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));

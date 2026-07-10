@@ -204,6 +204,48 @@ export const approvalDeskHtml = `<!doctype html>
         margin: 0.35rem 0 0;
       }
 
+      .hero-card {
+        background: #f8fbff;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        margin-bottom: 0.75rem;
+        padding: 1rem;
+      }
+
+      .hero-card strong {
+        display: block;
+        margin-bottom: 0.35rem;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .chip {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--accent-dark);
+        font-size: 0.85rem;
+        font-weight: 700;
+        padding: 0.28rem 0.55rem;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        margin-top: 0.75rem;
+        padding: 0.75rem;
+      }
+
+      summary {
+        cursor: pointer;
+        font-weight: 800;
+      }
+
       .description,
       pre {
         white-space: pre-wrap;
@@ -223,9 +265,30 @@ export const approvalDeskHtml = `<!doctype html>
 
       .fields {
         display: grid;
-        gap: 0.45rem;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
         margin: 0.8rem 0;
+      }
+
+      .approval-row {
+        background: #fbfcff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        display: grid;
+        gap: 0.55rem;
+        grid-template-columns: minmax(130px, 0.8fr) minmax(160px, 1fr);
+        padding: 0.8rem;
+      }
+
+      .approval-row .check {
+        align-items: flex-start;
+        font-weight: 800;
+      }
+
+      .approval-row small {
+        color: var(--muted);
+        display: block;
+        font-weight: 500;
+        margin-top: 0.2rem;
       }
 
       .check {
@@ -327,8 +390,11 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="ticketPanel">
             <p class="hint">No ticket selected.</p>
           </div>
-          <h3>Audit and Metrics Result</h3>
-          <pre id="resultPanel" class="result">{}</pre>
+          <details>
+            <summary>Developer/audit output</summary>
+            <p class="hint">Raw local API result for debugging and audit verification.</p>
+            <pre id="resultPanel" class="result">{}</pre>
+          </details>
         </section>
 
         <section class="panel" aria-label="Recommendation approval controls">
@@ -338,20 +404,42 @@ export const approvalDeskHtml = `<!doctype html>
             <p class="hint">No recommendation created yet.</p>
           </div>
 
-          <h3>Approval controls</h3>
+          <h3>Approve proposed changes</h3>
+          <p class="hint">Toggle only the fields you want to apply. You can edit the proposed values before approving.</p>
           <label>
             Actor
             <input id="actor" value="approval-desk" autocomplete="off">
           </label>
 
           <div class="fields" id="fieldChoices">
-            <label class="check"><input type="checkbox" value="category"> category</label>
-            <label class="check"><input type="checkbox" value="priority"> priority</label>
-            <label class="check"><input type="checkbox" value="team"> team</label>
-            <label class="check"><input type="checkbox" value="assignee"> assignee</label>
-            <label class="check"><input type="checkbox" value="status"> status</label>
-            <label class="check"><input type="checkbox" value="tags"> tags</label>
-            <label class="check"><input type="checkbox" value="customerResponse"> customerResponse</label>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="category"> Category<small>Approve the recommended category.</small></label>
+              <label>Recommended value<input id="categoryOverride" autocomplete="off"></label>
+            </div>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="priority"> Priority<small>Approve the recommended urgency.</small></label>
+              <label>Recommended value<input id="priorityOverride" autocomplete="off"></label>
+            </div>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="team"> Team<small>Approve the routing team.</small></label>
+              <label>Recommended value<input id="teamOverride" autocomplete="off"></label>
+            </div>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="assignee"> Assignee<small>Approve an owner if recommended.</small></label>
+              <label>Recommended value<input id="assigneeOverride" autocomplete="off"></label>
+            </div>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="status"> Status<small>Approve a status change if recommended.</small></label>
+              <label>Recommended value<input id="statusOverride" autocomplete="off"></label>
+            </div>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="tags"> Tags<small>Approve comma-separated ticket tags.</small></label>
+              <label>Recommended value<input id="tagsOverride" autocomplete="off"></label>
+            </div>
+            <div class="approval-row">
+              <label class="check"><input type="checkbox" value="customerResponse"> Customer response<small>Approve edited customer-facing wording.</small></label>
+              <span class="meta">Edit the full response below.</span>
+            </div>
           </div>
 
           <label>
@@ -389,7 +477,9 @@ export const approvalDeskHtml = `<!doctype html>
 
       const els = {
         actor: document.getElementById('actor'),
+        assigneeOverride: document.getElementById('assigneeOverride'),
         approveButton: document.getElementById('approveButton'),
+        categoryOverride: document.getElementById('categoryOverride'),
         confirmApproval: document.getElementById('confirmApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
         editedCustomerResponse: document.getElementById('editedCustomerResponse'),
@@ -400,10 +490,14 @@ export const approvalDeskHtml = `<!doctype html>
         activityPanel: document.getElementById('activityPanel'),
         queueStatus: document.getElementById('queueStatus'),
         recommendationPanel: document.getElementById('recommendationPanel'),
+        priorityOverride: document.getElementById('priorityOverride'),
         refreshEvidence: document.getElementById('refreshEvidence'),
         refreshQueue: document.getElementById('refreshQueue'),
         rejectButton: document.getElementById('rejectButton'),
         resultPanel: document.getElementById('resultPanel'),
+        statusOverride: document.getElementById('statusOverride'),
+        tagsOverride: document.getElementById('tagsOverride'),
+        teamOverride: document.getElementById('teamOverride'),
         ticketList: document.getElementById('ticketList'),
         ticketPanel: document.getElementById('ticketPanel')
       };
@@ -447,18 +541,26 @@ export const approvalDeskHtml = `<!doctype html>
         }
         els.createRecommendation.disabled = false;
         els.ticketPanel.innerHTML =
-          '<div class="details-grid">' +
-            card('ID', ticket.id) +
-            card('Revision', String(ticket.revision)) +
-            card('Customer', ticket.customer.name + ' (' + ticket.customer.plan + ', ' + ticket.customer.region + ')') +
-            card('Status', ticket.status) +
-            card('Category', ticket.category ?? 'unset') +
-            card('Priority', ticket.priority ?? 'unset') +
-            card('Team', ticket.team ?? 'unset') +
-            card('Tags', ticket.tags.join(', ')) +
+          '<div class="chips">' +
+            chip(ticket.id) +
+            chip(ticket.priority ?? 'unset priority') +
+            chip(ticket.status) +
+            chip(ticket.team ?? 'unset team') +
           '</div>' +
-          '<div class="card description"><strong>Subject</strong>' + escapeHtml(ticket.subject) + '</div>' +
-          '<div class="card description"><strong>Description</strong>' + escapeHtml(ticket.description) + '</div>';
+          '<div class="hero-card description"><strong>Subject</strong>' + escapeHtml(ticket.subject) + '</div>' +
+          '<div class="hero-card description"><strong>Description</strong>' + escapeHtml(ticket.description) + '</div>' +
+          '<details><summary>Technical ticket details</summary>' +
+            '<div class="details-grid">' +
+              card('ID', ticket.id) +
+              card('Revision', String(ticket.revision)) +
+              card('Customer', ticket.customer.name + ' (' + ticket.customer.plan + ', ' + ticket.customer.region + ')') +
+              card('Status', ticket.status) +
+              card('Category', ticket.category ?? 'unset') +
+              card('Priority', ticket.priority ?? 'unset') +
+              card('Team', ticket.team ?? 'unset') +
+              card('Tags', ticket.tags.join(', ')) +
+            '</div>' +
+          '</details>';
       }
 
       function renderRecommendation() {
@@ -466,33 +568,49 @@ export const approvalDeskHtml = `<!doctype html>
         if (recommendation === null) {
           els.recommendationPanel.innerHTML = '<p class="hint">No recommendation created yet.</p>';
           els.editedCustomerResponse.value = '';
+          clearApprovalInputs();
           updateControls();
           return;
         }
         els.recommendationPanel.innerHTML =
-          '<div class="details-grid">' +
-            card('Recommendation ID', recommendation.id) +
-            card('Source revision', String(recommendation.sourceRevision)) +
+          '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
+          '<div class="hero-card"><strong>Recommended Triage</strong>' +
+            '<div class="chips">' +
+              chip('Category: ' + recommendation.category) +
+              chip('Priority: ' + recommendation.priority) +
+              chip('Team: ' + recommendation.team) +
+              chip('Risk: ' + (recommendation.escalationRequired ? 'escalation' : 'none')) +
+            '</div>' +
+          '</div>' +
+          '<details><summary>Evidence and internal details</summary>' +
+            '<div class="details-grid">' +
+              card('Recommendation ID', recommendation.id) +
+              card('Source revision', String(recommendation.sourceRevision)) +
+              card('Confidence', String(recommendation.confidence)) +
+              card('knowledgeArticleIds', formatList(recommendation.knowledgeArticleIds)) +
+              card('Outage risk', recommendation.outageRisk) +
+              card('Security risk', recommendation.securityRisk) +
+              card('SLA risk', recommendation.slaRisk) +
+              card('Escalation required', recommendation.escalationRequired ? 'yes' : 'no') +
+              card('Escalation reasons', formatList(recommendation.escalationReasons)) +
+              card('Missing information', formatList(recommendation.missingInformation)) +
+            '</div>' +
+            '<div class="card description"><strong>Rationale</strong>' + escapeHtml(recommendation.rationale) + '</div>' +
+            '<div class="card description"><strong>Duplicate candidates</strong>' + escapeHtml(formatDuplicateCandidates(recommendation.duplicateCandidates)) + '</div>' +
+            '<div class="card description"><strong>Next action</strong>' + escapeHtml(recommendation.recommendedNextAction) + '</div>' +
+          '</details>' +
+          '<details><summary>All proposed ticket values</summary>' +
+            '<div class="details-grid">' +
             card('Category', recommendation.category) +
             card('Priority', recommendation.priority) +
             card('Team', recommendation.team) +
             card('Assignee', recommendation.assignee === undefined ? 'unchanged' : String(recommendation.assignee)) +
             card('Status', recommendation.ticketStatus ?? 'unchanged') +
             card('Tags', Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : 'unchanged') +
-            card('Confidence', String(recommendation.confidence)) +
-            card('knowledgeArticleIds', formatList(recommendation.knowledgeArticleIds)) +
-            card('Outage risk', recommendation.outageRisk) +
-            card('Security risk', recommendation.securityRisk) +
-            card('SLA risk', recommendation.slaRisk) +
-            card('Escalation required', recommendation.escalationRequired ? 'yes' : 'no') +
-            card('Escalation reasons', formatList(recommendation.escalationReasons)) +
-            card('Missing information', formatList(recommendation.missingInformation)) +
-          '</div>' +
-          '<div class="card description"><strong>Rationale</strong>' + escapeHtml(recommendation.rationale) + '</div>' +
-          '<div class="card description"><strong>Duplicate candidates</strong>' + escapeHtml(formatDuplicateCandidates(recommendation.duplicateCandidates)) + '</div>' +
-          '<div class="card description"><strong>Draft customerResponse</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
-          '<div class="card description"><strong>Next action</strong>' + escapeHtml(recommendation.recommendedNextAction) + '</div>';
+            '</div>' +
+          '</details>';
         els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
+        populateApprovalInputs(recommendation);
         updateControls();
       }
 
@@ -636,6 +754,10 @@ export const approvalDeskHtml = `<!doctype html>
         if (approvedFields.includes('customerResponse')) {
           body.editedCustomerResponse = els.editedCustomerResponse.value.trim();
         }
+        const fieldOverrides = collectFieldOverrides(approvedFields);
+        if (Object.keys(fieldOverrides).length > 0) {
+          body.fieldOverrides = fieldOverrides;
+        }
         const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
           method: 'POST',
           body: JSON.stringify(body)
@@ -673,6 +795,59 @@ export const approvalDeskHtml = `<!doctype html>
         }
         els.confirmApproval.checked = false;
         els.feedback.value = '';
+        clearApprovalInputs();
+      }
+
+      function populateApprovalInputs(recommendation) {
+        els.categoryOverride.value = recommendation.category;
+        els.priorityOverride.value = recommendation.priority;
+        els.teamOverride.value = recommendation.team;
+        els.assigneeOverride.value = recommendation.assignee === undefined ? '' : String(recommendation.assignee ?? '');
+        els.statusOverride.value = recommendation.ticketStatus ?? '';
+        els.tagsOverride.value = Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : '';
+      }
+
+      function clearApprovalInputs() {
+        els.categoryOverride.value = '';
+        els.priorityOverride.value = '';
+        els.teamOverride.value = '';
+        els.assigneeOverride.value = '';
+        els.statusOverride.value = '';
+        els.tagsOverride.value = '';
+      }
+
+      function collectFieldOverrides(approvedFields) {
+        const overrides = {};
+        if (approvedFields.includes('category') && els.categoryOverride.value.trim() !== state.recommendation.category) {
+          overrides.category = els.categoryOverride.value.trim();
+        }
+        if (approvedFields.includes('priority') && els.priorityOverride.value.trim() !== state.recommendation.priority) {
+          overrides.priority = els.priorityOverride.value.trim();
+        }
+        if (approvedFields.includes('team') && els.teamOverride.value.trim() !== state.recommendation.team) {
+          overrides.team = els.teamOverride.value.trim();
+        }
+        if (approvedFields.includes('assignee')) {
+          const assignee = els.assigneeOverride.value.trim();
+          const proposed = state.recommendation.assignee === undefined ? '' : String(state.recommendation.assignee ?? '');
+          if (assignee !== proposed) {
+            overrides.assignee = assignee.length === 0 ? null : assignee;
+          }
+        }
+        if (approvedFields.includes('status') && els.statusOverride.value.trim() !== (state.recommendation.ticketStatus ?? '')) {
+          overrides.status = els.statusOverride.value.trim();
+        }
+        if (approvedFields.includes('tags')) {
+          const tags = els.tagsOverride.value
+            .split(',')
+            .map(function (tag) { return tag.trim(); })
+            .filter(Boolean);
+          const proposedTags = Array.isArray(state.recommendation.tags) ? state.recommendation.tags : [];
+          if (tags.join('\\n') !== proposedTags.join('\\n')) {
+            overrides.tags = tags;
+          }
+        }
+        return overrides;
       }
 
       async function requestJson(path, init, options) {
@@ -692,6 +867,10 @@ export const approvalDeskHtml = `<!doctype html>
 
       function card(label, value) {
         return '<div class="card"><strong>' + escapeHtml(label) + '</strong>' + escapeHtml(value) + '</div>';
+      }
+
+      function chip(value) {
+        return '<span class="chip">' + escapeHtml(value) + '</span>';
       }
 
       function formatList(values) {
