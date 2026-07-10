@@ -11,11 +11,10 @@
       "sla"
     ],
     "knowledgeArticleIds": [
-      "incident-response",
-      "api-errors",
-      "sla-policy"
+      "event-tracking-debugging",
+      "shopify-integration-sync"
     ],
-    "duplicateGroup": "eu-api-503"
+    "duplicateGroup": "event-ingestion-delay"
   },
   {
     "ticketId": "TKT-1002",
@@ -29,11 +28,10 @@
       "sla"
     ],
     "knowledgeArticleIds": [
-      "incident-response",
-      "api-errors",
-      "sla-policy"
+      "event-tracking-debugging",
+      "shopify-integration-sync"
     ],
-    "duplicateGroup": "eu-api-503"
+    "duplicateGroup": "event-ingestion-delay"
   },
   {
     "ticketId": "TKT-1003",
@@ -47,11 +45,10 @@
       "sla"
     ],
     "knowledgeArticleIds": [
-      "incident-response",
-      "api-errors",
-      "sla-policy"
+      "event-tracking-debugging",
+      "shopify-integration-sync"
     ],
-    "duplicateGroup": "eu-api-503"
+    "duplicateGroup": "event-ingestion-delay"
   },
   {
     "ticketId": "TKT-1004",
@@ -65,22 +62,23 @@
       "missing-information"
     ],
     "knowledgeArticleIds": [
-      "security-escalation"
+      "profile-sync-issues",
+      "webhook-signature-validation"
     ]
   },
   {
     "ticketId": "TKT-1005",
-    "category": "authentication",
+    "category": "integration",
     "acceptablePriorities": [
       "P2"
     ],
-    "team": "identity",
+    "team": "integrations",
     "requiredEscalations": [
       "policy-conflict"
     ],
     "knowledgeArticleIds": [
-      "account-access",
-      "triage-policy"
+      "flow-trigger-troubleshooting",
+      "event-tracking-debugging"
     ]
   },
   {
@@ -93,8 +91,8 @@
     "team": "billing",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "billing-refunds",
-      "vip-communications"
+      "coupon-catalog-sync",
+      "campaign-send-failures"
     ]
   },
   {
@@ -106,7 +104,7 @@
     "team": "integrations",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "integration-webhooks"
+      "webhook-signature-validation"
     ],
     "duplicateGroup": "webhook-signature-failure"
   },
@@ -119,24 +117,23 @@
     "team": "integrations",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "integration-webhooks"
+      "webhook-signature-validation"
     ],
     "duplicateGroup": "webhook-signature-failure"
   },
   {
     "ticketId": "TKT-1009",
-    "category": "authentication",
+    "category": "api",
     "acceptablePriorities": [
       "P1",
       "P2"
     ],
-    "team": "identity",
+    "team": "api-platform",
     "requiredEscalations": [
       "sla"
     ],
     "knowledgeArticleIds": [
-      "account-access",
-      "sla-policy"
+      "campaign-send-failures"
     ]
   },
   {
@@ -148,34 +145,36 @@
     "team": "support",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "triage-policy"
+      "event-tracking-debugging"
     ]
   },
   {
     "ticketId": "TKT-1011",
-    "category": "billing",
+    "category": "integration",
     "acceptablePriorities": [
-      "P3"
+      "P2"
     ],
-    "team": "billing",
+    "team": "integrations",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "billing-refunds"
+      "flow-trigger-troubleshooting",
+      "event-tracking-debugging"
     ],
-    "duplicateGroup": "duplicate-invoice-2048"
+    "duplicateGroup": "abandoned-cart-flow"
   },
   {
     "ticketId": "TKT-1012",
-    "category": "billing",
+    "category": "integration",
     "acceptablePriorities": [
-      "P3"
+      "P2"
     ],
-    "team": "billing",
+    "team": "integrations",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "billing-refunds"
+      "flow-trigger-troubleshooting",
+      "segmentation-audience-rules"
     ],
-    "duplicateGroup": "duplicate-invoice-2048"
+    "duplicateGroup": "abandoned-cart-flow"
   },
   {
     "ticketId": "TKT-1013",
@@ -187,9 +186,9 @@
     "team": "product",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "performance"
+      "email-deliverability"
     ],
-    "duplicateGroup": "slow-analytics-dashboard"
+    "duplicateGroup": "deliverability-bounce"
   },
   {
     "ticketId": "TKT-1014",
@@ -201,9 +200,9 @@
     "team": "product",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "performance"
+      "email-deliverability"
     ],
-    "duplicateGroup": "slow-analytics-dashboard"
+    "duplicateGroup": "deliverability-bounce"
   },
   {
     "ticketId": "TKT-1015",
@@ -214,7 +213,7 @@
     "team": "identity",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "account-access"
+      "profile-sync-issues"
     ]
   },
   {
@@ -226,7 +225,7 @@
     "team": "product",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "triage-policy"
+      "segmentation-audience-rules"
     ]
   },
   {
@@ -239,7 +238,7 @@
     "team": "api-platform",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "api-errors"
+      "sms-compliance"
     ]
   },
   {
@@ -251,7 +250,7 @@
     "team": "integrations",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "integration-webhooks"
+      "shopify-integration-sync"
     ]
   },
   {
@@ -266,8 +265,8 @@
       "missing-information"
     ],
     "knowledgeArticleIds": [
-      "security-escalation",
-      "account-access"
+      "profile-sync-issues",
+      "webhook-signature-validation"
     ]
   },
   {
@@ -279,7 +278,8 @@
     "team": "product",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "performance"
+      "shopify-integration-sync",
+      "coupon-catalog-sync"
     ]
   },
   {
@@ -293,8 +293,8 @@
       "sla"
     ],
     "knowledgeArticleIds": [
-      "incident-response",
-      "sla-policy"
+      "campaign-send-failures",
+      "segmentation-audience-rules"
     ]
   },
   {
@@ -306,7 +306,7 @@
     "team": "support",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "account-access"
+      "segmentation-audience-rules"
     ]
   },
   {
@@ -318,7 +318,8 @@
     "team": "identity",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "account-access"
+      "profile-sync-issues",
+      "sms-compliance"
     ]
   },
   {
@@ -330,7 +331,7 @@
     "team": "billing",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "billing-refunds"
+      "coupon-catalog-sync"
     ]
   },
   {
@@ -343,7 +344,8 @@
     "team": "product",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "triage-policy"
+      "sms-compliance",
+      "segmentation-audience-rules"
     ]
   },
   {
@@ -355,7 +357,7 @@
     "team": "support",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "triage-policy"
+      "campaign-send-failures"
     ]
   },
   {
@@ -367,7 +369,7 @@
     "team": "api-platform",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "api-errors"
+      "event-tracking-debugging"
     ]
   },
   {
@@ -380,9 +382,9 @@
     "team": "integrations",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "integration-webhooks",
-      "performance"
-    ]
+      "webhook-signature-validation"
+    ],
+    "duplicateGroup": "webhook-delivery-delay"
   },
   {
     "ticketId": "TKT-1029",
@@ -393,8 +395,9 @@
     "team": "product",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "performance"
-    ]
+      "webhook-signature-validation"
+    ],
+    "duplicateGroup": "webhook-delivery-delay"
   },
   {
     "ticketId": "TKT-1030",
@@ -405,7 +408,8 @@
     "team": "identity",
     "requiredEscalations": [],
     "knowledgeArticleIds": [
-      "account-access"
+      "sms-compliance",
+      "profile-sync-issues"
     ]
   }
 ]

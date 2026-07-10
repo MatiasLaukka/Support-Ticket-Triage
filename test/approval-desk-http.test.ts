@@ -96,7 +96,7 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
-  it("creates a pending authentication recommendation without mutating the ticket", async () => {
+  it("creates a pending flow recommendation without mutating the ticket", async () => {
     const { deps, json } = await startFixture();
 
     const created = await json("/api/tickets/TKT-1005/recommendations", {
@@ -108,8 +108,8 @@ describe("createApprovalDeskHttpServer", () => {
     expect(created.body.recommendation).toMatchObject({
       ticketId: "TKT-1005",
       sourceRevision: 0,
-      category: "authentication",
-      team: "identity",
+      category: "integration",
+      team: "integrations",
       resolution: "pending",
       createdAt: now.toISOString(),
     });
@@ -278,9 +278,9 @@ describe("createApprovalDeskHttpServer", () => {
     expect(approved.body.ticket).toMatchObject({
       id: "TKT-1005",
       revision: 1,
-      category: "authentication",
+      category: "integration",
       priority: "P2",
-      team: "identity",
+      team: "integrations",
     });
     expect(approved.body.auditEvent).toMatchObject({
       action: "recommendation-approved",

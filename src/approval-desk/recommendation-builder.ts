@@ -12,6 +12,28 @@ import {
 import type { SubmitRecommendationInput } from "../triage-service.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+const CUSTOMER_RESPONSE_TEMPLATES: Readonly<Record<string, string>> = {
+  "campaign-send-failures":
+    "Please share the campaign name, scheduled send time, expected audience size, and any error banner shown in the campaign status. We will check the audience snapshot, template validation, sender profile, and suppression summary before recommending the next send action.",
+  "coupon-catalog-sync":
+    "Please share the store URL, product SKU, coupon pool name, last catalog sync time, and whether unused coupon codes remain available. We will compare the catalog import history with the campaign content before recommending a coupon or product update.",
+  "email-deliverability":
+    "Please share the campaign name, send time, sending domain, affected recipient domains, bounce samples, and whether the audience was recently imported. We will compare bounce type, complaint rate, suppression growth, and sender alignment with prior sends.",
+  "event-tracking-debugging":
+    "Please share the profile email or customer ID, event name, event timestamp with time zone, request ID if available, and a sample payload with secrets removed. We will compare the event payload, API accepted time, profile timeline, and downstream qualification.",
+  "flow-trigger-troubleshooting":
+    "Please share the flow name, profile email, trigger event, event timestamp, flow filters, consent state, smart sending status, and the profile's flow history. We will compare the trigger event, profile qualification, and message eligibility before recommending the next update.",
+  "profile-sync-issues":
+    "Please share the profile email, external customer ID, import filename or API request ID, update timestamp, and the field that should have changed. We will check duplicate profiles, matching identifiers, and consent state before recommending a merge or update.",
+  "segmentation-audience-rules":
+    "Please share the segment name, expected count, observed count, rule definition, a sample profile that should qualify, and when the segment was last edited. We will compare profile attributes, event recency, consent filters, and recalculation state.",
+  "shopify-integration-sync":
+    "Please share the Shopify store URL, affected object ID, SKU or order number, expected field, and last update time in Shopify. We will compare the source object with integration scopes and import history before recommending a sync action.",
+  "sms-compliance":
+    "Please share the campaign or flow name, masked recipient phone number, recipient region, consent source, opt-in timestamp, opt-out history, scheduled send time, and the compliance banner shown in the UI. We will verify channel eligibility before recommending any SMS send action.",
+  "webhook-signature-validation":
+    "Please share the delivery ID, endpoint URL, failure timestamp, signing secret rotation time, timestamp tolerance, endpoint response code, and whether raw body handling changed recently. We will compare the signed payload, delivery headers, and retry history before recommending a code or configuration change.",
+};
 
 const ExpectedOutcomeSchema = z
   .object({
@@ -75,9 +97,10 @@ export function buildApprovalDeskRecommendationInput(input: {
       ? [`Confirm the missing evidence for ${ticket.id} before approval.`]
       : [],
     knowledgeArticleIds,
-    draftCustomerResponse: `We are investigating ${ticket.id} and will use ${knowledgeArticleIds.join(
-      ", ",
-    )} to guide the next update.`,
+    draftCustomerResponse: buildDraftCustomerResponse(
+      ticket.id,
+      knowledgeArticleIds,
+    ),
     rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
       ", ",
     )}.`,
@@ -98,6 +121,24 @@ function buildTags(ticket: Ticket, outcome: ExpectedOutcome): string[] {
       ? ["policy-conflict"]
       : []),
   ]);
+}
+
+function buildDraftCustomerResponse(
+  ticketId: string,
+  knowledgeArticleIds: readonly string[],
+): string {
+  return `We are investigating ${ticketId}. ${formatCustomerGuidance(
+    knowledgeArticleIds,
+  )} We will share the next update once we have confirmed the details.`;
+}
+
+function formatCustomerGuidance(knowledgeArticleIds: readonly string[]): string {
+  const guidance = knowledgeArticleIds.map(
+    (id) =>
+      CUSTOMER_RESPONSE_TEMPLATES[id] ??
+      "Please share the support details relevant to this request.",
+  );
+  return unique(guidance).join(" ");
 }
 
 function unique(values: string[]): string[] {

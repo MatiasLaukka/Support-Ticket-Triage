@@ -29,16 +29,17 @@ const baseTime = new Date("2026-06-10T09:00:00.000Z");
 const generatedArtifactPaths = [
   "data/seed/tickets.json",
   "data/seed/expected-outcomes.json",
-  "data/knowledge/account-access.md",
-  "data/knowledge/api-errors.md",
-  "data/knowledge/billing-refunds.md",
-  "data/knowledge/incident-response.md",
-  "data/knowledge/integration-webhooks.md",
-  "data/knowledge/performance.md",
-  "data/knowledge/security-escalation.md",
-  "data/knowledge/sla-policy.md",
-  "data/knowledge/triage-policy.md",
-  "data/knowledge/vip-communications.md",
+  "data/seed/sample-recommendations.json",
+  "data/knowledge/campaign-send-failures.md",
+  "data/knowledge/coupon-catalog-sync.md",
+  "data/knowledge/email-deliverability.md",
+  "data/knowledge/event-tracking-debugging.md",
+  "data/knowledge/flow-trigger-troubleshooting.md",
+  "data/knowledge/profile-sync-issues.md",
+  "data/knowledge/segmentation-audience-rules.md",
+  "data/knowledge/shopify-integration-sync.md",
+  "data/knowledge/sms-compliance.md",
+  "data/knowledge/webhook-signature-validation.md",
 ] as const;
 
 function readJson<T>(path: string): T {
@@ -174,7 +175,7 @@ describe("generated support fixtures", () => {
     );
   });
 
-  it("contains the required outage, security, injection, VIP, duplicate, SLA, and ambiguity scenarios", () => {
+  it("contains the required marketing automation, safety, duplicate, SLA, and ambiguity scenarios", () => {
     const tickets = readTickets();
     const outcomes = readOutcomes();
     const outageIds = ["TKT-1001", "TKT-1002", "TKT-1003"];
@@ -183,13 +184,16 @@ describe("generated support fixtures", () => {
       const ticket = ticketById(tickets, id);
       const outcome = outcomeById(outcomes, id);
       expect(ticket.customer.region).toMatch(/^eu-/);
-      expect(`${ticket.subject} ${ticket.description}`).toMatch(/\b503\b/);
+      expect(`${ticket.subject} ${ticket.description}`).toMatch(
+        /event ingestion|activity timeline|checkout events/i,
+      );
       expect(outcome).toMatchObject({
         category: "incident",
         team: "incident-response",
-        duplicateGroup: "eu-api-503",
+        duplicateGroup: "event-ingestion-delay",
       });
       expect(outcome.requiredEscalations).toContain("outage");
+      expect(outcome.knowledgeArticleIds).toContain("event-tracking-debugging");
     }
 
     expect(outcomeById(outcomes, "TKT-1004")).toMatchObject({
@@ -208,7 +212,7 @@ describe("generated support fixtures", () => {
     const vipOutcome = outcomeById(outcomes, "TKT-1006");
     expect(vipTicket.customer.vip).toBe(true);
     expect(`${vipTicket.subject} ${vipTicket.description}`).toMatch(
-      /vip|executive|escalat/i,
+      /vip|executive|coupon|escalat/i,
     );
     expect(vipOutcome).toMatchObject({
       category: "billing",
@@ -223,10 +227,15 @@ describe("generated support fixtures", () => {
       expect(
         `${ticketById(tickets, id).subject} ${ticketById(tickets, id).description}`,
       ).toMatch(/webhook.*signature|signature.*webhook/i);
+      expect(outcomeById(outcomes, id).knowledgeArticleIds).toContain(
+        "webhook-signature-validation",
+      );
     }
 
     expect(ticketById(tickets, "TKT-1009").sla.breached).toBe(true);
-    expect(`${ticketById(tickets, "TKT-1009").subject}`).toMatch(/login/i);
+    expect(`${ticketById(tickets, "TKT-1009").subject}`).toMatch(
+      /campaign|send|flow/i,
+    );
     expect(outcomeById(outcomes, "TKT-1009").requiredEscalations).toContain(
       "sla",
     );
@@ -269,6 +278,22 @@ describe("generated support fixtures", () => {
         tags.includes("ambiguous") || tags.includes("missing-information"),
     );
     expect(ambiguousTickets.length).toBeGreaterThanOrEqual(2);
+
+    expect(
+      outcomes.some(({ knowledgeArticleIds }) =>
+        knowledgeArticleIds.includes("flow-trigger-troubleshooting"),
+      ),
+    ).toBe(true);
+    expect(
+      outcomes.some(({ knowledgeArticleIds }) =>
+        knowledgeArticleIds.includes("sms-compliance"),
+      ),
+    ).toBe(true);
+    expect(
+      outcomes.some(({ knowledgeArticleIds }) =>
+        knowledgeArticleIds.includes("email-deliverability"),
+      ),
+    ).toBe(true);
   });
 
   it("makes following the prompt-injection P4 instruction observably wrong", () => {
@@ -333,16 +358,16 @@ describe("generated support fixtures", () => {
       .filter((file) => file.endsWith(".md"))
       .sort();
     expect(knowledgeFiles).toEqual([
-      "account-access.md",
-      "api-errors.md",
-      "billing-refunds.md",
-      "incident-response.md",
-      "integration-webhooks.md",
-      "performance.md",
-      "security-escalation.md",
-      "sla-policy.md",
-      "triage-policy.md",
-      "vip-communications.md",
+      "campaign-send-failures.md",
+      "coupon-catalog-sync.md",
+      "email-deliverability.md",
+      "event-tracking-debugging.md",
+      "flow-trigger-troubleshooting.md",
+      "profile-sync-issues.md",
+      "segmentation-audience-rules.md",
+      "shopify-integration-sync.md",
+      "sms-compliance.md",
+      "webhook-signature-validation.md",
     ]);
 
     const knowledgeIds = new Set(

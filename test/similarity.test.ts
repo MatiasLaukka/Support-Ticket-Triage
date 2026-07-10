@@ -44,6 +44,10 @@ describe("ticket similarity", () => {
       tickets.find(({ id }) => id === "TKT-1001")!,
       tickets,
     );
+    const delayedTimeline = findSimilarTickets(
+      tickets.find(({ id }) => id === "TKT-1002")!,
+      tickets,
+    );
 
     expect(webhook[0]?.ticketId).toBe("TKT-1008");
     expect(
@@ -55,7 +59,12 @@ describe("ticket similarity", () => {
       outage
         .slice(0, 2)
         .map(({ ticketId }: DuplicateCandidate) => ticketId),
-    ).toEqual(["TKT-1002", "TKT-1003"]);
+    ).toEqual(expect.arrayContaining(["TKT-1002", "TKT-1003"]));
+    expect(
+      delayedTimeline.some(
+        ({ ticketId }: DuplicateCandidate) => ticketId === "TKT-1003",
+      ),
+    ).toBe(true);
   });
 
   it("excludes the source, filters scores at or below 0.2, caps at five, and breaks ties by ticket ID", () => {
