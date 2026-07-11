@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { DraftCustomerResponseStyleSchema } from "../domain.js";
+import {
+  DraftCustomerResponseStyleInputSchema,
+  DraftCustomerResponseStyleSchema,
+} from "../domain.js";
 import type {
   DraftCustomerResponseCheck,
   DraftCustomerResponseSource,
@@ -8,6 +11,7 @@ import type {
   KnowledgeArticle,
   Ticket,
   DraftCustomerResponseStyle,
+  DraftCustomerResponseStyleInput,
 } from "../domain.js";
 import { GptAssistAudienceSchema } from "../domain.js";
 
@@ -20,6 +24,8 @@ const OpenAiDraftResponseSchema = z
     missingInfoSuggestions: z.array(z.string().trim().min(1)).min(1),
     investigationSteps: z.array(z.string().trim().min(1)).min(1),
     tone: DraftCustomerResponseStyleSchema,
+    recommendedTone: DraftCustomerResponseStyleSchema,
+    toneReason: z.string().trim().min(1),
     audience: GptAssistAudienceSchema,
   })
   .strict();
@@ -29,7 +35,7 @@ export interface CustomerResponseDraftInput {
   outcome: ExpectedOutcome;
   knowledgeArticles: readonly KnowledgeArticle[];
   deterministicDraft: string;
-  responseStyle: DraftCustomerResponseStyle;
+  responseStyle: DraftCustomerResponseStyleInput;
 }
 
 export interface CustomerResponseDraft {
@@ -98,7 +104,7 @@ export class OpenAiCustomerResponseDraftProvider
     private readonly options: {
       apiKey: string;
       model?: string;
-      responseStyle?: DraftCustomerResponseStyle;
+      responseStyle?: DraftCustomerResponseStyleInput;
       fetch?: FetchLike;
     },
   ) {}
@@ -157,6 +163,23 @@ export class OpenAiCustomerResponseDraftProvider
                   ],
                   description: "Tone used for the draft response.",
                 },
+                recommendedTone: {
+                  type: "string",
+                  enum: [
+                    "balanced",
+                    "concise",
+                    "empathetic",
+                    "technical",
+                    "executive-update",
+                  ],
+                  description:
+                    "Best support tone for the requester and ticket context.",
+                },
+                toneReason: {
+                  type: "string",
+                  description:
+                    "Brief reason for the recommended tone using trusted context.",
+                },
                 audience: {
                   type: "string",
                   enum: ["merchant-admin", "developer", "executive"],
@@ -168,6 +191,8 @@ export class OpenAiCustomerResponseDraftProvider
                 "missingInfoSuggestions",
                 "investigationSteps",
                 "tone",
+                "recommendedTone",
+                "toneReason",
                 "audience",
               ],
             },
@@ -188,6 +213,8 @@ export class OpenAiCustomerResponseDraftProvider
     const parsed = OpenAiDraftResponseSchema.parse(
       JSON.parse(extractResponseText(JSON.parse(raw))),
     );
+    const selectedTone =
+      input.responseStyle === "auto" ? parsed.recommendedTone : input.responseStyle;
     return {
       source: "openai",
       response: parsed.draftCustomerResponse,
@@ -195,7 +222,10 @@ export class OpenAiCustomerResponseDraftProvider
         source: "openai",
         missingInfoSuggestions: parsed.missingInfoSuggestions,
         investigationSteps: parsed.investigationSteps,
-        tone: parsed.tone,
+        tone: selectedTone,
+        recommendedTone: parsed.recommendedTone,
+        selectedTone,
+        toneReason: parsed.toneReason,
         audience: parsed.audience,
         checks: [],
       },
@@ -205,7 +235,7 @@ export class OpenAiCustomerResponseDraftProvider
 
 export function createCustomerResponseDraftProviderFromEnv(
   env: NodeJS.ProcessEnv,
-  options: { responseStyle?: DraftCustomerResponseStyle } = {},
+  options: { responseStyle?: DraftCustomerResponseStyleInput } = {},
 ): CustomerResponseDraftProvider | undefined {
   const configured = DraftProviderSchema.default("deterministic").parse(
     env.APPROVAL_DRAFT_PROVIDER,
@@ -224,7 +254,7 @@ export function createCustomerResponseDraftProviderFromEnv(
     model: env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
     responseStyle:
       options.responseStyle ??
-      DraftCustomerResponseStyleSchema.default("balanced").parse(
+      DraftCustomerResponseStyleInputSchema.default("auto").parse(
         env.APPROVAL_RESPONSE_STYLE,
       ),
   });
@@ -392,13 +422,51 @@ export function buildDeterministicGptAssist(
   source: DraftCustomerResponseSource,
   checks: DraftCustomerResponseCheck[],
 ): GptAssist {
+  const tone = recommendTone(input);
   return {
     source,
     missingInfoSuggestions: buildMissingInfoSuggestions(input),
     investigationSteps: buildInvestigationSteps(input),
-    tone: input.responseStyle,
-    audience: classifyAssistAudience(input),
+    tone: tone.selectedTone,
+    recommendedTone: tone.recommendedTone,
+    selectedTone: tone.selectedTone,
+    toneReason: tone.toneReason,
+    audience: tone.audience,
     checks,
+  };
+}
+
+function recommendTone(input: CustomerResponseDraftInput): {
+  recommendedTone: DraftCustomerResponseStyle;
+  selectedTone: DraftCustomerResponseStyle;
+  toneReason: string;
+  audience: GptAssist["audience"];
+} {
+  const requester = input.ticket.requester;
+  const audience = classifyAssistAudience(input);
+  let recommendedTone: DraftCustomerResponseStyle = "balanced";
+  let toneReason = "Balanced tone fits the available requester and ticket context.";
+
+  if (requester?.seniority === "executive") {
+    recommendedTone = "executive-update";
+    toneReason = `${requester.role} requester needs a concise business-impact update.`;
+  } else if (requester?.technicalLevel === "developer") {
+    recommendedTone = "technical";
+    toneReason = `${requester.role} requester can use precise technical evidence and investigation steps.`;
+  } else if (requester?.technicalLevel === "non-technical") {
+    recommendedTone = "empathetic";
+    toneReason = `${requester.role} requester is likely non-technical, so use plain language and acknowledge impact.`;
+  } else if (input.outcome.requiredEscalations.includes("outage")) {
+    recommendedTone = "concise";
+    toneReason = "Potential incident context benefits from a concise status update.";
+  }
+
+  return {
+    recommendedTone,
+    selectedTone:
+      input.responseStyle === "auto" ? recommendedTone : input.responseStyle,
+    toneReason,
+    audience,
   };
 }
 
@@ -474,8 +542,17 @@ function buildInvestigationSteps(input: CustomerResponseDraftInput): string[] {
 function classifyAssistAudience(
   input: CustomerResponseDraftInput,
 ): GptAssist["audience"] {
-  if (input.responseStyle === "executive-update") {
+  if (
+    input.responseStyle === "executive-update" ||
+    input.ticket.requester?.seniority === "executive"
+  ) {
     return "executive";
+  }
+  if (input.ticket.requester?.technicalLevel === "developer") {
+    return "developer";
+  }
+  if (input.ticket.requester?.technicalLevel === "non-technical") {
+    return "merchant-admin";
   }
   const text = [
     input.ticket.subject,
@@ -511,7 +588,7 @@ function pushCheck(input: {
   }
 }
 
-function buildDraftInstructions(style: DraftCustomerResponseStyle): string {
+function buildDraftInstructions(style: DraftCustomerResponseStyleInput): string {
   return [
     "You draft customer-facing B2B SaaS support responses for human review.",
     "Use only the trusted ticket fields, routing outcome, and knowledge article excerpts in the input.",
@@ -524,18 +601,20 @@ function buildDraftInstructions(style: DraftCustomerResponseStyle): string {
   ].join(" ");
 }
 
-function responseStyleInstruction(style: DraftCustomerResponseStyle): string {
+function responseStyleInstruction(style: DraftCustomerResponseStyleInput): string {
   switch (style) {
+    case "auto":
+      return "Analyze requester metadata and ticket context, recommend the best support tone, and draft using that recommended tone.";
     case "balanced":
-      return "Use a balanced support tone: clear, calm, and specific.";
+      return "Use a balanced support tone as a manual override: clear, calm, and specific.";
     case "concise":
-      return "Use a concise support tone: short paragraphs, no extra explanation, and only essential questions.";
+      return "Use a concise support tone as a manual override: short paragraphs, no extra explanation, and only essential questions.";
     case "empathetic":
-      return "Use an empathetic support tone: acknowledge impact, stay calm, and avoid blame.";
+      return "Use an empathetic support tone as a manual override: acknowledge impact, stay calm, and avoid blame.";
     case "technical":
-      return "Use a technical support tone: include precise evidence requests and integration details for an admin or developer.";
+      return "Use a technical support tone as a manual override: include precise evidence requests and integration details for an admin or developer.";
     case "executive-update":
-      return "Use an executive update style: summarize impact, ownership, next step, and customer action in plain business language.";
+      return "Use an executive update style as a manual override: summarize impact, ownership, next step, and customer action in plain business language.";
   }
 }
 
@@ -545,10 +624,12 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
       ticket: {
         id: input.ticket.id,
         customer: input.ticket.customer,
+        requester: input.ticket.requester,
         subject: input.ticket.subject,
         description: input.ticket.description,
         tags: input.ticket.tags,
       },
+      requestedResponseStyle: input.responseStyle,
       expectedOutcome: {
         category: input.outcome.category,
         priority: input.outcome.acceptablePriorities[0],

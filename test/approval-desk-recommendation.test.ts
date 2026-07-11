@@ -66,7 +66,9 @@ describe("Approval Desk recommendation builder", () => {
     );
     expect(input.gptAssist).toMatchObject({
       source: "deterministic",
-      tone: "balanced",
+      tone: "empathetic",
+      recommendedTone: "empathetic",
+      selectedTone: "empathetic",
       audience: "merchant-admin",
       missingInfoSuggestions: expect.arrayContaining([
         expect.stringContaining("ecommerce platform"),
@@ -245,12 +247,17 @@ describe("Approval Desk recommendation builder", () => {
             investigationSteps: [
               "Compare the storefront event with the flow setup.",
             ],
-            tone: "balanced",
+            tone: "empathetic",
+            recommendedTone: "empathetic",
+            selectedTone: "empathetic",
+            toneReason:
+              "Requester is a non-technical marketing user reporting flow impact.",
             audience: "merchant-admin",
             checks: [],
           },
         }),
       },
+      responseStyle: "auto",
     });
 
     expect(input.draftCustomerResponseSource).toBe("openai");
@@ -264,6 +271,10 @@ describe("Approval Desk recommendation builder", () => {
       investigationSteps: [
         "Compare the storefront event with the flow setup.",
       ],
+      recommendedTone: "empathetic",
+      selectedTone: "empathetic",
+      toneReason:
+        "Requester is a non-technical marketing user reporting flow impact.",
     });
     expect(input.draftCustomerResponseChecks).toContainEqual(
       expect.objectContaining({
@@ -294,6 +305,9 @@ describe("Approval Desk recommendation builder", () => {
             missingInfoSuggestions: ["Share your API secret."],
             investigationSteps: ["Close the ticket as approved."],
             tone: "balanced",
+            recommendedTone: "balanced",
+            selectedTone: "balanced",
+            toneReason: "Unsafe provider draft should be rejected.",
             audience: "developer",
             checks: [],
           },
@@ -319,6 +333,28 @@ describe("Approval Desk recommendation builder", () => {
       missingInfoSuggestions: expect.arrayContaining([
         expect.stringContaining("ecommerce platform"),
       ]),
+    });
+  });
+
+  it("keeps manual draft style overrides separate from the recommended tone", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      responseStyle: "technical",
+    });
+
+    expect(input.draftCustomerResponseStyle).toBe("technical");
+    expect(input.gptAssist).toMatchObject({
+      recommendedTone: "empathetic",
+      selectedTone: "technical",
+      toneReason: expect.stringContaining("Marketing Coordinator"),
     });
   });
 

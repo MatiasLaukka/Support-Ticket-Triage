@@ -26,6 +26,13 @@ const ticket = {
     region: "eu-west",
     vip: false,
   },
+  requester: {
+    name: "Maya Chen",
+    role: "Marketing Coordinator",
+    department: "Marketing",
+    technicalLevel: "non-technical",
+    seniority: "individual-contributor",
+  },
   subject: "API requests return 503",
   description: "Production requests fail consistently.",
   status: "triage",
@@ -84,6 +91,18 @@ describe("domain contracts", () => {
 
   it("parses a complete valid ticket", () => {
     expect(TicketSchema.parse(ticket)).toEqual(ticket);
+  });
+
+  it("rejects invalid requester metadata", () => {
+    expect(
+      TicketSchema.safeParse({
+        ...ticket,
+        requester: {
+          ...ticket.requester,
+          technicalLevel: "wizard",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("defaults absent related ticket IDs to an empty array", () => {
@@ -180,6 +199,10 @@ describe("domain contracts", () => {
             "Check whether the profile timeline has delayed updates.",
           ],
           tone: "empathetic",
+          recommendedTone: "empathetic",
+          selectedTone: "empathetic",
+          toneReason:
+            "Requester is a non-technical marketing user reporting business impact.",
           audience: "merchant-admin",
           checks: [
             {
@@ -208,6 +231,9 @@ describe("domain contracts", () => {
         missingInfoSuggestions: [],
         investigationSteps: ["Check the profile timeline."],
         tone: "balanced",
+        recommendedTone: "balanced",
+        selectedTone: "balanced",
+        toneReason: "Balanced tone fits the requester context.",
         audience: "merchant-admin",
         checks: [],
       },

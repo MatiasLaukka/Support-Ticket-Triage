@@ -8,6 +8,7 @@ import {
   type Category,
   type ExpectedOutcome,
   type Priority,
+  type Requester,
   type RequiredEscalation,
   type Team,
   type Ticket,
@@ -25,6 +26,7 @@ interface TicketInput {
   responseDueOffsetMinutes: number;
   breached?: boolean;
   customer: Ticket["customer"];
+  requester?: Requester;
   subject: string;
   description: string;
   status: TicketStatus;
@@ -63,6 +65,7 @@ function makeTicket(input: TicketInput): Ticket {
     createdAt: timestamp(input.createdOffsetMinutes),
     updatedAt: timestamp(input.updatedOffsetMinutes),
     customer: input.customer,
+    requester: input.requester ?? requesterFor(input.number),
     subject: input.subject,
     description: input.description,
     status: input.status,
@@ -77,6 +80,92 @@ function makeTicket(input: TicketInput): Ticket {
     },
     relatedTicketIds: input.relatedTicketIds ?? [],
     revision: input.revision ?? 0,
+  };
+}
+
+function requesterFor(number: number): Requester {
+  const requesters: Record<number, Requester> = {
+    1001: marketingManager("Maya Chen", "Ecommerce Manager"),
+    1002: developer("Jonas Berg", "Integration Developer"),
+    1003: operations("Elena Rossi", "Support Operations Manager"),
+    1004: developer("Samir Patel", "Security Engineer"),
+    1005: marketing("Avery Brooks", "Marketing Coordinator"),
+    1006: executive("Priya Shah", "CMO"),
+    1007: developer("Niko Tan", "Backend Developer"),
+    1008: developer("Lina Weber", "Integration Engineer"),
+    1009: marketingManager("Grace Morgan", "Campaign Manager"),
+    1010: operations("Jamie Lee", "Store Operations Associate"),
+    1011: marketing("Sofia Novak", "Lifecycle Marketing Specialist"),
+    1012: marketingManager("Noah Kim", "CRM Manager"),
+    1013: marketingManager("Eva Laurent", "Email Marketing Manager"),
+    1014: marketing("Theo Martin", "Marketing Coordinator"),
+    1015: operations("Iris Chen", "Customer Data Specialist"),
+    1016: marketingManager("Luca Silva", "Growth Manager"),
+    1017: marketing("Mia Johnson", "SMS Marketing Coordinator"),
+    1018: operations("Owen Miller", "Ecommerce Operations Manager"),
+    1019: executive("Amara Okafor", "CTO"),
+    1020: operations("Felix Bauer", "Catalog Operations Manager"),
+    1021: marketingManager("Hana Sato", "Campaign Manager"),
+    1022: marketing("Clara Jensen", "Marketing Analyst"),
+    1023: developer("Mateo Garcia", "API Developer"),
+    1024: marketing("Nina Patel", "Marketing Coordinator"),
+    1025: executive("Daniel Evans", "VP Marketing"),
+    1026: operations("Olivia Brown", "Support Operations Specialist"),
+    1027: developer("Kai Nakamura", "Tracking Engineer"),
+    1028: developer("Lea Fischer", "Platform Engineer"),
+    1029: operations("Marcus Hill", "Operations Manager"),
+    1030: operations("Yara Haddad", "Customer Success Manager"),
+  };
+  return requesters[number] ?? operations("Alex Morgan", "Support Manager");
+}
+
+function marketing(name: string, role: string): Requester {
+  return {
+    name,
+    role,
+    department: "Marketing",
+    technicalLevel: "non-technical",
+    seniority: "individual-contributor",
+  };
+}
+
+function marketingManager(name: string, role: string): Requester {
+  return {
+    name,
+    role,
+    department: "Marketing",
+    technicalLevel: "technical",
+    seniority: "manager",
+  };
+}
+
+function developer(name: string, role: string): Requester {
+  return {
+    name,
+    role,
+    department: "Engineering",
+    technicalLevel: "developer",
+    seniority: "individual-contributor",
+  };
+}
+
+function operations(name: string, role: string): Requester {
+  return {
+    name,
+    role,
+    department: "Operations",
+    technicalLevel: "technical",
+    seniority: "manager",
+  };
+}
+
+function executive(name: string, role: string): Requester {
+  return {
+    name,
+    role,
+    department: "Executive",
+    technicalLevel: role === "CTO" ? "developer" : "technical",
+    seniority: "executive",
   };
 }
 

@@ -76,6 +76,9 @@ describe("TriageService", () => {
             "Compare the event timestamp with the profile timeline.",
           ],
           tone: "technical",
+          recommendedTone: "technical",
+          selectedTone: "technical",
+          toneReason: "Requester can use technical troubleshooting details.",
           audience: "developer",
           checks: [
             {

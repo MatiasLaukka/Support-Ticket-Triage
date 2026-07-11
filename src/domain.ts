@@ -61,6 +61,15 @@ export const DraftCustomerResponseStyleSchema = z.enum([
   "executive-update",
 ]);
 
+export const DraftCustomerResponseStyleInputSchema = z.enum([
+  "auto",
+  "balanced",
+  "concise",
+  "empathetic",
+  "technical",
+  "executive-update",
+]);
+
 export const DraftCustomerResponseCheckSchema = z
   .object({
     id: SlugSchema,
@@ -88,6 +97,9 @@ export const GptAssistSchema = z
     missingInfoSuggestions: UniqueNonBlankStringsSchema.min(1),
     investigationSteps: UniqueNonBlankStringsSchema.min(1),
     tone: DraftCustomerResponseStyleSchema,
+    recommendedTone: DraftCustomerResponseStyleSchema,
+    selectedTone: DraftCustomerResponseStyleSchema,
+    toneReason: NonBlankStringSchema,
     audience: GptAssistAudienceSchema,
     checks: z.array(DraftCustomerResponseCheckSchema),
   })
@@ -111,6 +123,28 @@ export const CustomerSchema = z
   })
   .strict();
 
+export const RequesterTechnicalLevelSchema = z.enum([
+  "non-technical",
+  "technical",
+  "developer",
+]);
+
+export const RequesterSenioritySchema = z.enum([
+  "individual-contributor",
+  "manager",
+  "executive",
+]);
+
+export const RequesterSchema = z
+  .object({
+    name: NonBlankStringSchema,
+    role: NonBlankStringSchema,
+    department: NonBlankStringSchema,
+    technicalLevel: RequesterTechnicalLevelSchema,
+    seniority: RequesterSenioritySchema,
+  })
+  .strict();
+
 export const SLASchema = z
   .object({
     responseDueAt: IsoTimestampSchema,
@@ -124,6 +158,7 @@ export const TicketSchema = z
     createdAt: IsoTimestampSchema,
     updatedAt: IsoTimestampSchema,
     customer: CustomerSchema,
+    requester: RequesterSchema.optional(),
     subject: NonBlankStringSchema,
     description: NonBlankStringSchema,
     status: TicketStatusSchema,
@@ -378,12 +413,20 @@ export type DraftCustomerResponseSource = z.infer<
 export type DraftCustomerResponseStyle = z.infer<
   typeof DraftCustomerResponseStyleSchema
 >;
+export type DraftCustomerResponseStyleInput = z.infer<
+  typeof DraftCustomerResponseStyleInputSchema
+>;
 export type DraftCustomerResponseCheck = z.infer<
   typeof DraftCustomerResponseCheckSchema
 >;
 export type GptAssistAudience = z.infer<typeof GptAssistAudienceSchema>;
 export type GptAssist = z.infer<typeof GptAssistSchema>;
 export type Customer = z.infer<typeof CustomerSchema>;
+export type RequesterTechnicalLevel = z.infer<
+  typeof RequesterTechnicalLevelSchema
+>;
+export type RequesterSeniority = z.infer<typeof RequesterSenioritySchema>;
+export type Requester = z.infer<typeof RequesterSchema>;
 export type SLA = z.infer<typeof SLASchema>;
 export type Ticket = z.infer<typeof TicketSchema>;
 export type KnowledgeArticle = z.infer<typeof KnowledgeArticleSchema>;

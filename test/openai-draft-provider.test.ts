@@ -34,7 +34,10 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                           "Compare the storefront event with the profile timeline.",
                           "Review flow filters before recommending a setup change.",
                         ],
-                        tone: "balanced",
+                        tone: "empathetic",
+                        recommendedTone: "empathetic",
+                        toneReason:
+                          "Requester is a non-technical marketing coordinator reporting flow impact.",
                         audience: "merchant-admin",
                       }),
                     },
@@ -51,7 +54,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       outcome,
       knowledgeArticles: [article],
       deterministicDraft: "Fallback draft.",
-      responseStyle: "balanced",
+      responseStyle: "auto",
     });
 
     expect(draft).toEqual({
@@ -67,7 +70,11 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
           "Compare the storefront event with the profile timeline.",
           "Review flow filters before recommending a setup change.",
         ],
-        tone: "balanced",
+        tone: "empathetic",
+        recommendedTone: "empathetic",
+        selectedTone: "empathetic",
+        toneReason:
+          "Requester is a non-technical marketing coordinator reporting flow impact.",
         audience: "merchant-admin",
         checks: [],
       },
@@ -88,6 +95,10 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       },
     });
     expect(requests[0]!.init.body).toContain(article.body);
+    expect(requests[0]!.init.body).toContain("Marketing Coordinator");
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "recommend the best support tone",
+    );
   });
 
   it("includes the selected response style in the drafting instructions", async () => {
@@ -118,6 +129,9 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                           "Confirm impact and owner before the next update.",
                         ],
                         tone: "executive-update",
+                        recommendedTone: "empathetic",
+                        toneReason:
+                          "Manual reviewer override selected executive update.",
                         audience: "executive",
                       }),
                     },
@@ -139,6 +153,9 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
 
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
       "executive update",
+    );
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "manual override",
     );
   });
 
@@ -200,6 +217,13 @@ const ticket: Ticket = {
     plan: "enterprise",
     region: "eu-west",
     vip: true,
+  },
+  requester: {
+    name: "Avery Brooks",
+    role: "Marketing Coordinator",
+    department: "Marketing",
+    technicalLevel: "non-technical",
+    seniority: "individual-contributor",
   },
   subject: "Browse Abandonment flow not starting",
   description: "Viewed Product events are visible but the flow does not start.",

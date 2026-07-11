@@ -173,6 +173,17 @@ describe("generated support fixtures", () => {
         "us-west",
       ]),
     );
+    expect(
+      new Set(tickets.map(({ requester }) => requester?.department)),
+    ).toEqual(
+      new Set(["Engineering", "Executive", "Marketing", "Operations"]),
+    );
+    expect(
+      new Set(tickets.map(({ requester }) => requester?.technicalLevel)),
+    ).toEqual(new Set(["developer", "non-technical", "technical"]));
+    expect(tickets.every(({ requester }) => requester !== undefined)).toBe(
+      true,
+    );
   });
 
   it("contains the required marketing automation, safety, duplicate, SLA, and ambiguity scenarios", () => {

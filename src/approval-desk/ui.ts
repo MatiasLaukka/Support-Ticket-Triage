@@ -415,6 +415,7 @@ export const approvalDeskHtml = `<!doctype html>
           <label>
             Draft style
             <select id="draftStyle">
+              <option value="auto" selected>Auto recommended</option>
               <option value="balanced">Balanced</option>
               <option value="concise">Concise</option>
               <option value="empathetic">Empathetic</option>
@@ -755,17 +756,23 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/recommendations', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk',
-            responseStyle: els.draftStyle.value
-          })
-        });
-        state.recommendation = data.recommendation;
-        renderRecommendation();
-        setResult(data);
-        await refreshEvidenceBestEffort();
+        els.recommendationPanel.innerHTML = '<div class="hero-card"><strong>Generating GPT draft and assist...</strong><p class="hint">Creating a guarded recommendation from local ticket facts and retrieved knowledge.</p></div>';
+        els.createRecommendation.disabled = true;
+        try {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/recommendations', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk',
+              responseStyle: els.draftStyle.value
+            })
+          });
+          state.recommendation = data.recommendation;
+          renderRecommendation();
+          setResult(data);
+          await refreshEvidenceBestEffort();
+        } finally {
+          els.createRecommendation.disabled = false;
+        }
       }
 
       async function approveRecommendation() {
@@ -952,11 +959,13 @@ export const approvalDeskHtml = `<!doctype html>
         }
         return '<div class="hero-card description"><strong>GPT Assist</strong>' +
           '<div class="chips">' +
-            chip('Source: ' + (assist.source ?? 'unknown')) +
-            chip('Tone: ' + (assist.tone ?? 'balanced')) +
-            chip('Audience: ' + (assist.audience ?? 'merchant-admin')) +
-            chip('Checks: ' + formatDraftCheckSummary(assist.checks)) +
+             chip('Source: ' + (assist.source ?? 'unknown')) +
+             chip('Recommended: ' + (assist.recommendedTone ?? assist.tone ?? 'balanced')) +
+             chip('Selected: ' + (assist.selectedTone ?? assist.tone ?? 'balanced')) +
+             chip('Audience: ' + (assist.audience ?? 'merchant-admin')) +
+             chip('Checks: ' + formatDraftCheckSummary(assist.checks)) +
           '</div>' +
+          '<p class="meta"><strong>Tone reason</strong> ' + escapeHtml(assist.toneReason ?? 'Recommended from requester and ticket context.') + '</p>' +
           '<p class="meta"><strong>Likely missing info</strong> ' + escapeHtml(formatAssistList(assist.missingInfoSuggestions)) + '</p>' +
           '<p class="meta"><strong>Investigation steps</strong> ' + escapeHtml(formatAssistList(assist.investigationSteps)) + '</p>' +
           '<p class="meta">Advisory only. The customer response still requires reviewer approval.</p>' +

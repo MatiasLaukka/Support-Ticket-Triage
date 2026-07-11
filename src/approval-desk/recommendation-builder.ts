@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   CategorySchema,
   type KnowledgeArticle,
-  type DraftCustomerResponseStyle,
+  type DraftCustomerResponseStyleInput,
   PrioritySchema,
   RequiredEscalationSchema,
   TeamSchema,
@@ -109,6 +109,18 @@ export function buildApprovalDeskRecommendationInput(input: {
     },
   ];
 
+  const deterministicAssist = buildDeterministicGptAssist(
+    {
+      ticket,
+      outcome,
+      knowledgeArticles: [],
+      deterministicDraft: draftCustomerResponse,
+      responseStyle: "auto",
+    },
+    "deterministic",
+    deterministicDraftChecks,
+  );
+
   return {
     ticketId: ticket.id,
     sourceRevision: ticket.revision,
@@ -126,19 +138,9 @@ export function buildApprovalDeskRecommendationInput(input: {
     knowledgeArticleIds,
     draftCustomerResponse,
     draftCustomerResponseSource: "deterministic",
-    draftCustomerResponseStyle: "balanced",
+    draftCustomerResponseStyle: deterministicAssist.selectedTone,
     draftCustomerResponseChecks: deterministicDraftChecks,
-    gptAssist: buildDeterministicGptAssist(
-      {
-        ticket,
-        outcome,
-        knowledgeArticles: [],
-        deterministicDraft: draftCustomerResponse,
-        responseStyle: "balanced",
-      },
-      "deterministic",
-      deterministicDraftChecks,
-    ),
+    gptAssist: deterministicAssist,
     rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
       ", ",
     )}.`,
@@ -157,7 +159,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   actor: string;
   knowledgeArticles: readonly KnowledgeArticle[];
   draftProvider?: CustomerResponseDraftProvider;
-  responseStyle?: DraftCustomerResponseStyle;
+  responseStyle?: DraftCustomerResponseStyleInput;
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const outcome = input.outcome;
@@ -172,7 +174,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
       outcome,
       knowledgeArticles: input.knowledgeArticles,
       deterministicDraft: base.draftCustomerResponse,
-      responseStyle: input.responseStyle ?? "balanced",
+      responseStyle: input.responseStyle ?? "auto",
     },
   });
 
@@ -180,7 +182,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     ...base,
     draftCustomerResponse: draft.response,
     draftCustomerResponseSource: draft.source,
-    draftCustomerResponseStyle: input.responseStyle ?? "balanced",
+    draftCustomerResponseStyle: draft.assist.selectedTone,
     draftCustomerResponseChecks: draft.checks,
     gptAssist: draft.assist,
   };

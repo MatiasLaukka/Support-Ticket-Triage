@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   ApprovedFieldSchema,
   CategorySchema,
+  DraftCustomerResponseStyleInputSchema,
   DraftCustomerResponseStyleSchema,
   PrioritySchema,
   TeamSchema,
@@ -45,7 +46,7 @@ const RecommendationIdSchema = z.uuid();
 const SubmitBodySchema = z
   .object({
     actor: z.string().trim().min(1).default("approval-desk"),
-    responseStyle: DraftCustomerResponseStyleSchema.default("balanced"),
+    responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
   })
   .strict();
 const ApprovalBodySchema = z
