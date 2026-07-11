@@ -14,7 +14,9 @@ import {
 import type { SubmitRecommendationInput } from "../triage-service.js";
 import {
   buildDeterministicGptAssist,
+  DEFAULT_SUPPORT_COMPANY_NAME,
   draftCustomerResponseWithFallback,
+  ensureDraftSignOff,
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
 
@@ -100,6 +102,10 @@ export function buildApprovalDeskRecommendationInput(input: {
     knowledgeArticleIds,
     escalationReasons,
   });
+  const signedDraftCustomerResponse = ensureDraftSignOff(draftCustomerResponse, {
+    actor,
+    companyName: DEFAULT_SUPPORT_COMPANY_NAME,
+  });
   const deterministicDraftChecks = [
     {
       id: "deterministic-local-draft",
@@ -114,8 +120,10 @@ export function buildApprovalDeskRecommendationInput(input: {
       ticket,
       outcome,
       knowledgeArticles: [],
-      deterministicDraft: draftCustomerResponse,
+      deterministicDraft: signedDraftCustomerResponse,
       responseStyle: "auto",
+      actor,
+      companyName: DEFAULT_SUPPORT_COMPANY_NAME,
     },
     "deterministic",
     deterministicDraftChecks,
@@ -136,7 +144,7 @@ export function buildApprovalDeskRecommendationInput(input: {
       ? [`Confirm the missing evidence for ${ticket.id} before approval.`]
       : [],
     knowledgeArticleIds,
-    draftCustomerResponse,
+    draftCustomerResponse: signedDraftCustomerResponse,
     draftCustomerResponseSource: "deterministic",
     draftCustomerResponseStyle: deterministicAssist.selectedTone,
     draftCustomerResponseChecks: deterministicDraftChecks,
@@ -175,6 +183,8 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
       knowledgeArticles: input.knowledgeArticles,
       deterministicDraft: base.draftCustomerResponse,
       responseStyle: input.responseStyle ?? "auto",
+      actor: input.actor,
+      companyName: DEFAULT_SUPPORT_COMPANY_NAME,
     },
   });
 

@@ -16,6 +16,8 @@ import type {
 import { GptAssistAudienceSchema } from "../domain.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
+export const DEFAULT_SUPPORT_COMPANY_NAME = "Northstar Marketing Support";
+const DEFAULT_SUPPORT_ACTOR = "Support Team";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DraftProviderSchema = z.enum(["deterministic", "openai"]);
 const OpenAiDraftResponseSchema = z
@@ -36,6 +38,8 @@ export interface CustomerResponseDraftInput {
   knowledgeArticles: readonly KnowledgeArticle[];
   deterministicDraft: string;
   responseStyle: DraftCustomerResponseStyleInput;
+  actor: string;
+  companyName: string;
 }
 
 export interface CustomerResponseDraft {
@@ -74,7 +78,7 @@ export class DeterministicCustomerResponseDraftProvider
   async draft(input: CustomerResponseDraftInput): Promise<CustomerResponseDraft> {
     return {
       source: "deterministic",
-      response: input.deterministicDraft,
+      response: ensureDraftSignOff(input.deterministicDraft, input),
       assist: buildDeterministicGptAssist(input, "deterministic", [
         {
           id: "deterministic-local-assist",
@@ -121,6 +125,7 @@ export class OpenAiCustomerResponseDraftProvider
         model: this.options.model ?? DEFAULT_OPENAI_MODEL,
         instructions: buildDraftInstructions(
           input.responseStyle ?? this.options.responseStyle ?? "balanced",
+          formatDraftSignOff(input),
         ),
         input: buildDraftInput(input),
         store: false,
@@ -217,7 +222,7 @@ export class OpenAiCustomerResponseDraftProvider
       input.responseStyle === "auto" ? parsed.recommendedTone : input.responseStyle;
     return {
       source: "openai",
-      response: parsed.draftCustomerResponse,
+      response: ensureDraftSignOff(parsed.draftCustomerResponse, input),
       assist: {
         source: "openai",
         missingInfoSuggestions: parsed.missingInfoSuggestions,
@@ -268,15 +273,16 @@ export async function draftCustomerResponseWithFallback(input: {
   const provider = input.provider ?? deterministic;
   try {
     const candidate = await provider.draft(input.draftInput);
+    const response = ensureDraftSignOff(candidate.response, input.draftInput);
     const validation = validateCustomerResponseDraft({
-      response: candidate.response,
+      response,
       assist: candidate.assist,
       knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
     });
     if (validation.blockingMessages.length === 0) {
       return {
         source: candidate.source,
-        response: candidate.response.trim(),
+        response,
         checks: validation.checks,
         assist: {
           ...candidate.assist,
@@ -312,7 +318,10 @@ function fallbackDraft(input: {
     [],
   );
   const validation = validateCustomerResponseDraft({
-    response: input.draftInput.deterministicDraft,
+    response: ensureDraftSignOff(
+      input.draftInput.deterministicDraft,
+      input.draftInput,
+    ),
     assist: fallbackAssist,
     knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
   });
@@ -327,7 +336,10 @@ function fallbackDraft(input: {
   ];
   return {
     source: "fallback",
-    response: input.draftInput.deterministicDraft,
+    response: ensureDraftSignOff(
+      input.draftInput.deterministicDraft,
+      input.draftInput,
+    ),
     checks,
     assist: {
       ...fallbackAssist,
@@ -588,7 +600,36 @@ function pushCheck(input: {
   }
 }
 
-function buildDraftInstructions(style: DraftCustomerResponseStyleInput): string {
+export function formatDraftSignOff(input: {
+  actor?: string;
+  companyName?: string;
+}): string {
+  const actor = displayActor(input.actor);
+  const company = input.companyName?.trim() || DEFAULT_SUPPORT_COMPANY_NAME;
+  return `Kind regards,\n${actor}\n${company}`;
+}
+
+export function ensureDraftSignOff(
+  response: string,
+  input: { actor?: string; companyName?: string },
+): string {
+  const trimmed = response.trim();
+  const signOff = formatDraftSignOff(input);
+  return trimmed.includes(signOff) ? trimmed : `${trimmed}\n\n${signOff}`;
+}
+
+function displayActor(actor: string | undefined): string {
+  const trimmed = actor?.trim();
+  if (trimmed === undefined || trimmed === "" || trimmed === "approval-desk") {
+    return DEFAULT_SUPPORT_ACTOR;
+  }
+  return trimmed;
+}
+
+function buildDraftInstructions(
+  style: DraftCustomerResponseStyleInput,
+  signOff: string,
+): string {
   return [
     "You draft customer-facing B2B SaaS support responses for human review.",
     "Use only the trusted ticket fields, routing outcome, and knowledge article excerpts in the input.",
@@ -596,6 +637,7 @@ function buildDraftInstructions(style: DraftCustomerResponseStyleInput): string 
     "Do not mention internal article IDs, internal risk labels, model behavior, approval state, or audit systems.",
     "Do not promise a fix, completion, delivery, refund, or closure unless the trusted context explicitly proves it.",
     "Use plain merchant-friendly language. Ask only for information needed to diagnose or safely resolve the issue.",
+    `End the draft exactly with this sign-off on separate lines: ${signOff}`,
     responseStyleInstruction(style),
     "Return only JSON matching the requested schema.",
   ].join(" ");

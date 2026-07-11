@@ -140,6 +140,13 @@ export const approvalDeskHtml = `<!doctype html>
         margin-top: 0.8rem;
       }
 
+      .queue-filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.75rem;
+      }
+
       .ticket-button {
         background: white;
         border: 1px solid var(--line);
@@ -148,6 +155,14 @@ export const approvalDeskHtml = `<!doctype html>
         padding: 0.8rem;
         text-align: left;
         width: 100%;
+      }
+
+      .ticket-button.state-pending {
+        border-color: #f4c542;
+      }
+
+      .ticket-button.state-approved {
+        border-color: #23a06b;
       }
 
       .ticket-button:hover,
@@ -162,9 +177,44 @@ export const approvalDeskHtml = `<!doctype html>
         font-weight: 800;
       }
 
+      .ticket-subject-line {
+        display: block;
+        font-weight: 800;
+        line-height: 1.18;
+        margin-top: 0.18rem;
+      }
+
+      .ticket-meta-line {
+        color: var(--muted);
+        display: block;
+        font-size: 0.86rem;
+        line-height: 1.3;
+        margin-top: 0.18rem;
+      }
+
       .meta {
         color: var(--muted);
         font-size: 0.88rem;
+      }
+
+      .queue-badges,
+      .setup-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.65rem;
+      }
+
+      .setup-grid {
+        align-items: end;
+      }
+
+      .setup-grid label {
+        flex: 1 1 180px;
+      }
+
+      .setup-grid button {
+        flex: 1 1 180px;
       }
 
       .details-grid {
@@ -293,6 +343,31 @@ export const approvalDeskHtml = `<!doctype html>
         margin-top: 0.2rem;
       }
 
+      .field-control {
+        align-items: end;
+        background: #fbfcff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        display: grid;
+        gap: 0.55rem;
+        grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1fr) auto;
+        padding: 0.8rem;
+      }
+
+      .field-approve-button {
+        width: auto;
+      }
+
+      .info-button {
+        align-self: center;
+        background: #eef3ff;
+        border-radius: 999px;
+        color: var(--accent-dark);
+        height: 2rem;
+        padding: 0;
+        width: 2rem;
+      }
+
       .check {
         align-items: center;
         display: flex;
@@ -380,13 +455,18 @@ export const approvalDeskHtml = `<!doctype html>
             <button id="refreshQueue" type="button" class="secondary">Refresh</button>
           </div>
           <div id="queueStatus" class="status" role="status"></div>
+          <div id="queueFilters" class="queue-filters" aria-label="Queue filters">
+            <span class="chip">Active</span>
+            <span class="chip">Pending</span>
+            <span class="chip">Approved</span>
+            <span class="chip">All</span>
+          </div>
           <div id="ticketList" class="queue-list"></div>
         </section>
 
         <section class="panel" aria-label="Selected ticket">
           <div class="split">
             <h2>Ticket</h2>
-            <button id="createRecommendation" type="button">Create recommendation</button>
           </div>
           <p class="hint">Select a ticket, then create a pending recommendation for reviewer approval.</p>
           <div id="ticketPanel">
@@ -397,6 +477,28 @@ export const approvalDeskHtml = `<!doctype html>
             <p class="hint">Raw local API result for debugging and audit verification.</p>
             <pre id="resultPanel" class="result">{}</pre>
           </details>
+          <section class="card" aria-label="Recommendation setup">
+            <h3>Recommendation setup</h3>
+            <p class="hint">Choose who signs the customer draft and let GPT recommend tone, or override it manually.</p>
+            <div class="setup-grid">
+              <label>
+                Actor
+                <input id="actor" value="approval-desk" autocomplete="off">
+              </label>
+              <label>
+                Draft style
+                <select id="draftStyle">
+                  <option value="auto" selected>Auto recommended</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="concise">Concise</option>
+                  <option value="empathetic">Empathetic</option>
+                  <option value="technical">Technical</option>
+                  <option value="executive-update">Executive update</option>
+                </select>
+              </label>
+              <button id="createRecommendation" type="button">Create recommendation</button>
+            </div>
+          </section>
         </section>
 
         <section class="panel" aria-label="Recommendation approval controls">
@@ -405,78 +507,74 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="recommendationPanel">
             <p class="hint">No recommendation created yet.</p>
           </div>
+          <div class="actions">
+            <button id="continueApproval" type="button" class="secondary" hidden>Continue to approval</button>
+          </div>
 
-          <h3>Approve proposed changes</h3>
-          <p class="hint">Toggle only the fields you want to apply. You can edit the proposed values before approving.</p>
-          <label>
-            Actor
-            <input id="actor" value="approval-desk" autocomplete="off">
-          </label>
-          <label>
-            Draft style
-            <select id="draftStyle">
-              <option value="auto" selected>Auto recommended</option>
-              <option value="balanced">Balanced</option>
-              <option value="concise">Concise</option>
-              <option value="empathetic">Empathetic</option>
-              <option value="technical">Technical</option>
-              <option value="executive-update">Executive update</option>
-            </select>
-          </label>
-
-          <div class="fields" id="fieldChoices">
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="category"> Category<small>Approve the recommended category.</small></label>
+          <section id="approvalStage" hidden>
+            <h3>Approve proposed changes</h3>
+            <p class="hint">Approve only the fields you want to apply. You can edit proposed values first.</p>
+            <div class="fields" id="fieldChoices">
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="category"> Category</label>
               <label>Recommended value<input id="categoryOverride" autocomplete="off"></label>
+              <button class="info-button" type="button" title="Approve the recommended category.">i</button>
             </div>
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="priority"> Priority<small>Approve the recommended urgency.</small></label>
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="priority"> Priority</label>
               <label>Recommended value<input id="priorityOverride" autocomplete="off"></label>
+              <button class="info-button" type="button" title="Approve the recommended urgency.">i</button>
             </div>
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="team"> Team<small>Approve the routing team.</small></label>
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="team"> Team</label>
               <label>Recommended value<input id="teamOverride" autocomplete="off"></label>
+              <button class="info-button" type="button" title="Approve the routing team.">i</button>
             </div>
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="assignee"> Assignee<small>Approve an owner if recommended.</small></label>
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="assignee"> Assignee</label>
               <label>Recommended value<input id="assigneeOverride" autocomplete="off"></label>
+              <button class="info-button" type="button" title="Approve an owner if recommended.">i</button>
             </div>
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="status"> Status<small>Approve a status change if recommended.</small></label>
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="status"> Status</label>
               <label>Recommended value<input id="statusOverride" autocomplete="off"></label>
+              <button class="info-button" type="button" title="Approve a status change if recommended.">i</button>
             </div>
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="tags"> Tags<small>Approve comma-separated ticket tags.</small></label>
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="tags"> Tags</label>
               <label>Recommended value<input id="tagsOverride" autocomplete="off"></label>
+              <button class="info-button" type="button" title="Approve comma-separated ticket tags.">i</button>
             </div>
-            <div class="approval-row">
-              <label class="check"><input type="checkbox" value="customerResponse"> Customer response<small>Approve edited customer-facing wording.</small></label>
+            <div class="field-control">
+              <label class="check"><input class="field-approve-button" type="checkbox" value="customerResponse"> Customer response</label>
               <span class="meta">Edit the full response below.</span>
+              <button class="info-button" type="button" title="Approve edited customer-facing wording.">i</button>
             </div>
-          </div>
+            </div>
 
-          <label>
-            Edited customer response
-            <textarea id="editedCustomerResponse" placeholder="Required when approving customerResponse."></textarea>
-          </label>
+            <label>
+              Edited customer response
+              <textarea id="editedCustomerResponse" placeholder="Required when approving customerResponse."></textarea>
+            </label>
 
-          <label class="check">
-            <input id="confirmApproval" type="checkbox">
-            I confirm these named fields should be applied to the ticket.
-          </label>
+            <label class="check">
+              <input id="confirmApproval" type="checkbox">
+              I confirm these named fields should be applied to the ticket.
+            </label>
 
-          <div class="actions">
-            <button id="approveButton" type="button" disabled>Approve selected fields</button>
-          </div>
+            <div class="actions">
+              <button id="approveButton" type="button" disabled>Approve selected fields</button>
+            </div>
 
-          <h3>Rejection controls</h3>
-          <label>
-            Feedback
-            <textarea id="feedback" placeholder="Explain what must change before this recommendation can be approved."></textarea>
-          </label>
-          <div class="actions">
-            <button id="rejectButton" type="button" class="danger" disabled>Reject recommendation</button>
-          </div>
+            <h3>Rejection controls</h3>
+            <label>
+              Feedback
+              <textarea id="feedback" placeholder="Explain what must change before this recommendation can be approved."></textarea>
+            </label>
+            <div class="actions">
+              <button id="rejectButton" type="button" class="danger" disabled>Reject recommendation</button>
+            </div>
+          </section>
         </section>
       </main>
     </div>
@@ -485,15 +583,18 @@ export const approvalDeskHtml = `<!doctype html>
       const state = {
         tickets: [],
         selectedTicket: null,
-        recommendation: null
+        recommendation: null,
+        stage: 'empty'
       };
 
       const els = {
         actor: document.getElementById('actor'),
+        approvalStage: document.getElementById('approvalStage'),
         assigneeOverride: document.getElementById('assigneeOverride'),
         approveButton: document.getElementById('approveButton'),
         categoryOverride: document.getElementById('categoryOverride'),
         confirmApproval: document.getElementById('confirmApproval'),
+        continueApproval: document.getElementById('continueApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
         draftStyle: document.getElementById('draftStyle'),
         editedCustomerResponse: document.getElementById('editedCustomerResponse'),
@@ -534,11 +635,14 @@ export const approvalDeskHtml = `<!doctype html>
         for (const ticket of state.tickets) {
           const button = document.createElement('button');
           button.type = 'button';
-          button.className = 'ticket-button' + (state.selectedTicket?.id === ticket.id ? ' active' : '');
+          const workflowState = ticket.recommendationSummary?.workflowState ?? 'active';
+          button.className = 'ticket-button state-' + workflowState + (state.selectedTicket?.id === ticket.id ? ' active' : '');
           button.innerHTML =
             '<span class="ticket-id">' + escapeHtml(ticket.id) + '</span>' +
-            '<strong>' + escapeHtml(ticket.subject) + '</strong>' +
-            '<span class="meta">' + escapeHtml(ticket.customer.name) + ' · rev ' + escapeHtml(ticket.revision) + '</span>';
+            '<span class="ticket-subject-line">' + escapeHtml(ticket.subject) + '</span>' +
+            '<span class="ticket-meta-line">' + escapeHtml(ticket.customer.name) + '</span>' +
+            '<span class="ticket-meta-line">rev ' + escapeHtml(ticket.revision) + ' · ' + escapeHtml(workflowState) + '</span>' +
+            renderQueueBadges(ticket);
           button.addEventListener('click', function () {
             void selectTicket(ticket.id);
           });
@@ -563,6 +667,7 @@ export const approvalDeskHtml = `<!doctype html>
           '</div>' +
           '<div class="hero-card description"><strong>Subject</strong>' + escapeHtml(ticket.subject) + '</div>' +
           '<div class="hero-card description"><strong>Description</strong>' + escapeHtml(ticket.description) + '</div>' +
+          renderRequesterCard(ticket) +
           '<details><summary>Technical ticket details</summary>' +
             '<div class="details-grid">' +
               card('ID', ticket.id) +
@@ -577,18 +682,47 @@ export const approvalDeskHtml = `<!doctype html>
           '</details>';
       }
 
+      function renderQueueBadges(ticket) {
+        const summary = ticket.recommendationSummary ?? {};
+        const badges = [
+          summary.priority ?? ticket.priority,
+          summary.slaRisk === 'likely' || ticket.sla?.breached ? 'SLA risk' : null,
+          summary.outageRisk === 'likely' ? 'Outage risk' : null,
+          summary.securityRisk === 'possible' || summary.securityRisk === 'likely' ? 'Security risk' : null
+        ].filter(Boolean);
+        if (badges.length === 0) {
+          return '';
+        }
+        return '<span class="queue-badges">' + badges.map(chip).join('') + '</span>';
+      }
+
+      function renderRequesterCard(ticket) {
+        const requester = ticket.requester;
+        if (requester === undefined || requester === null) {
+          return card('Requester', 'Unknown requester');
+        }
+        return '<div class="card requester-card">' +
+          '<strong>Requester</strong>' +
+          escapeHtml(requester.name + ' · ' + requester.role) +
+          '<span class="meta">' + escapeHtml(requester.department + ' · ' + requester.technicalLevel) + '</span>' +
+        '</div>';
+      }
+
       function renderRecommendation() {
         const recommendation = state.recommendation;
         if (recommendation === null) {
           els.recommendationPanel.innerHTML = '<p class="hint">No recommendation created yet.</p>';
+          state.stage = 'empty';
           els.editedCustomerResponse.value = '';
           clearApprovalInputs();
+          renderRecommendationStageControls();
           updateControls();
           return;
         }
         els.recommendationPanel.innerHTML =
           '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
-          '<div class="hero-card"><strong>Why this draft is safe</strong>' +
+          (state.stage === 'draft' ? '<p class="hint">Continue to approval when the draft looks ready.</p>' : '') +
+          '<details><summary>Why this draft is safe</summary>' +
             '<div class="chips">' +
               chip('Source: ' + (recommendation.draftCustomerResponseSource ?? 'legacy')) +
               chip('Style: ' + (recommendation.draftCustomerResponseStyle ?? 'balanced')) +
@@ -598,7 +732,7 @@ export const approvalDeskHtml = `<!doctype html>
             '<p>' + escapeHtml(formatDraftSafetyNarrative(recommendation)) + '</p>' +
             '<p class="meta"><strong>Retrieved context</strong> ' + escapeHtml(formatList(recommendation.knowledgeArticleIds)) + '</p>' +
             '<p class="meta"><strong>Human approval</strong> Reviewer must approve or edit before use.</p>' +
-          '</div>' +
+          '</details>' +
           renderGptAssistCard(recommendation.gptAssist) +
           '<div class="hero-card"><strong>Recommended Triage</strong>' +
             '<div class="chips">' +
@@ -638,7 +772,14 @@ export const approvalDeskHtml = `<!doctype html>
           '</details>';
         els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
         populateApprovalInputs(recommendation);
+        renderRecommendationStageControls();
         updateControls();
+      }
+
+      function renderRecommendationStageControls() {
+        const hasRecommendation = state.recommendation !== null;
+        els.continueApproval.hidden = !(hasRecommendation && state.stage === 'draft');
+        els.approvalStage.hidden = !(hasRecommendation && state.stage === 'approval');
       }
 
       function updateControls() {
@@ -745,7 +886,8 @@ export const approvalDeskHtml = `<!doctype html>
       async function selectTicket(id) {
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
         state.selectedTicket = data.ticket;
-        state.recommendation = null;
+        state.recommendation = data.latestRecommendation ?? null;
+        state.stage = state.recommendation === null ? 'empty' : 'draft';
         renderTicketList();
         renderTicket();
         renderRecommendation();
@@ -755,6 +897,15 @@ export const approvalDeskHtml = `<!doctype html>
       async function createRecommendation() {
         if (state.selectedTicket === null) {
           return;
+        }
+        if (state.recommendation?.resolution === 'pending') {
+          const confirmed = confirm('This ticket already has a pending recommendation. Create a new one and mark the old one superseded?');
+          if (!confirmed) {
+            return;
+          }
+          await rejectCurrentRecommendation('Superseded by a new recommendation from the Approval Desk.');
+          state.recommendation = null;
+          state.stage = 'empty';
         }
         els.recommendationPanel.innerHTML = '<div class="hero-card"><strong>Generating GPT draft and assist...</strong><p class="hint">Creating a guarded recommendation from local ticket facts and retrieved knowledge.</p></div>';
         els.createRecommendation.disabled = true;
@@ -767,6 +918,7 @@ export const approvalDeskHtml = `<!doctype html>
             })
           });
           state.recommendation = data.recommendation;
+          state.stage = 'draft';
           renderRecommendation();
           setResult(data);
           await refreshEvidenceBestEffort();
@@ -810,22 +962,30 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/reject', {
-          method: 'POST',
-          body: JSON.stringify({
-            ticketId: state.selectedTicket.id,
-            actor: els.actor.value.trim(),
-            feedback: els.feedback.value.trim()
-          })
-        });
+        const data = await rejectCurrentRecommendation(els.feedback.value.trim());
         resetRecommendationState();
         renderRecommendation();
         await loadMetrics(data);
         await refreshEvidenceBestEffort();
       }
 
+      async function rejectCurrentRecommendation(feedback) {
+        if (state.recommendation === null || state.selectedTicket === null) {
+          throw new Error('No recommendation selected.');
+        }
+        return requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/reject', {
+          method: 'POST',
+          body: JSON.stringify({
+            ticketId: state.selectedTicket.id,
+            actor: els.actor.value.trim(),
+            feedback
+          })
+        });
+      }
+
       function resetRecommendationState() {
         state.recommendation = null;
+        state.stage = 'empty';
         for (const field of els.fieldChoices.querySelectorAll('input[type="checkbox"]:checked')) {
           field.checked = false;
         }
@@ -957,7 +1117,7 @@ export const approvalDeskHtml = `<!doctype html>
         if (assist === undefined || assist === null) {
           return '';
         }
-        return '<div class="hero-card description"><strong>GPT Assist</strong>' +
+        return '<details class="description"><summary>GPT Assist</summary>' +
           '<div class="chips">' +
              chip('Source: ' + (assist.source ?? 'unknown')) +
              chip('Recommended: ' + (assist.recommendedTone ?? assist.tone ?? 'balanced')) +
@@ -969,7 +1129,7 @@ export const approvalDeskHtml = `<!doctype html>
           '<p class="meta"><strong>Likely missing info</strong> ' + escapeHtml(formatAssistList(assist.missingInfoSuggestions)) + '</p>' +
           '<p class="meta"><strong>Investigation steps</strong> ' + escapeHtml(formatAssistList(assist.investigationSteps)) + '</p>' +
           '<p class="meta">Advisory only. The customer response still requires reviewer approval.</p>' +
-        '</div>';
+        '</details>';
       }
 
       function formatAssistList(values) {
@@ -998,6 +1158,12 @@ export const approvalDeskHtml = `<!doctype html>
 
       els.actor.addEventListener('input', updateControls);
       els.confirmApproval.addEventListener('change', updateControls);
+      els.continueApproval.addEventListener('click', function () {
+        if (state.recommendation !== null) {
+          state.stage = 'approval';
+          renderRecommendation();
+        }
+      });
       els.editedCustomerResponse.addEventListener('input', updateControls);
       els.feedback.addEventListener('input', updateControls);
       els.fieldChoices.addEventListener('change', updateControls);

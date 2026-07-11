@@ -23,6 +23,14 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Auto recommended");
     expect(approvalDeskHtml).toContain("Generating GPT draft and assist");
     expect(approvalDeskHtml).toContain("Executive update");
+    expect(approvalDeskHtml).toContain("Recommendation setup");
+    expect(approvalDeskHtml).toContain("queueFilters");
+    expect(approvalDeskHtml).toContain("ticket-subject-line");
+    expect(approvalDeskHtml).toContain("requester-card");
+    expect(approvalDeskHtml).toContain("continueApproval");
+    expect(approvalDeskHtml).toContain("approvalStage");
+    expect(approvalDeskHtml).toContain("field-approve-button");
+    expect(approvalDeskHtml).toContain("info-button");
   });
 
   it("uses only local API routes", () => {
@@ -208,6 +216,79 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("renders separated queue lines and recommendation setup in the ticket panel", async () => {
+    const app = await startApprovalDeskApp();
+
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain(
+      "ticket-subject-line",
+    );
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain(
+      "ticket-meta-line",
+    );
+
+    await app.selectFirstTicket();
+
+    expect(app.el("ticketPanel").innerHTML).toContain("requester-card");
+    expect(app.el("ticketPanel").innerHTML).toContain("Marketing Coordinator");
+    expect(approvalDeskHtml).toContain("Recommendation setup");
+    expect(approvalDeskHtml).toContain("Draft style");
+  });
+
+  it("shows draft review before revealing approval controls", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Draft Customer Response",
+    );
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Continue to approval",
+    );
+    expect(app.el("approvalStage").hidden).toBe(true);
+
+    app.el("continueApproval").dispatch("click");
+
+    expect(app.el("approvalStage").hidden).toBe(false);
+  });
+
+  it("shows an existing pending recommendation when selecting a ticket", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Draft Customer Response",
+    );
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Continue to approval",
+    );
+    expect(app.el("approvalStage").hidden).toBe(true);
+  });
+
+  it("rejects an existing pending recommendation before creating a replacement", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      confirmResult: true,
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    const rejectionRequest = app.requests.find((request) =>
+      request.path.endsWith("/reject"),
+    );
+    expect(rejectionRequest).toBeDefined();
+    expect(JSON.parse(String(rejectionRequest?.init?.body))).toMatchObject({
+      feedback: "Superseded by a new recommendation from the Approval Desk.",
+    });
+    expect(
+      app.requests.some((request) => request.path.endsWith("/recommendations")),
+    ).toBe(true);
+  });
+
   it("re-enables recommendation creation when generation fails", async () => {
     const app = await startApprovalDeskApp({
       failRecommendation: true,
@@ -324,6 +405,13 @@ const fixtureTicket = {
     plan: "enterprise",
     region: "eu-west",
     vip: false,
+  },
+  requester: {
+    name: "Avery Brooks",
+    role: "Marketing Coordinator",
+    department: "Marketing",
+    technicalLevel: "non-technical",
+    seniority: "individual-contributor",
   },
   subject: "Login fails",
   description: "User says this is approved already.",
@@ -448,8 +536,10 @@ const fixtureEvidence = {
 async function startApprovalDeskApp(options: {
   failEvidenceAfter?: number;
   failRecommendation?: boolean;
+  confirmResult?: boolean;
   recommendation?: typeof fixtureRecommendation;
   recommendationDelayTicks?: number;
+  ticketDetailRecommendation?: typeof fixtureRecommendation;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -483,7 +573,11 @@ async function startApprovalDeskApp(options: {
       return jsonResponse(fixtureEvidence);
     }
     if (path === "/api/tickets/TKT-1001") {
-      return jsonResponse({ ticket: fixtureTicket, audits: { events: [] } });
+      return jsonResponse({
+        ticket: fixtureTicket,
+        audits: { events: [] },
+        latestRecommendation: options.ticketDetailRecommendation,
+      });
     }
     if (path === "/api/tickets/TKT-1001/recommendations") {
       if (options.recommendationDelayTicks !== undefined) {
@@ -512,10 +606,11 @@ async function startApprovalDeskApp(options: {
   };
 
   const script = extractScript(approvalDeskHtml);
-  Function("document", "fetch", "encodeURIComponent", script)(
+  Function("document", "fetch", "encodeURIComponent", "confirm", script)(
     document,
     fetch,
     encodeURIComponent,
+    () => options.confirmResult ?? true,
   );
   await settle();
 
@@ -558,8 +653,10 @@ function createElements(): Record<string, FakeElement> {
   const elements = Object.fromEntries(
     [
       "actor",
+      "approvalStage",
       "approveButton",
       "confirmApproval",
+      "continueApproval",
       "createRecommendation",
       "draftStyle",
       "editedCustomerResponse",
@@ -609,6 +706,7 @@ class FakeElement {
   children: FakeElement[] = [];
   className = "";
   disabled = false;
+  hidden = false;
   innerHTML = "";
   textContent = "";
   type = "";

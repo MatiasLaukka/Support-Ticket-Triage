@@ -66,6 +66,46 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("includes recommendation summaries in ticket list responses", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const list = await json("/api/tickets?status=triage&limit=20");
+
+    const item = list.body.items.find((ticket: any) => ticket.id === "TKT-1005");
+    expect(item.recommendationSummary).toMatchObject({
+      latestRecommendationId: created.body.recommendation.id,
+      latestResolution: "pending",
+      hasPendingRecommendation: true,
+      hasApprovedRecommendation: false,
+      workflowState: "pending",
+    });
+  });
+
+  it("includes latest recommendation in ticket detail responses", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const detail = await json("/api/tickets/TKT-1005");
+
+    expect(detail.body.recommendationSummary).toMatchObject({
+      latestRecommendationId: created.body.recommendation.id,
+      latestResolution: "pending",
+      workflowState: "pending",
+    });
+    expect(detail.body.latestRecommendation).toMatchObject({
+      id: created.body.recommendation.id,
+      ticketId: "TKT-1005",
+      resolution: "pending",
+    });
+  });
+
   it("maps missing tickets to 404", async () => {
     const { json } = await startFixture();
 
@@ -166,7 +206,7 @@ describe("createApprovalDeskHttpServer", () => {
       draftCustomerResponseSource: "openai",
       draftCustomerResponseStyle: "technical",
       draftCustomerResponse:
-        "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+        "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.\n\nKind regards,\nSupport Team\nNorthstar Marketing Support",
       gptAssist: {
         source: "openai",
         tone: "technical",
@@ -212,6 +252,23 @@ describe("createApprovalDeskHttpServer", () => {
         toneReason: expect.stringContaining("Marketing Coordinator"),
       },
     });
+  });
+
+  it("adds reviewer and company sign-off to created customer drafts", async () => {
+    const { json } = await startFixture();
+
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "Matias Laukka",
+        responseStyle: "auto",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation.draftCustomerResponse).toContain(
+      "Kind regards,\nMatias Laukka\nNorthstar Marketing Support",
+    );
   });
 
   it("reports automation evidence after recommendation submission", async () => {

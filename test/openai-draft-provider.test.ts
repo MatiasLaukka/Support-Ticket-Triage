@@ -55,11 +55,14 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       knowledgeArticles: [article],
       deterministicDraft: "Fallback draft.",
       responseStyle: "auto",
+      actor: "approval-desk",
+      companyName: "Northstar Marketing Support",
     });
 
     expect(draft).toEqual({
       source: "openai",
-      response: "We are checking the storefront event and flow setup.",
+      response:
+        "We are checking the storefront event and flow setup.\n\nKind regards,\nSupport Team\nNorthstar Marketing Support",
       assist: {
         source: "openai",
         missingInfoSuggestions: [
@@ -149,6 +152,8 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       knowledgeArticles: [article],
       deterministicDraft: "Fallback draft.",
       responseStyle: "executive-update",
+      actor: "approval-desk",
+      companyName: "Northstar Marketing Support",
     });
 
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
@@ -157,6 +162,60 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
       "manual override",
     );
+  });
+
+  it("adds the reviewer and company sign-off to provider drafts", async () => {
+    const requests: Array<{ url: string; init: any }> = [];
+    const provider = new OpenAiCustomerResponseDraftProvider({
+      apiKey: "sk-test-secret",
+      model: "gpt-5.6-luna",
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              output: [
+                {
+                  content: [
+                    {
+                      type: "output_text",
+                      text: JSON.stringify({
+                        draftCustomerResponse:
+                          "We are checking the storefront event and flow setup.",
+                        missingInfoSuggestions: ["Share the flow ID."],
+                        investigationSteps: ["Compare the flow setup."],
+                        tone: "empathetic",
+                        recommendedTone: "empathetic",
+                        toneReason: "Requester is non-technical.",
+                        audience: "merchant-admin",
+                      }),
+                    },
+                  ],
+                },
+              ],
+            }),
+        };
+      },
+    });
+
+    const draft = await provider.draft({
+      ticket,
+      outcome,
+      knowledgeArticles: [article],
+      deterministicDraft: "Fallback draft.",
+      responseStyle: "auto",
+      actor: "Matias Laukka",
+      companyName: "Northstar Marketing Support",
+    });
+
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "Kind regards",
+    );
+    expect(draft.response).toContain("Kind regards,");
+    expect(draft.response).toContain("Matias Laukka");
+    expect(draft.response).toContain("Northstar Marketing Support");
   });
 
   it("returns an unavailable OpenAI provider when enabled without an API key", async () => {
@@ -171,6 +230,8 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
         knowledgeArticles: [],
         deterministicDraft: "Fallback draft.",
         responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
       }),
     ).rejects.toThrow("OPENAI_API_KEY is not set");
   });
@@ -201,6 +262,8 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
         knowledgeArticles: [],
         deterministicDraft: "Fallback draft.",
         responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
       }),
     ).rejects.toThrow(
       "OpenAI drafting request failed with 429 (insufficient_quota): You exceeded your current quota for [redacted-api-key], please check your plan and billing details.",

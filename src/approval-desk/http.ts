@@ -11,6 +11,7 @@ import {
   TicketIdSchema,
   TicketStatusSchema,
 } from "../domain.js";
+import type { TriageRecommendation } from "../domain.js";
 import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
@@ -244,7 +245,20 @@ async function listTickets({ deps, url }: RouteContext): Promise<unknown> {
     offset: optionalParam(url.searchParams, "offset"),
     limit: optionalParam(url.searchParams, "limit"),
   });
-  return deps.tickets.list(query);
+  const [tickets, recommendations] = await Promise.all([
+    deps.tickets.list(query),
+    deps.recommendations.list(),
+  ]);
+  return {
+    ...tickets,
+    items: tickets.items.map((ticket) => ({
+      ...ticket,
+      recommendationSummary: summarizeRecommendationsForTicket(
+        ticket.id,
+        recommendations,
+      ).summary,
+    })),
+  };
 }
 
 async function getTicketDetail(
@@ -252,11 +266,75 @@ async function getTicketDetail(
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, recommendations] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.listPage({ ticketId, offset: 0, limit: 10 }),
+    deps.recommendations.list(),
   ]);
-  return { ticket, audits };
+  const recommendation = summarizeRecommendationsForTicket(
+    ticket.id,
+    recommendations,
+  );
+  return {
+    ticket,
+    audits,
+    recommendationSummary: recommendation.summary,
+    latestRecommendation: recommendation.latest,
+  };
+}
+
+type RecommendationWorkflowState = "active" | "pending" | "approved";
+
+function summarizeRecommendationsForTicket(
+  ticketId: string,
+  recommendations: readonly TriageRecommendation[],
+): {
+  summary: {
+    latestRecommendationId?: string;
+    latestResolution?: TriageRecommendation["resolution"];
+    hasPendingRecommendation: boolean;
+    hasApprovedRecommendation: boolean;
+    workflowState: RecommendationWorkflowState;
+    outageRisk?: TriageRecommendation["outageRisk"];
+    securityRisk?: TriageRecommendation["securityRisk"];
+    slaRisk?: TriageRecommendation["slaRisk"];
+    priority?: TriageRecommendation["priority"];
+  };
+  latest?: TriageRecommendation;
+} {
+  const related = recommendations
+    .filter((recommendation) => recommendation.ticketId === ticketId)
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    );
+  const latest = related[0];
+  const hasPendingRecommendation = related.some(
+    (recommendation) => recommendation.resolution === "pending",
+  );
+  const hasApprovedRecommendation = related.some(
+    (recommendation) => recommendation.resolution === "approved",
+  );
+  const workflowState: RecommendationWorkflowState = hasPendingRecommendation
+    ? "pending"
+    : hasApprovedRecommendation
+      ? "approved"
+      : "active";
+  return {
+    summary: {
+      latestRecommendationId: latest?.id,
+      latestResolution: latest?.resolution,
+      hasPendingRecommendation,
+      hasApprovedRecommendation,
+      workflowState,
+      outageRisk: latest?.outageRisk,
+      securityRisk: latest?.securityRisk,
+      slaRisk: latest?.slaRisk,
+      priority: latest?.priority,
+    },
+    latest,
+  };
 }
 
 async function createRecommendation(
