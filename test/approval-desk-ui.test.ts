@@ -352,15 +352,21 @@ describe("approvalDeskHtml", () => {
     });
 
     app.el("continueApproval").dispatch("click");
+    await settle();
 
     expect(app.el("recommendationPanel").innerHTML).toContain(
       "No recommendation created yet.",
     );
     expect(app.el("createRecommendation").disabled).toBe(false);
     expect(app.el("continueApproval").hidden).toBe(true);
+    expect(
+      app.requests.some((request) => request.path.endsWith("/cancel-approval")),
+    ).toBe(true);
     expect(app.parsedResult()).toMatchObject({
-      action: "approval-canceled-locally",
-      ticketId: "TKT-1001",
+      action: {
+        auditEvent: { action: "recommendation-canceled" },
+      },
+      metrics: { pendingRecommendations: 0 },
     });
   });
 
@@ -393,6 +399,7 @@ describe("approvalDeskHtml", () => {
     });
 
     app.el("continueApproval").dispatch("click");
+    await settle();
 
     expect(app.el("recommendationPanel").innerHTML).toContain(
       "No recommendation created yet.",
@@ -726,6 +733,11 @@ async function startApprovalDeskApp(options: {
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/reject") {
       return jsonResponse({
         auditEvent: { action: "recommendation-rejected" },
+      });
+    }
+    if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/cancel-approval") {
+      return jsonResponse({
+        auditEvent: { action: "recommendation-canceled" },
       });
     }
     throw new Error(`Unexpected request: ${path}`);

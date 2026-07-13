@@ -443,6 +443,60 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("cancels an approved recommendation and returns the ticket workflow to active", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const approved = await json(
+      `/api/recommendations/${created.body.recommendation.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          expectedRevision: 0,
+          approvedFields: ["category"],
+          actor: "matias-reviewer",
+          confirm: true,
+        }),
+      },
+    );
+    expect(approved.status).toBe(200);
+
+    const canceled = await json(
+      `/api/recommendations/${created.body.recommendation.id}/cancel-approval`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          actor: "matias-reviewer",
+          reason: "Replacing the approved recommendation with a better draft.",
+        }),
+      },
+    );
+
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.auditEvent).toMatchObject({
+      action: "recommendation-canceled",
+      actor: "matias-reviewer",
+      before: { resolution: "approved" },
+      after: { resolution: "canceled" },
+    });
+    expect((await deps.recommendations.get(created.body.recommendation.id))).toMatchObject({
+      resolution: "canceled",
+    });
+
+    const detail = await json("/api/tickets/TKT-1005");
+    expect(detail.body.recommendationSummary).toMatchObject({
+      hasPendingRecommendation: false,
+      hasApprovedRecommendation: false,
+      workflowState: "active",
+    });
+    expect(detail.body).not.toHaveProperty("latestRecommendation");
+  });
+
   it("approves reviewer-edited field values through the local API", async () => {
     const { json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {

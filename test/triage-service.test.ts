@@ -788,6 +788,55 @@ describe("TriageService", () => {
     await expect(harness.audit.list("TKT-1001")).resolves.toHaveLength(2);
   });
 
+  it("cancels an approved recommendation and records an audit event", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    await harness.service.approve(makeApproval({ approvedFields: ["priority"] }));
+
+    const auditEvent = await harness.service.cancelApproval({
+      recommendationId,
+      ticketId: "TKT-1001",
+      actor: "matias-reviewer",
+      reason: "Replacing the approved recommendation with a better draft.",
+      canceledAt: "2026-06-10T09:30:00.000Z",
+    });
+
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "canceled",
+    });
+    expect(auditEvent).toMatchObject({
+      action: "recommendation-canceled",
+      actor: "matias-reviewer",
+      before: { resolution: "approved" },
+      after: { resolution: "canceled" },
+      rationale: "Replacing the approved recommendation with a better draft.",
+    });
+    expect(harness.audit.events.at(-1)).toEqual(auditEvent);
+  });
+
+  it("rolls approved recommendation back when cancellation audit fails", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    await harness.service.approve(makeApproval({ approvedFields: ["priority"] }));
+    harness.audit.failNext = true;
+
+    await expect(
+      harness.service.cancelApproval({
+        recommendationId,
+        ticketId: "TKT-1001",
+        actor: "matias-reviewer",
+        reason: "Replacing the approved recommendation with a better draft.",
+        canceledAt: "2026-06-10T09:30:00.000Z",
+      }),
+    ).rejects.toMatchObject({
+      message: "Cancellation audit failed; recommendation was compensated.",
+    });
+
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "approved",
+    });
+  });
+
   it("restores the exact real ticket and recommendation when approval audit persistence fails", async () => {
     const harness = await makeRealRepositoryHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));

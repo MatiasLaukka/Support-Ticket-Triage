@@ -116,6 +116,13 @@ const RejectBodySchema = z
     feedback: z.string().trim().min(1),
   })
   .strict();
+const CancelApprovalBodySchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: z.string().trim().min(1),
+    reason: z.string().trim().min(1),
+  })
+  .strict();
 
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
@@ -218,6 +225,16 @@ function matchRoute(
     };
   }
 
+  const approvalCancellation =
+    /^\/api\/recommendations\/([^/]+)\/cancel-approval$/.exec(pathname);
+  if (method === "POST" && approvalCancellation !== null) {
+    return {
+      status: 200,
+      handle: (context) =>
+        cancelApproval(context, approvalCancellation[1]!),
+    };
+  }
+
   if (method === "GET" && pathname === "/api/metrics") {
     return { status: 200, handle: getMetrics };
   }
@@ -309,11 +326,14 @@ function summarizeRecommendationsForTicket(
         right.createdAt.localeCompare(left.createdAt) ||
         right.id.localeCompare(left.id),
     );
-  const latest = related[0];
-  const hasPendingRecommendation = related.some(
+  const activeRelated = related.filter(
+    (recommendation) => recommendation.resolution !== "canceled",
+  );
+  const latest = activeRelated[0];
+  const hasPendingRecommendation = activeRelated.some(
     (recommendation) => recommendation.resolution === "pending",
   );
-  const hasApprovedRecommendation = related.some(
+  const hasApprovedRecommendation = activeRelated.some(
     (recommendation) => recommendation.resolution === "approved",
   );
   const workflowState: RecommendationWorkflowState = hasPendingRecommendation
@@ -410,6 +430,21 @@ async function rejectRecommendation(
       ...body,
       recommendationId,
       rejectedAt: deps.now().toISOString(),
+    }),
+  };
+}
+
+async function cancelApproval(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const recommendationId = RecommendationIdSchema.parse(id);
+  const body = CancelApprovalBodySchema.parse(await readJsonBody(request));
+  return {
+    auditEvent: await deps.service.cancelApproval({
+      ...body,
+      recommendationId,
+      canceledAt: deps.now().toISOString(),
     }),
   };
 }

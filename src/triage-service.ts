@@ -93,6 +93,16 @@ const RejectRecommendationInputSchema = z
   })
   .strict();
 
+const CancelApprovalInputSchema = z
+  .object({
+    recommendationId: z.uuid(),
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    reason: NonBlankStringSchema,
+    canceledAt: IsoTimestampSchema,
+  })
+  .strict();
+
 export interface SubmitRecommendationInput {
   ticketId: TicketId;
   sourceRevision: number;
@@ -140,6 +150,14 @@ export interface RejectRecommendationInput {
   actor: string;
   feedback: string;
   rejectedAt: string;
+}
+
+export interface CancelApprovalInput {
+  recommendationId: string;
+  ticketId: TicketId;
+  actor: string;
+  reason: string;
+  canceledAt: string;
 }
 
 export interface TicketStore {
@@ -318,6 +336,13 @@ export class TriageService {
     const rejection = RejectRecommendationInputSchema.parse(input);
     return serializeRecommendation(rejection.recommendationId, () =>
       this.rejectValidated(rejection),
+    );
+  }
+
+  async cancelApproval(input: CancelApprovalInput): Promise<AuditEvent> {
+    const cancellation = CancelApprovalInputSchema.parse(input);
+    return serializeRecommendation(cancellation.recommendationId, () =>
+      this.cancelApprovalValidated(cancellation),
     );
   }
 
@@ -511,6 +536,62 @@ export class TriageService {
       }
       throw domainErrorWithCause(
         "Rejection audit failed; recommendation was compensated.",
+        auditError,
+      );
+    }
+    return auditEvent;
+  }
+
+  private async cancelApprovalValidated(
+    cancellation: CancelApprovalInput,
+  ): Promise<AuditEvent> {
+    const recommendation = await this.dependencies.recommendations.get(
+      cancellation.recommendationId,
+    );
+    if (
+      recommendation.resolution !== "approved" ||
+      recommendation.ticketId !== cancellation.ticketId
+    ) {
+      throw stale("Approved recommendation cannot be canceled.");
+    }
+    await this.dependencies.tickets.get(cancellation.ticketId);
+
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: cancellation.canceledAt,
+      actor: cancellation.actor,
+      action: "recommendation-canceled",
+      ticketId: cancellation.ticketId,
+      recommendationId: recommendation.id,
+      before: { resolution: "approved" },
+      after: { resolution: "canceled" },
+      rationale: cancellation.reason,
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      result: "success",
+    });
+
+    await this.dependencies.recommendations.transitionResolution(
+      recommendation.id,
+      "approved",
+      "canceled",
+    );
+    try {
+      await this.dependencies.audit.append(auditEvent);
+    } catch (auditError) {
+      try {
+        await this.dependencies.recommendations.transitionResolution(
+          recommendation.id,
+          "canceled",
+          "approved",
+        );
+      } catch {
+        throw domainErrorWithCause(
+          "Cancellation audit failed and recommendation rollback was not safe.",
+          auditError,
+        );
+      }
+      throw domainErrorWithCause(
+        "Cancellation audit failed; recommendation was compensated.",
         auditError,
       );
     }

@@ -1233,7 +1233,18 @@ export const approvalDeskHtml = `<!doctype html>
         });
       }
 
-      function cancelApprovedRecommendation() {
+      async function cancelApprovedRecommendation() {
+        if (state.recommendation === null || state.selectedTicket === null) {
+          return;
+        }
+        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/cancel-approval', {
+          method: 'POST',
+          body: JSON.stringify({
+            ticketId: state.selectedTicket.id,
+            actor: els.actor.value.trim() || 'approval-desk',
+            reason: 'Approval canceled from the Approval Desk before creating a replacement recommendation.'
+          })
+        });
         markSelectedTicketActive();
         state.recommendation = null;
         state.stage = 'empty';
@@ -1241,7 +1252,8 @@ export const approvalDeskHtml = `<!doctype html>
         renderTicket();
         renderTicketList();
         renderRecommendation();
-        setResult({ action: 'approval-canceled-locally', ticketId: state.selectedTicket?.id });
+        await loadMetrics(data);
+        await refreshEvidenceBestEffort();
       }
 
       function resetRecommendationState() {
@@ -1503,7 +1515,7 @@ export const approvalDeskHtml = `<!doctype html>
       els.continueApproval.addEventListener('click', function () {
         if (state.recommendation !== null) {
           if (isApprovedWorkflow()) {
-            cancelApprovedRecommendation();
+            void cancelApprovedRecommendation().catch(function (error) { setResult({ error: error.message }); });
           } else {
             state.stage = 'approval';
             renderRecommendation();
