@@ -111,7 +111,7 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.knowledgeArticleIds).toEqual([
       "webhook-signature-validation",
     ]);
-    expect(input.supportState).toBe("known-cause");
+    expect(input.supportState).toBe("needs-information");
     expect(input.knownCause).toBe("webhook-secret-rotation");
     expect(input.draftCustomerResponse).toContain(
       "post-rotation issue",
@@ -126,6 +126,140 @@ describe("Approval Desk recommendation builder", () => {
     );
     expect(input.draftCustomerResponse).not.toContain(
       "webhook-signature-validation",
+    );
+  });
+
+  it("adapts webhook known-cause drafts across customer follow-up turns", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+    const outcome = outcomes.get("TKT-1008")!;
+
+    const firstContact = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+    });
+
+    expect(firstContact.supportState).toBe("needs-information");
+    expect(firstContact.draftCustomerResponse).toContain(
+      "To move this forward, please share:",
+    );
+    expect(firstContact.draftCustomerResponse).toContain("endpoint URL");
+    expect(firstContact.draftCustomerResponse).toContain("delivery ID");
+
+    const partialFollowUp = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "The endpoint URL is https://hooks.juniper.example/webhooks/orders and the delivery ID is deliv_7788.",
+        },
+      ],
+    });
+
+    expect(partialFollowUp.supportState).toBe("information-received");
+    expect(partialFollowUp.draftCustomerResponse).toContain(
+      "Thanks for sending those details.",
+    );
+    expect(partialFollowUp.draftCustomerResponse).toContain(
+      "we still need:",
+    );
+    expect(partialFollowUp.draftCustomerResponse).not.toContain("- endpoint URL");
+    expect(partialFollowUp.draftCustomerResponse).not.toContain("- delivery ID");
+    expect(partialFollowUp.draftCustomerResponse).toContain("raw body");
+
+    const allEvidence = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "The endpoint URL is https://hooks.juniper.example/webhooks/orders and the delivery ID is deliv_7788.",
+        },
+        {
+          id: "reply-2",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:18:00.000Z",
+          body: "Raw body handling has not changed since yesterday.",
+        },
+      ],
+    });
+
+    expect(allEvidence.supportState).toBe("known-cause");
+    expect(allEvidence.missingEvidence).toEqual([]);
+    expect(allEvidence.draftCustomerResponse).toContain(
+      "Thanks for confirming those details.",
+    );
+    expect(allEvidence.draftCustomerResponse).toContain(
+      "current signing secret",
+    );
+
+    const customerConfirmed = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "The endpoint URL is https://hooks.juniper.example/webhooks/orders and the delivery ID is deliv_7788.",
+        },
+        {
+          id: "reply-2",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:18:00.000Z",
+          body: "Raw body handling has not changed since yesterday.",
+        },
+        {
+          id: "reply-3",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "That fixed it. Thanks for the help!",
+        },
+      ],
+    });
+
+    expect(customerConfirmed.supportState).toBe("ready-for-close");
+    expect(customerConfirmed.draftCustomerResponse).toContain(
+      "Glad to hear that resolved it.",
+    );
+    expect(customerConfirmed.missingInformation).toEqual([]);
+  });
+
+  it("ignores customer replies from other tickets when building lifecycle drafts", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-other-ticket",
+          ticketId: "TKT-9999",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "That fixed it. Thanks for the help!",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("needs-information");
+    expect(input.draftCustomerResponse).toContain("endpoint URL");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Glad to hear that resolved it.",
     );
   });
 

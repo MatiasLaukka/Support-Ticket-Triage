@@ -32,6 +32,17 @@ type ResponseStyle =
   | "incident-or-escalation"
   | "needs-diagnostics";
 type CustomerAudience = "merchant-admin" | "developer";
+type CustomerReply = {
+  id: string;
+  ticketId: string;
+  createdAt: string;
+  body: string;
+};
+type CustomerReplyStage =
+  | "first-contact"
+  | "partial-follow-up"
+  | "all-evidence"
+  | "customer-confirmed";
 
 const ExpectedOutcomeSchema = z
   .object({
@@ -66,6 +77,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   ticket: Ticket;
   outcome?: ExpectedOutcome;
   actor: string;
+  customerReplies?: readonly CustomerReply[];
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
   const { ticket, outcome, actor } = input;
   if (outcome === undefined) {
@@ -79,7 +91,12 @@ export function buildApprovalDeskRecommendationInput(input: {
 
   const escalationReasons = outcome.requiredEscalations;
   const knowledgeArticleIds = outcome.knowledgeArticleIds;
-  const evidenceReadiness = analyzeEvidenceReadiness({ ticket, outcome });
+  const lifecycle = analyzeCustomerReplyLifecycle({
+    ticket,
+    outcome,
+    customerReplies: input.customerReplies ?? [],
+  });
+  const evidenceReadiness = lifecycle.evidenceReadiness;
 
   const draftCustomerResponse = buildDraftCustomerResponse({
     ticket,
@@ -87,6 +104,7 @@ export function buildApprovalDeskRecommendationInput(input: {
     knowledgeArticleIds,
     escalationReasons,
     evidenceReadiness,
+    replyStage: lifecycle.replyStage,
   });
   const signedDraftCustomerResponse = ensureDraftSignOff(draftCustomerResponse, {
     actor,
@@ -160,6 +178,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   knowledgeArticles: readonly KnowledgeArticle[];
   draftProvider?: CustomerResponseDraftProvider;
   responseStyle?: DraftCustomerResponseStyleInput;
+  customerReplies?: readonly CustomerReply[];
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const outcome = input.outcome;
@@ -214,9 +233,14 @@ function buildDraftCustomerResponse(input: {
   knowledgeArticleIds: readonly string[];
   escalationReasons: readonly string[];
   evidenceReadiness: EvidenceReadiness;
+  replyStage: CustomerReplyStage;
 }): string {
   const { ticket, knowledgeArticleIds, escalationReasons, evidenceReadiness } =
     input;
+  if (input.replyStage === "customer-confirmed") {
+    return buildCustomerConfirmedResponse(ticket);
+  }
+
   const style = classifyResponseStyle(
     ticket,
     input.outcome,
@@ -225,11 +249,16 @@ function buildDraftCustomerResponse(input: {
   );
 
   if (style === "known-cause") {
-    return buildKnownCauseResponse(ticket, evidenceReadiness);
+    return buildKnownCauseResponse(ticket, evidenceReadiness, input.replyStage);
   }
 
   if (style === "incident-or-escalation") {
-    return buildEscalationResponse(ticket, escalationReasons, evidenceReadiness);
+    return buildEscalationResponse(
+      ticket,
+      escalationReasons,
+      evidenceReadiness,
+      input.replyStage,
+    );
   }
 
   if (
@@ -239,6 +268,7 @@ function buildDraftCustomerResponse(input: {
     return buildStructuredDiagnosticResponse({
       ticket,
       evidenceReadiness,
+      replyStage: input.replyStage,
       problemSummary: buildFlowProblemSummary(ticket),
       nextStep:
         "Once we have those details, we will compare the storefront event with the flow setup and profile timeline before recommending the safest correction.",
@@ -248,6 +278,7 @@ function buildDraftCustomerResponse(input: {
   return buildStructuredDiagnosticResponse({
     ticket,
     evidenceReadiness,
+    replyStage: input.replyStage,
     problemSummary: `We are checking the ${formatKnowledgeTopic(
       knowledgeArticleIds,
     )} reported in ${ticket.id}.`,
@@ -284,12 +315,14 @@ function classifyResponseStyle(
 function buildKnownCauseResponse(
   ticket: Ticket,
   evidenceReadiness: EvidenceReadiness,
+  replyStage: CustomerReplyStage,
 ): string {
   const knownCause = getKnownCause(evidenceReadiness.knownCause);
   if (knownCause !== undefined) {
     return buildStructuredDiagnosticResponse({
       ticket,
       evidenceReadiness,
+      replyStage,
       problemSummary: knownCause.problemSummary,
       nextStep: knownCause.nextStep,
     });
@@ -298,6 +331,7 @@ function buildKnownCauseResponse(
   return buildStructuredDiagnosticResponse({
     ticket,
     evidenceReadiness,
+    replyStage,
     problemSummary:
       "We reviewed the ticket and found a likely explanation in the details provided.",
     nextStep:
@@ -309,11 +343,13 @@ function buildEscalationResponse(
   ticket: Ticket,
   escalationReasons: readonly string[],
   evidenceReadiness: EvidenceReadiness,
+  replyStage: CustomerReplyStage,
 ): string {
   if (escalationReasons.includes("security")) {
     return buildStructuredDiagnosticResponse({
       ticket,
       evidenceReadiness,
+      replyStage,
       problemSummary:
         "We are treating this as a potential security issue and reviewing the safest containment path.",
       nextStep:
@@ -325,6 +361,7 @@ function buildEscalationResponse(
     return buildStructuredDiagnosticResponse({
       ticket,
       evidenceReadiness,
+      replyStage,
       problemSummary:
         "We are investigating this as a possible platform delay affecting event processing.",
       nextStep:
@@ -335,6 +372,7 @@ function buildEscalationResponse(
   return buildStructuredDiagnosticResponse({
     ticket,
     evidenceReadiness,
+    replyStage,
     problemSummary:
       "We are escalating this ticket for review because it may need a safer specialist path.",
     nextStep:
@@ -379,15 +417,18 @@ function buildFlowProblemSummary(ticket: Ticket): string {
 function buildStructuredDiagnosticResponse(input: {
   ticket: Ticket;
   evidenceReadiness: EvidenceReadiness;
+  replyStage: CustomerReplyStage;
   problemSummary: string;
   nextStep: string;
 }): string {
   return [
     `Hi ${input.ticket.customer.name},`,
     "",
+    formatReplyAcknowledgement(input.replyStage),
+    "",
     input.problemSummary,
     "",
-    formatEvidenceRequest(input.evidenceReadiness),
+    formatEvidenceRequest(input.evidenceReadiness, input.replyStage),
     "",
     input.nextStep,
   ]
@@ -395,13 +436,28 @@ function buildStructuredDiagnosticResponse(input: {
     .join("\n");
 }
 
-function formatEvidenceRequest(evidenceReadiness: EvidenceReadiness): string {
+function formatReplyAcknowledgement(replyStage: CustomerReplyStage): string {
+  if (replyStage === "partial-follow-up") {
+    return "Thanks for sending those details.";
+  }
+  if (replyStage === "all-evidence") {
+    return "Thanks for confirming those details.";
+  }
+  return "";
+}
+
+function formatEvidenceRequest(
+  evidenceReadiness: EvidenceReadiness,
+  replyStage: CustomerReplyStage,
+): string {
   if (evidenceReadiness.missingEvidence.length === 0) {
     return "We do not need any additional information from you before the next update.";
   }
 
   return [
-    "To move this forward, please share:",
+    replyStage === "partial-follow-up"
+      ? "To move this forward, we still need:"
+      : "To move this forward, please share:",
     ...evidenceReadiness.missingEvidence.map(
       (requirement) => `- ${requirement.customerQuestion}`,
     ),
@@ -414,13 +470,117 @@ function formatRecommendedNextAction(
   if (evidenceReadiness.supportState === "needs-information") {
     return "Collect the missing evidence, then continue diagnosis.";
   }
+  if (evidenceReadiness.supportState === "information-received") {
+    return "Thank the customer and collect only the remaining evidence.";
+  }
   if (evidenceReadiness.supportState === "known-cause") {
     return "Explain the known cause and recommended customer action.";
+  }
+  if (evidenceReadiness.supportState === "ready-for-close") {
+    return "Acknowledge the customer's confirmation and prepare to close the ticket.";
   }
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
     return "Continue platform-impact review and share the next customer update.";
   }
   return "Review the supporting evidence, then approve or reject this recommendation.";
+}
+
+function analyzeCustomerReplyLifecycle(input: {
+  ticket: Ticket;
+  outcome: ExpectedOutcome;
+  customerReplies: readonly CustomerReply[];
+}): { evidenceReadiness: EvidenceReadiness; replyStage: CustomerReplyStage } {
+  const ticketReplies = input.customerReplies.filter(
+    (reply) => reply.ticketId === input.ticket.id,
+  );
+  if (ticketReplies.length === 0) {
+    const evidenceReadiness = analyzeEvidenceReadiness({
+      ticket: input.ticket,
+      outcome: input.outcome,
+    });
+    return {
+      evidenceReadiness: withLifecycleSupportState(
+        evidenceReadiness,
+        requiresMoreCustomerEvidence(evidenceReadiness)
+          ? "needs-information"
+          : evidenceReadiness.supportState,
+      ),
+      replyStage: "first-contact",
+    };
+  }
+
+  const replyText = ticketReplies
+    .map((reply) => reply.body)
+    .join("\n\n");
+  const ticketWithReplies: Ticket = {
+    ...input.ticket,
+    description: `${input.ticket.description}\n\nCustomer follow-up:\n${replyText}`,
+  };
+  const evidenceReadiness = analyzeEvidenceReadiness({
+    ticket: ticketWithReplies,
+    outcome: input.outcome,
+  });
+  const latestReply = ticketReplies[ticketReplies.length - 1]?.body ?? "";
+
+  if (isCustomerConfirmation(latestReply)) {
+    return {
+      evidenceReadiness: withLifecycleSupportState(
+        {
+          ...evidenceReadiness,
+          missingEvidence: [],
+        },
+        "ready-for-close",
+      ),
+      replyStage: "customer-confirmed",
+    };
+  }
+
+  if (requiresMoreCustomerEvidence(evidenceReadiness)) {
+    return {
+      evidenceReadiness: withLifecycleSupportState(
+        evidenceReadiness,
+        "information-received",
+      ),
+      replyStage: "partial-follow-up",
+    };
+  }
+
+  return {
+    evidenceReadiness,
+    replyStage: "all-evidence",
+  };
+}
+
+function withLifecycleSupportState(
+  evidenceReadiness: EvidenceReadiness,
+  supportState: EvidenceReadiness["supportState"],
+): EvidenceReadiness {
+  return {
+    ...evidenceReadiness,
+    supportState,
+  };
+}
+
+function requiresMoreCustomerEvidence(
+  evidenceReadiness: EvidenceReadiness,
+): boolean {
+  return evidenceReadiness.missingEvidence.length > 0;
+}
+
+function isCustomerConfirmation(value: string): boolean {
+  return /\b(fixed|resolved|works now|working now|that worked|that fixed it)\b/i.test(
+    value,
+  );
+}
+
+function buildCustomerConfirmedResponse(ticket: Ticket): string {
+  return [
+    `Hi ${ticket.customer.name},`,
+    "",
+    "Glad to hear that resolved it. I will leave the ticket ready to close from our side.",
+    "",
+    "Thanks again for working through the details with us.",
+  ].join("\n");
 }
 
 function formatKnowledgeTopic(knowledgeArticleIds: readonly string[]): string {

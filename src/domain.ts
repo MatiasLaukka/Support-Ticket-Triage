@@ -122,6 +122,7 @@ export const SupportStateSchema = z.enum([
   "no-known-cause",
   "waiting-on-platform-fix",
   "waiting-on-customer-action",
+  "ready-for-close",
   "ready-for-approval",
 ]);
 
