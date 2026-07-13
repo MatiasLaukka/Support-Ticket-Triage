@@ -538,8 +538,8 @@ export const approvalDeskHtml = `<!doctype html>
             <p class="hint">No recommendation created yet.</p>
           </div>
           <div class="actions">
-            <button id="backToRecommendation" type="button" class="secondary" hidden>Back to recommendation</button>
-            <button id="continueApproval" type="button" class="secondary" hidden>Continue to approval</button>
+            <button id="backToRecommendation" type="button" hidden>Back to recommendation</button>
+            <button id="continueApproval" type="button" hidden>Continue to approval</button>
           </div>
 
           <section id="approvalStage" hidden>
@@ -549,43 +549,43 @@ export const approvalDeskHtml = `<!doctype html>
             <div class="field-control">
               <span class="field-label">Category</span>
               <label class="value-label">Recommended value<input id="categoryOverride" autocomplete="off"></label>
-              <button class="field-approve-button secondary" type="button" value="category">Approve</button>
+              <button class="field-approve-button" type="button" value="category">Approve</button>
               <button class="info-button" type="button" title="Approve the recommended category.">i</button>
             </div>
             <div class="field-control">
               <span class="field-label">Priority</span>
               <label class="value-label">Recommended value<input id="priorityOverride" autocomplete="off"></label>
-              <button class="field-approve-button secondary" type="button" value="priority">Approve</button>
+              <button class="field-approve-button" type="button" value="priority">Approve</button>
               <button class="info-button" type="button" title="Approve the recommended urgency.">i</button>
             </div>
             <div class="field-control">
               <span class="field-label">Team</span>
               <label class="value-label">Recommended value<input id="teamOverride" autocomplete="off"></label>
-              <button class="field-approve-button secondary" type="button" value="team">Approve</button>
+              <button class="field-approve-button" type="button" value="team">Approve</button>
               <button class="info-button" type="button" title="Approve the routing team.">i</button>
             </div>
             <div class="field-control">
               <span class="field-label">Assignee</span>
               <label class="value-label">Recommended value<input id="assigneeOverride" autocomplete="off"></label>
-              <button class="field-approve-button secondary" type="button" value="assignee">Approve</button>
+              <button class="field-approve-button" type="button" value="assignee">Approve</button>
               <button class="info-button" type="button" title="Approve an owner if recommended.">i</button>
             </div>
             <div class="field-control">
               <span class="field-label">Status</span>
               <label class="value-label">Recommended value<input id="statusOverride" autocomplete="off"></label>
-              <button class="field-approve-button secondary" type="button" value="status">Approve</button>
+              <button class="field-approve-button" type="button" value="status">Approve</button>
               <button class="info-button" type="button" title="Approve a status change if recommended.">i</button>
             </div>
             <div class="field-control">
               <span class="field-label">Tags</span>
               <label class="value-label">Recommended value<input id="tagsOverride" autocomplete="off"></label>
-              <button class="field-approve-button secondary" type="button" value="tags">Approve</button>
+              <button class="field-approve-button" type="button" value="tags">Approve</button>
               <button class="info-button" type="button" title="Approve comma-separated ticket tags.">i</button>
             </div>
             <div class="field-control">
               <span class="field-label">Customer response</span>
               <span class="meta">Edit the full response below.</span>
-              <button class="field-approve-button secondary" type="button" value="customerResponse">Approve</button>
+              <button class="field-approve-button" type="button" value="customerResponse">Approve</button>
               <button class="info-button" type="button" title="Approve edited customer-facing wording.">i</button>
             </div>
             </div>
@@ -1155,7 +1155,7 @@ export const approvalDeskHtml = `<!doctype html>
         for (const button of els.fieldChoices.querySelectorAll('.field-approve-button')) {
           const approved = state.approvedFields.includes(button.value);
           button.textContent = approved ? 'Cancel' : 'Approve';
-          button.className = 'field-approve-button ' + (approved ? 'danger' : 'secondary');
+          button.className = 'field-approve-button' + (approved ? ' danger' : '');
         }
       }
 

@@ -766,7 +766,7 @@ function createElements(): Record<string, FakeElement> {
     const field = new FakeElement();
     field.value = value;
     field.textContent = "Approve";
-    field.className = "field-approve-button secondary";
+    field.className = "field-approve-button";
     return field;
   });
   elements.queueFilters.children = ["active", "pending", "approved", "all"].map(
