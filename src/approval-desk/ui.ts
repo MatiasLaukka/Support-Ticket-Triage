@@ -852,7 +852,7 @@ export const approvalDeskHtml = `<!doctype html>
           els.createRecommendation.disabled = true;
           return;
         }
-        els.createRecommendation.disabled = false;
+        els.createRecommendation.disabled = isApprovedWorkflow();
         els.ticketPanel.innerHTML =
           '<div class="chips">' +
             chip(ticket.id) +
@@ -917,7 +917,21 @@ export const approvalDeskHtml = `<!doctype html>
           updateControls();
           return;
         }
-        if (state.stage === 'approval') {
+        if (isApprovedWorkflow()) {
+          els.recommendationPanel.innerHTML =
+            '<div class="hero-card description"><strong>Approved Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
+            '<p class="hint">This recommendation is approved. Cancel approval before creating a replacement recommendation.</p>' +
+            '<details><summary>All proposed ticket values</summary>' +
+              '<div class="details-grid">' +
+              card('Category', recommendation.category) +
+              card('Priority', recommendation.priority) +
+              card('Team', recommendation.team) +
+              card('Assignee', recommendation.assignee === undefined ? 'unchanged' : String(recommendation.assignee)) +
+              card('Status', recommendation.ticketStatus ?? 'unchanged') +
+              card('Tags', Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : 'unchanged') +
+              '</div>' +
+            '</details>';
+        } else if (state.stage === 'approval') {
           els.recommendationPanel.innerHTML =
             '<div class="hero-card"><strong>Approval mode</strong>' +
               '<p class="hint">Recommendation details are tucked away while you apply fields. Go back if you need to review the full draft, evidence, or GPT assist notes.</p>' +
@@ -993,13 +1007,15 @@ export const approvalDeskHtml = `<!doctype html>
 
       function renderRecommendationStageControls() {
         const hasRecommendation = state.recommendation !== null;
-        els.continueApproval.hidden = !(hasRecommendation && state.stage === 'draft');
+        els.continueApproval.textContent = isApprovedWorkflow() ? 'Cancel approval' : 'Continue to approval';
+        els.continueApproval.hidden = !(hasRecommendation && (state.stage === 'draft' || isApprovedWorkflow()));
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.approvalStage.hidden = !(hasRecommendation && state.stage === 'approval');
       }
 
       function updateControls() {
         const hasRecommendation = state.recommendation !== null;
+        const approvedWorkflow = isApprovedWorkflow();
         const actorPresent = els.actor.value.trim().length > 0;
         const fields = selectedFields();
         const hasFields = fields.length > 0;
@@ -1009,8 +1025,8 @@ export const approvalDeskHtml = `<!doctype html>
           els.editedCustomerResponse.value.trim().length > 0;
         const feedbackPresent = els.feedback.value.trim().length > 0;
 
-        els.approveButton.disabled = !(hasRecommendation && actorPresent && confirmed && hasFields && customerResponseReady);
-        els.rejectButton.disabled = !(hasRecommendation && actorPresent && feedbackPresent);
+        els.approveButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && confirmed && hasFields && customerResponseReady);
+        els.rejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
       }
 
       async function loadQueue() {
@@ -1100,9 +1116,15 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function selectTicket(id) {
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
-        state.selectedTicket = data.ticket;
+        state.selectedTicket = data.recommendationSummary === undefined
+          ? data.ticket
+          : { ...data.ticket, recommendationSummary: data.recommendationSummary };
         state.recommendation = data.latestRecommendation ?? null;
-        state.stage = state.recommendation === null ? 'empty' : 'draft';
+        state.stage = state.recommendation === null
+          ? 'empty'
+          : isApprovedWorkflow()
+            ? 'approved'
+            : 'draft';
         renderTicketList();
         renderTicket();
         renderRecommendation();
@@ -1111,6 +1133,10 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function createRecommendation() {
         if (state.selectedTicket === null) {
+          return;
+        }
+        if (isApprovedWorkflow()) {
+          setResult({ error: 'Cancel approval before creating a new recommendation for this ticket.' });
           return;
         }
         if (state.recommendation?.resolution === 'pending') {
@@ -1167,9 +1193,11 @@ export const approvalDeskHtml = `<!doctype html>
           method: 'POST',
           body: JSON.stringify(body)
         });
-        state.selectedTicket = withRecommendationSummary(data.ticket, approvedRecommendation, 'approved');
+        state.recommendation = { ...approvedRecommendation, resolution: 'approved' };
+        state.stage = 'approved';
+        state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'approved');
         replaceTicket(state.selectedTicket);
-        resetRecommendationState();
+        resetApprovalControls();
         renderTicket();
         renderTicketList();
         renderRecommendation();
@@ -1205,9 +1233,24 @@ export const approvalDeskHtml = `<!doctype html>
         });
       }
 
+      function cancelApprovedRecommendation() {
+        markSelectedTicketActive();
+        state.recommendation = null;
+        state.stage = 'empty';
+        resetApprovalControls();
+        renderTicket();
+        renderTicketList();
+        renderRecommendation();
+        setResult({ action: 'approval-canceled-locally', ticketId: state.selectedTicket?.id });
+      }
+
       function resetRecommendationState() {
         state.recommendation = null;
         state.stage = 'empty';
+        resetApprovalControls();
+      }
+
+      function resetApprovalControls() {
         state.approvedFields = [];
         els.confirmApproval.checked = false;
         els.feedback.value = '';
@@ -1302,6 +1345,12 @@ export const approvalDeskHtml = `<!doctype html>
         delete ticket.recommendationSummary;
         state.selectedTicket = ticket;
         replaceTicket(ticket);
+      }
+
+      function isApprovedWorkflow() {
+        return state.stage === 'approved' ||
+          state.recommendation?.resolution === 'approved' ||
+          state.selectedTicket?.recommendationSummary?.workflowState === 'approved';
       }
 
       function withRecommendationSummary(ticket, recommendation, workflowState) {
@@ -1453,8 +1502,12 @@ export const approvalDeskHtml = `<!doctype html>
       els.confirmApproval.addEventListener('change', updateControls);
       els.continueApproval.addEventListener('click', function () {
         if (state.recommendation !== null) {
-          state.stage = 'approval';
-          renderRecommendation();
+          if (isApprovedWorkflow()) {
+            cancelApprovedRecommendation();
+          } else {
+            state.stage = 'approval';
+            renderRecommendation();
+          }
         }
       });
       els.editedCustomerResponse.addEventListener('input', updateControls);

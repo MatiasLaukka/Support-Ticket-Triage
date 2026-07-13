@@ -318,7 +318,7 @@ describe("approvalDeskHtml", () => {
     });
   });
 
-  it("clears finalized approval state and keeps action results visible with metrics", async () => {
+  it("shows finalized approval state until approval is canceled locally", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
     await app.createRecommendation();
@@ -328,18 +328,76 @@ describe("approvalDeskHtml", () => {
     await app.approve();
 
     expect(app.el("recommendationPanel").innerHTML).toContain(
-      "No recommendation created yet.",
+      "Approved Draft Customer Response",
     );
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "All proposed ticket values",
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "Why this draft is safe",
+    );
+    expect(app.el("continueApproval").textContent).toBe("Cancel approval");
+    expect(app.el("continueApproval").hidden).toBe(false);
+    expect(app.el("approvalStage").hidden).toBe(true);
+    expect(app.el("createRecommendation").disabled).toBe(true);
     expect(app.el("approveButton").disabled).toBe(true);
     expect(app.field("category").textContent).toBe("Approve");
     expect(app.el("confirmApproval").checked).toBe(false);
-    expect(app.el("categoryOverride").value).toBe("");
+    expect(app.el("categoryOverride").value).toBe("authentication");
     expect(app.parsedResult()).toMatchObject({
       action: {
         ticket: { id: "TKT-1001", revision: 1 },
       },
       metrics: { pendingRecommendations: 0 },
     });
+
+    app.el("continueApproval").dispatch("click");
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "No recommendation created yet.",
+    );
+    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.el("continueApproval").hidden).toBe(true);
+    expect(app.parsedResult()).toMatchObject({
+      action: "approval-canceled-locally",
+      ticketId: "TKT-1001",
+    });
+  });
+
+  it("locks an existing approved recommendation until canceled", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Approved Draft Customer Response",
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "GPT Assist",
+    );
+    expect(app.el("continueApproval").textContent).toBe("Cancel approval");
+    expect(app.el("createRecommendation").disabled).toBe(true);
+
+    await app.createRecommendation();
+
+    expect(
+      app.requests.some((request) => request.path.endsWith("/recommendations")),
+    ).toBe(false);
+    expect(app.parsedResult()).toMatchObject({
+      error: "Cancel approval before creating a new recommendation for this ticket.",
+    });
+
+    app.el("continueApproval").dispatch("click");
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "No recommendation created yet.",
+    );
+    expect(app.el("createRecommendation").disabled).toBe(false);
   });
 
   it("clears finalized rejection state and keeps rejection results visible with metrics", async () => {
