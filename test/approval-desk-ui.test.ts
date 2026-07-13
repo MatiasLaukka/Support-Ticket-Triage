@@ -73,9 +73,8 @@ describe("approvalDeskHtml", () => {
     await app.createRecommendation();
     expect(app.evidenceRequests()).toBe(3);
 
-    app.field("category").checked = true;
+    app.approveField("category");
     app.el("confirmApproval").checked = true;
-    app.el("fieldChoices").dispatch("change");
     await app.approve();
     expect(app.evidenceRequests()).toBe(4);
 
@@ -102,9 +101,8 @@ describe("approvalDeskHtml", () => {
     const approvalApp = await startApprovalDeskApp({ failEvidenceAfter: 2 });
     await approvalApp.selectFirstTicket();
     await approvalApp.createRecommendation();
-    approvalApp.field("category").checked = true;
+    approvalApp.approveField("category");
     approvalApp.el("confirmApproval").checked = true;
-    approvalApp.el("fieldChoices").dispatch("change");
 
     await approvalApp.approve();
 
@@ -138,10 +136,9 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     await app.createRecommendation();
 
-    app.field("customerResponse").checked = true;
+    app.approveField("customerResponse");
     app.el("confirmApproval").checked = true;
     app.el("editedCustomerResponse").value = "   ";
-    app.el("fieldChoices").dispatch("change");
     app.el("editedCustomerResponse").dispatch("input");
 
     expect(app.el("approveButton").disabled).toBe(true);
@@ -152,14 +149,14 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     await app.createRecommendation();
 
-    app.field("category").checked = true;
-    app.field("priority").checked = true;
-    app.field("team").checked = true;
+    app.approveField("category");
+    app.approveField("priority");
+    app.approveField("team");
     app.el("categoryOverride").value = "incident";
     app.el("priorityOverride").value = "P1";
     app.el("teamOverride").value = "incident-response";
     app.el("confirmApproval").checked = true;
-    app.el("fieldChoices").dispatch("change");
+    app.el("confirmApproval").dispatch("change");
     await app.approve();
 
     const approvalRequest = app.requests.find((request) =>
@@ -242,14 +239,26 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain(
       "Draft Customer Response",
     );
-    expect(app.el("recommendationPanel").innerHTML).toContain(
-      "Continue to approval",
-    );
+    expect(app.el("continueApproval").hidden).toBe(false);
+    expect(app.el("backToRecommendation").hidden).toBe(true);
     expect(app.el("approvalStage").hidden).toBe(true);
 
     app.el("continueApproval").dispatch("click");
 
     expect(app.el("approvalStage").hidden).toBe(false);
+    expect(app.el("continueApproval").hidden).toBe(true);
+    expect(app.el("backToRecommendation").hidden).toBe(false);
+    expect(app.el("recommendationPanel").innerHTML).toContain("Approval mode");
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "Why this draft is safe",
+    );
+
+    app.el("backToRecommendation").dispatch("click");
+
+    expect(app.el("approvalStage").hidden).toBe(true);
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Draft Customer Response",
+    );
   });
 
   it("shows an existing pending recommendation when selecting a ticket", async () => {
@@ -262,9 +271,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain(
       "Draft Customer Response",
     );
-    expect(app.el("recommendationPanel").innerHTML).toContain(
-      "Continue to approval",
-    );
+    expect(app.el("continueApproval").hidden).toBe(false);
     expect(app.el("approvalStage").hidden).toBe(true);
   });
 
@@ -308,16 +315,15 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     await app.createRecommendation();
 
-    app.field("category").checked = true;
+    app.approveField("category");
     app.el("confirmApproval").checked = true;
-    app.el("fieldChoices").dispatch("change");
     await app.approve();
 
     expect(app.el("recommendationPanel").innerHTML).toContain(
       "No recommendation created yet.",
     );
     expect(app.el("approveButton").disabled).toBe(true);
-    expect(app.field("category").checked).toBe(false);
+    expect(app.field("category").textContent).toBe("Approve");
     expect(app.el("confirmApproval").checked).toBe(false);
     expect(app.el("categoryOverride").value).toBe("");
     expect(app.parsedResult()).toMatchObject({
@@ -393,6 +399,53 @@ describe("approvalDeskHtml", () => {
     expect(html).toContain("TKT-1002");
     expect(html).toContain("&lt;script&gt;alert(&#039;x&#039;)&lt;/script&gt;");
     expect(html).not.toContain("<script>alert");
+  });
+
+  it("filters queue tickets by workflow state and updates filter chips", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        fixtureTicket,
+        {
+          ...fixtureTicket,
+          id: "TKT-2001",
+          subject: "Pending ticket",
+          recommendationSummary: {
+            workflowState: "pending",
+            priority: "P1",
+            slaRisk: "likely",
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2002",
+          subject: "Approved ticket",
+          recommendationSummary: {
+            workflowState: "approved",
+            priority: "P2",
+          },
+        },
+      ],
+    });
+
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.className).toContain("state-active");
+    expect(app.el("queueStatus").textContent).toBe("Showing 1 of 3 tickets.");
+
+    app.setQueueFilter("pending");
+
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Pending ticket");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-pending");
+    expect(app.queueFilter("pending").className).toContain("active");
+
+    app.setQueueFilter("approved");
+
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Approved ticket");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-approved");
+
+    app.setQueueFilter("all");
+
+    expect(app.el("ticketList").children).toHaveLength(3);
   });
 });
 
@@ -539,11 +592,13 @@ async function startApprovalDeskApp(options: {
   confirmResult?: boolean;
   recommendation?: typeof fixtureRecommendation;
   recommendationDelayTicks?: number;
+  tickets?: Array<typeof fixtureTicket & { recommendationSummary?: Record<string, unknown> }>;
   ticketDetailRecommendation?: typeof fixtureRecommendation;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
   const recommendation = options.recommendation ?? fixtureRecommendation;
+  const tickets = options.tickets ?? [fixtureTicket];
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
   const document = {
     createElement: () => new FakeElement(),
@@ -551,8 +606,8 @@ async function startApprovalDeskApp(options: {
   };
   const fetch = async (path: string, init?: RequestInit) => {
     requests.push({ path, init });
-    if (path === "/api/tickets?status=triage&limit=20") {
-      return jsonResponse({ items: [fixtureTicket], total: 1 });
+    if (path === "/api/tickets?limit=50") {
+      return jsonResponse({ items: tickets, total: tickets.length });
     }
     if (path === "/api/metrics") {
       return jsonResponse(metrics);
@@ -620,6 +675,18 @@ async function startApprovalDeskApp(options: {
       requests.filter((request) => request.path === "/api/evidence").length,
     field: (value: string) =>
       elements.fieldChoices.children.find((field) => field.value === value)!,
+    approveField: (value: string) => {
+      elements.fieldChoices.children
+        .find((field) => field.value === value)!
+        .dispatch("click");
+    },
+    queueFilter: (value: string) =>
+      elements.queueFilters.children.find((field) => field.value === value)!,
+    setQueueFilter: (value: string) => {
+      elements.queueFilters.children
+        .find((field) => field.value === value)!
+        .dispatch("click");
+    },
     requests,
     parsedResult: () => JSON.parse(elements.resultPanel.textContent),
     selectFirstTicket: async () => {
@@ -655,6 +722,7 @@ function createElements(): Record<string, FakeElement> {
       "actor",
       "approvalStage",
       "approveButton",
+      "backToRecommendation",
       "confirmApproval",
       "continueApproval",
       "createRecommendation",
@@ -667,6 +735,7 @@ function createElements(): Record<string, FakeElement> {
       "guardrailsPanel",
       "activityPanel",
       "priorityOverride",
+      "queueFilters",
       "queueStatus",
       "recommendationPanel",
       "refreshEvidence",
@@ -696,8 +765,18 @@ function createElements(): Record<string, FakeElement> {
   ].map((value) => {
     const field = new FakeElement();
     field.value = value;
+    field.textContent = "Approve";
+    field.className = "field-approve-button secondary";
     return field;
   });
+  elements.queueFilters.children = ["active", "pending", "approved", "all"].map(
+    (value) => {
+      const filter = new FakeElement();
+      filter.value = value;
+      filter.className = "chip queue-filter";
+      return filter;
+    },
+  );
   return elements;
 }
 
@@ -707,11 +786,22 @@ class FakeElement {
   className = "";
   disabled = false;
   hidden = false;
-  innerHTML = "";
   textContent = "";
   type = "";
   value = "";
+  private innerHtmlValue = "";
   private readonly listeners = new Map<string, Array<() => void>>();
+
+  get innerHTML(): string {
+    return this.innerHtmlValue;
+  }
+
+  set innerHTML(value: string) {
+    this.innerHtmlValue = value;
+    if (value === "") {
+      this.children = [];
+    }
+  }
 
   addEventListener(type: string, listener: () => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
@@ -730,6 +820,16 @@ class FakeElement {
   querySelectorAll(selector: string): FakeElement[] {
     if (selector === 'input[type="checkbox"]:checked') {
       return this.children.filter((child) => child.checked);
+    }
+    if (selector === ".field-approve-button") {
+      return this.children.filter((child) =>
+        child.className.includes("field-approve-button"),
+      );
+    }
+    if (selector === ".queue-filter") {
+      return this.children.filter((child) =>
+        child.className.includes("queue-filter"),
+      );
     }
     return [];
   }
