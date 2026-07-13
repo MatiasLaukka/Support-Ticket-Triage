@@ -23,6 +23,7 @@ import {
   analyzeEvidenceReadiness,
   type EvidenceReadiness,
 } from "./evidence-readiness.js";
+import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
@@ -82,6 +83,7 @@ export function buildApprovalDeskRecommendationInput(input: {
 
   const draftCustomerResponse = buildDraftCustomerResponse({
     ticket,
+    outcome,
     knowledgeArticleIds,
     escalationReasons,
     evidenceReadiness,
@@ -208,6 +210,7 @@ function buildTags(ticket: Ticket, outcome: ExpectedOutcome): string[] {
 
 function buildDraftCustomerResponse(input: {
   ticket: Ticket;
+  outcome: ExpectedOutcome;
   knowledgeArticleIds: readonly string[];
   escalationReasons: readonly string[];
   evidenceReadiness: EvidenceReadiness;
@@ -216,6 +219,7 @@ function buildDraftCustomerResponse(input: {
     input;
   const style = classifyResponseStyle(
     ticket,
+    input.outcome,
     knowledgeArticleIds,
     escalationReasons,
   );
@@ -254,14 +258,15 @@ function buildDraftCustomerResponse(input: {
 
 function classifyResponseStyle(
   ticket: Ticket,
+  outcome: ExpectedOutcome,
   knowledgeArticleIds: readonly string[],
   escalationReasons: readonly string[],
 ): ResponseStyle {
-  const text = ticketText(ticket);
   if (
-    knowledgeArticleIds.includes("sms-compliance") &&
-    text.includes("quiet-hour") &&
-    text.includes("blocked")
+    detectKnownCause({
+      ticket,
+      outcome,
+    }) !== undefined
   ) {
     return "known-cause";
   }
@@ -280,15 +285,13 @@ function buildKnownCauseResponse(
   ticket: Ticket,
   evidenceReadiness: EvidenceReadiness,
 ): string {
-  const text = ticketText(ticket);
-  if (text.includes("quiet-hour") && text.includes("blocked")) {
+  const knownCause = getKnownCause(evidenceReadiness.knownCause);
+  if (knownCause !== undefined) {
     return buildStructuredDiagnosticResponse({
       ticket,
       evidenceReadiness,
-      problemSummary:
-        "We reviewed the SMS campaign issue, and the dashboard message indicates quiet-hour protection blocked delivery.",
-      nextStep:
-        "This looks like expected compliance behavior for an SMS campaign scheduled during restricted sending hours. Please reschedule the campaign for an eligible sending window or review the account quiet-hour settings before attempting another send.",
+      problemSummary: knownCause.problemSummary,
+      nextStep: knownCause.nextStep,
     });
   }
 

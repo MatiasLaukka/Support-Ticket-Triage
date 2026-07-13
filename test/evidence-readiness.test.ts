@@ -54,6 +54,33 @@ describe("analyzeEvidenceReadiness", () => {
     expect(readiness.missingEvidence).toEqual([]);
   });
 
+  it("detects webhook secret rotation known causes and asks only for confirming evidence", async () => {
+    const ticket = await loadSeedTicket("TKT-1008");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1008",
+        category: "integration",
+        acceptablePriorities: ["P2"],
+        team: "integrations",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+    });
+
+    expect(readiness.supportState).toBe("known-cause");
+    expect(readiness.knownCause).toBe("webhook-secret-rotation");
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "endpoint-url",
+      "delivery-id",
+      "signing-secret-rotation-time",
+      "raw-body-change-status",
+    ]);
+    expect(readiness.nextInvestigationSteps).toContain(
+      "Confirm the endpoint validates with the current signing secret.",
+    );
+  });
+
   it("recognizes provided platform, email, event, and URL evidence", async () => {
     const ticket = TicketSchema.parse({
       ...(await loadSeedTicket("TKT-1005")),

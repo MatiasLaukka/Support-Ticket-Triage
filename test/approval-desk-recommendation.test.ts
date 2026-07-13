@@ -96,7 +96,7 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
-  it("uses customer-facing knowledge guidance in draft responses", async () => {
+  it("uses known-cause guidance in webhook secret rotation draft responses", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
     );
@@ -111,14 +111,16 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.knowledgeArticleIds).toEqual([
       "webhook-signature-validation",
     ]);
+    expect(input.supportState).toBe("known-cause");
+    expect(input.knownCause).toBe("webhook-secret-rotation");
+    expect(input.draftCustomerResponse).toContain(
+      "post-rotation issue",
+    );
+    expect(input.draftCustomerResponse).toContain("current signing secret");
     expect(input.draftCustomerResponse).toContain("endpoint URL");
     expect(input.draftCustomerResponse).toContain("delivery ID");
-    expect(input.draftCustomerResponse).toContain("failure timestamp");
-    expect(input.draftCustomerResponse).not.toContain(
-      "signing secret rotation time",
-    );
-    expect(input.draftCustomerResponse).toContain("raw body handling");
-    expect(input.draftCustomerResponse).toContain("timestamp tolerance");
+    expect(input.draftCustomerResponse).toContain("raw body");
+    expect(input.draftCustomerResponse).not.toContain("timestamp tolerance");
     expect(input.providedEvidence?.map((requirement) => requirement.id)).toContain(
       "signing-secret-rotation-time",
     );

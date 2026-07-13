@@ -4,6 +4,7 @@ import type {
   SupportState,
   Ticket,
 } from "../domain.js";
+import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
 
 type EvidenceSource = EvidenceRequirement["source"];
 
@@ -269,10 +270,11 @@ export function analyzeEvidenceReadiness(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
 }): EvidenceReadiness {
-  const knownCause = detectKnownCause(input.ticket, input.outcome);
+  const knownCauseDefinition = detectKnownCause(input);
+  const knownCause = knownCauseDefinition?.id ?? null;
   const requiredEvidence =
-    knownCause === "sms-quiet-hours"
-      ? []
+    knownCauseDefinition !== undefined
+      ? evidenceForKnownCause(knownCauseDefinition.requiredEvidenceIds)
       : evidenceForKnowledge(
           relevantKnowledgeArticleIds(input.ticket, input.outcome),
           "knowledge",
@@ -329,27 +331,16 @@ function evidenceForKnowledge(
   return ids.map((id) => evidenceRequirement(id, source));
 }
 
+function evidenceForKnownCause(ids: readonly string[]): EvidenceRequirement[] {
+  return unique(ids).map((id) => evidenceRequirement(id, "known-cause"));
+}
+
 function evidenceRequirement(id: string, source: EvidenceSource): EvidenceRequirement {
   const base = EVIDENCE_CATALOG[id];
   if (base === undefined) {
     throw new Error(`Evidence requirement ${id} is not registered.`);
   }
   return { ...base, source };
-}
-
-function detectKnownCause(
-  ticket: Ticket,
-  outcome: ExpectedOutcome,
-): string | null {
-  const text = ticketText(ticket);
-  if (
-    outcome.knowledgeArticleIds.includes("sms-compliance") &&
-    text.includes("quiet-hour") &&
-    text.includes("blocked")
-  ) {
-    return "sms-quiet-hours";
-  }
-  return null;
 }
 
 function chooseSupportState(input: {
@@ -374,10 +365,9 @@ function buildNextInvestigationSteps(input: {
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): string[] {
-  if (input.knownCause === "sms-quiet-hours") {
-    return [
-      "Explain quiet-hour protection and ask the customer to reschedule for an eligible sending window.",
-    ];
+  const knownCause = getKnownCause(input.knownCause);
+  if (knownCause !== undefined) {
+    return [...knownCause.investigationSteps];
   }
   if (input.outcome.requiredEscalations.includes("outage")) {
     return [
