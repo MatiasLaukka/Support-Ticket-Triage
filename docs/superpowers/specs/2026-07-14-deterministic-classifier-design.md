@@ -41,7 +41,20 @@ The `signals` array is part of the product, not debug noise. It allows tests, au
 
 The classifier should evaluate normalized ticket text and metadata through explicit rule groups. Rules emit weighted signals. A resolver then converts the signal scores into the final triage fields.
 
-### 1. Safety And Escalation Rules
+### 1. Submitted Metadata Signals
+
+Submitted metadata should be used as weak-to-medium evidence, not as truth. The classifier should read the ticket's current or customer-selected category, priority, team, status, and tags, then emit low-weight signals from them.
+
+Examples:
+
+- customer-selected `api` category emits a small API signal;
+- customer-selected `P1` emits an urgency signal, but cannot force `P1` without impact or risk evidence;
+- existing tags such as `shopify`, `webhook`, `security`, or `sms` emit topic signals;
+- current team can increase confidence when it agrees with ticket text, but it should not override stronger content signals.
+
+This layer should also produce disagreement signals when submitted metadata conflicts with stronger classifier evidence. For example, if the customer selected `api` but the body clearly describes a Shopify catalog sync issue, the classifier should route to integrations and record why it overrode the submitted category.
+
+### 2. Safety And Escalation Rules
 
 Safety rules run first and can override normal routing:
 
@@ -53,7 +66,7 @@ Safety rules run first and can override normal routing:
 
 These rules emit escalation signals and may force `security` or `incident-response` routing.
 
-### 2. Product Area Rules
+### 3. Product Area Rules
 
 Product rules identify the main support topic:
 
@@ -66,7 +79,7 @@ Product rules identify the main support topic:
 
 These rules emit category, team, and knowledge article candidates.
 
-### 3. Known Cause Rules
+### 4. Known Cause Rules
 
 Known-cause rules run after product-area signals, because they are topic-specific. They should reuse the existing known-cause catalog where possible.
 
@@ -81,7 +94,7 @@ Examples:
 
 Known-cause signals can refine evidence requirements, support state, investigation steps, and draft strategy.
 
-### 4. Priority Rules
+### 5. Priority Rules
 
 Priority should combine impact, risk, and urgency instead of relying only on urgent wording:
 
@@ -92,7 +105,7 @@ Priority should combine impact, risk, and urgency instead of relying only on urg
 
 Priority rules should be deterministic and explainable through signals.
 
-### 5. Evidence Readiness Rules
+### 6. Evidence Readiness Rules
 
 Evidence readiness remains separate from classification, but it should consume the classifier result instead of an expected outcome. It must deduplicate overlapping requirements, so shared evidence such as store URL, profile/customer ID, event ID, request ID, and payload examples are not asked for twice.
 
@@ -101,11 +114,12 @@ Evidence readiness remains separate from classification, but it should consume t
 The resolver should:
 
 1. Sum signals by target.
-2. Apply hard precedence for security and outage escalation.
-3. Select the strongest product area when no override applies.
-4. Attach knowledge articles from the winning product area and known cause.
-5. Derive confidence from score strength and margin over the runner-up.
-6. Return all winning and relevant secondary signals for auditability.
+2. Treat submitted metadata as supporting evidence, not a hard decision.
+3. Apply hard precedence for security and outage escalation.
+4. Select the strongest product area when no override applies.
+5. Attach knowledge articles from the winning product area and known cause.
+6. Derive confidence from score strength, agreement with submitted metadata, and margin over the runner-up.
+7. Return all winning, disagreement, and relevant secondary signals for auditability.
 
 Confidence should decrease when two product areas are close, when only weak terms matched, or when required context is missing.
 
@@ -125,6 +139,8 @@ The Approval Desk API should eventually use the classifier by default. Tests and
 Start with red tests that prove the current system cannot classify without expected outcomes. Then add:
 
 - one unit test per major rule group;
+- submitted metadata tests proving customer/current category, priority, team, and tags influence but do not dominate classification;
+- disagreement tests proving strong ticket text can override submitted category or priority while recording an audit signal;
 - known-cause classifier tests for the existing catalog;
 - safety precedence tests, especially security over integration and outage over normal API routing;
 - confidence tests for clear and ambiguous tickets;
