@@ -105,6 +105,36 @@ describe("TriageService", () => {
     );
   });
 
+  it("preserves classifier signals and records their count on submission", async () => {
+    const harness = makeHarness();
+
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        classificationSignals: [
+          {
+            ruleId: "metadata-category-api",
+            target: "category:api",
+            weight: 2,
+            reason: "Submitted category is api.",
+          },
+        ],
+      }),
+    );
+    const auditEvent = harness.audit.events[0];
+
+    expect(recommendation.classificationSignals).toEqual([
+      {
+        ruleId: "metadata-category-api",
+        target: "category:api",
+        weight: 2,
+        reason: "Submitted category is api.",
+      },
+    ]);
+    expect(auditEvent?.after).toMatchObject({
+      classificationSignalCount: 1,
+    });
+  });
+
   it("deletes a pending recommendation and remains retryable when submission audit fails", async () => {
     const harness = makeHarness();
     const auditFailure = new DomainError(

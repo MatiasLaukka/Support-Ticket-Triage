@@ -136,6 +136,15 @@ export const EvidenceRequirementSchema = z
   })
   .strict();
 
+export const ClassificationSignalSchema = z
+  .object({
+    ruleId: SlugSchema,
+    target: NonBlankStringSchema,
+    weight: z.number(),
+    reason: NonBlankStringSchema,
+  })
+  .strict();
+
 export const CustomerSchema = z
   .object({
     name: NonBlankStringSchema,
@@ -256,6 +265,7 @@ export const TriageRecommendationSchema = z
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),
+    classificationSignals: z.array(ClassificationSignalSchema).optional(),
     nextInvestigationSteps: UniqueNonBlankStringsSchema.optional(),
     knowledgeArticleIds: z.array(SlugSchema),
     draftCustomerResponse: NonBlankStringSchema,
@@ -469,4 +479,5 @@ export type AuditEvent = z.infer<typeof AuditEventSchema>;
 export type RequiredEscalation = z.infer<typeof RequiredEscalationSchema>;
 export type SupportState = z.infer<typeof SupportStateSchema>;
 export type EvidenceRequirement = z.infer<typeof EvidenceRequirementSchema>;
+export type ClassificationSignal = z.infer<typeof ClassificationSignalSchema>;
 export type ExpectedOutcome = z.infer<typeof ExpectedOutcomeSchema>;

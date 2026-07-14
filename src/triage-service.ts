@@ -4,6 +4,7 @@ import {
   ApprovalSchema,
   AuditEventSchema,
   CategorySchema,
+  ClassificationSignalSchema,
   DraftCustomerResponseCheckSchema,
   DraftCustomerResponseSourceSchema,
   DraftCustomerResponseStyleSchema,
@@ -23,6 +24,7 @@ import {
   type ApprovedField,
   type AuditEvent,
   type Category,
+  type ClassificationSignal,
   type DuplicateCandidate,
   type EvidenceRequirement,
   type GptAssist,
@@ -62,6 +64,7 @@ const SubmitRecommendationInputSchema = z
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),
+    classificationSignals: z.array(ClassificationSignalSchema).optional(),
     nextInvestigationSteps: z.array(NonBlankStringSchema).optional(),
     knowledgeArticleIds: z.array(
       z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -122,6 +125,7 @@ export interface SubmitRecommendationInput {
   requiredEvidence?: EvidenceRequirement[];
   providedEvidence?: EvidenceRequirement[];
   missingEvidence?: EvidenceRequirement[];
+  classificationSignals?: ClassificationSignal[];
   nextInvestigationSteps?: string[];
   knowledgeArticleIds: string[];
   draftCustomerResponse: string;
@@ -252,6 +256,9 @@ export class TriageService {
       ...(parsed.missingEvidence === undefined
         ? {}
         : { missingEvidence: parsed.missingEvidence }),
+      ...(parsed.classificationSignals === undefined
+        ? {}
+        : { classificationSignals: parsed.classificationSignals }),
       ...(parsed.nextInvestigationSteps === undefined
         ? {}
         : { nextInvestigationSteps: parsed.nextInvestigationSteps }),
@@ -297,6 +304,8 @@ export class TriageService {
         team: recommendation.team,
         escalationRequired: recommendation.escalationRequired,
         escalationReasons: recommendation.escalationReasons,
+        classificationSignalCount:
+          recommendation.classificationSignals?.length ?? 0,
       },
       rationale: recommendation.rationale,
       knowledgeArticleIds: recommendation.knowledgeArticleIds,

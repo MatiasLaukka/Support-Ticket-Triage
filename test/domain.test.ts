@@ -3,6 +3,7 @@ import {
   ApprovalSchema,
   AuditEventSchema,
   CategorySchema,
+  ClassificationSignalSchema,
   DuplicateCandidateSchema,
   ExpectedOutcomeSchema,
   KnowledgeArticleSchema,
@@ -182,6 +183,57 @@ describe("domain contracts", () => {
     ).toMatchObject({
       assignee: null,
     });
+  });
+
+  it("accepts classifier signals with stable rule IDs and reasons", () => {
+    expect(
+      ClassificationSignalSchema.parse({
+        ruleId: "metadata-category-api",
+        target: "category:api",
+        weight: 2,
+        reason: "Submitted category is api.",
+      }),
+    ).toEqual({
+      ruleId: "metadata-category-api",
+      target: "category:api",
+      weight: 2,
+      reason: "Submitted category is api.",
+    });
+  });
+
+  it("stores optional classifier signals on recommendations", () => {
+    const parsedRecommendation = TriageRecommendationSchema.parse({
+      id: "00000001-1111-4111-8111-000000000001",
+      ticketId: "TKT-1001",
+      sourceRevision: 1,
+      category: "api",
+      priority: "P2",
+      team: "api-platform",
+      duplicateCandidates: [],
+      outageRisk: "none",
+      securityRisk: "none",
+      slaRisk: "none",
+      missingInformation: [],
+      knowledgeArticleIds: ["event-tracking-debugging"],
+      draftCustomerResponse: "We are checking the API issue.",
+      rationale: "Classifier test.",
+      confidence: 0.84,
+      recommendedNextAction: "Review the recommendation.",
+      escalationRequired: false,
+      escalationReasons: [],
+      classificationSignals: [
+        {
+          ruleId: "api-track-language",
+          target: "topic:api",
+          weight: 6,
+          reason: "Ticket mentions Track API.",
+        },
+      ],
+      resolution: "pending",
+      createdAt: "2026-06-10T09:00:00.000Z",
+    });
+
+    expect(parsedRecommendation.classificationSignals).toHaveLength(1);
   });
 
   it("represents bounded GPT assist material on a recommendation", () => {
