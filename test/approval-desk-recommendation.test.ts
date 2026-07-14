@@ -236,6 +236,32 @@ describe("Approval Desk recommendation builder", () => {
     expect(customerConfirmed.missingInformation).toEqual([]);
   });
 
+  it("keeps needs-information when a vague reply adds no recognized evidence", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-vague",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "It is still happening, but I am not sure where to find the technical details.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("needs-information");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Thanks for sending those details.",
+    );
+  });
+
   it("infers lifecycle state from reply content rather than reply order", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -325,6 +351,60 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).toContain(
       "possible platform delay affecting event processing",
     );
+  });
+
+  it("makes platform-delay context authoritative over a preexisting known cause", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-platform-impact",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.knownCause).not.toBe("webhook-secret-rotation");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+    expect(input.draftCustomerResponse).not.toContain("secret rotation");
+    expect(input.draftCustomerResponse).not.toContain("current signing secret");
+  });
+
+  it("does not infer a platform fix from negated platform impact", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-negated-platform-impact",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is not affecting all stores, but recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("waiting-on-platform-fix");
   });
 
   it("ignores customer replies from other tickets when building lifecycle drafts", async () => {

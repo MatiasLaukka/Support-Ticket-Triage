@@ -1850,6 +1850,9 @@ export const approvalDeskHtml = `<!doctype html>
         }
         const body = conversationScenarioBody(value);
         const replies = currentCustomerReplies();
+        if (replies.length >= 8) {
+          return;
+        }
         state.customerRepliesByTicketId[state.selectedTicket.id] = replies.concat({
           id: 'demo-reply-' + String(replies.length + 1),
           createdAt: new Date(Date.UTC(2026, 5, 10, 9, replies.length * 7)).toISOString(),

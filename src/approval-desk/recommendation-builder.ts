@@ -270,6 +270,10 @@ function buildDraftCustomerResponse(input: {
     return buildCustomerConfirmedResponse(ticket);
   }
 
+  if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+    return buildPlatformFixResponse(ticket, evidenceReadiness, input.replyStage);
+  }
+
   const style = classifyResponseStyle(
     ticket,
     input.outcome,
@@ -387,15 +391,7 @@ function buildEscalationResponse(
   }
 
   if (escalationReasons.includes("outage")) {
-    return buildStructuredDiagnosticResponse({
-      ticket,
-      evidenceReadiness,
-      replyStage,
-      problemSummary:
-        "We are investigating this as a possible platform delay affecting event processing.",
-      nextStep:
-        "The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.",
-    });
+    return buildPlatformFixResponse(ticket, evidenceReadiness, replyStage);
   }
 
   return buildStructuredDiagnosticResponse({
@@ -406,6 +402,22 @@ function buildEscalationResponse(
       "We are escalating this ticket for review because it may need a safer specialist path.",
     nextStep:
       "We will share the next update after confirming impact, risk, and the safest next action.",
+  });
+}
+
+function buildPlatformFixResponse(
+  ticket: Ticket,
+  evidenceReadiness: EvidenceReadiness,
+  replyStage: CustomerReplyStage,
+): string {
+  return buildStructuredDiagnosticResponse({
+    ticket,
+    evidenceReadiness,
+    replyStage,
+    problemSummary:
+      "We are investigating this as a possible platform delay affecting event processing.",
+    nextStep:
+      "The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.",
   });
 }
 
@@ -526,17 +538,17 @@ function analyzeCustomerReplyLifecycle(input: {
       left.createdAt.localeCompare(right.createdAt) ||
       left.id.localeCompare(right.id),
   );
+  const evidenceBeforeReplies = analyzeEvidenceReadiness({
+    ticket: input.ticket,
+    outcome: input.outcome,
+  });
   if (ticketReplies.length === 0) {
-    const evidenceReadiness = analyzeEvidenceReadiness({
-      ticket: input.ticket,
-      outcome: input.outcome,
-    });
     return {
       evidenceReadiness: withLifecycleSupportState(
-        evidenceReadiness,
-        requiresMoreCustomerEvidence(evidenceReadiness)
+        evidenceBeforeReplies,
+        requiresMoreCustomerEvidence(evidenceBeforeReplies)
           ? "needs-information"
-          : evidenceReadiness.supportState,
+          : evidenceBeforeReplies.supportState,
       ),
       replyStage: "first-contact",
     };
@@ -570,27 +582,70 @@ function analyzeCustomerReplyLifecycle(input: {
 
   if (hasPlatformFixContext(replyText)) {
     return {
-      evidenceReadiness: withLifecycleSupportState(
-        evidenceReadiness,
-        "waiting-on-platform-fix",
-      ),
+      evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "all-evidence",
     };
   }
 
   if (requiresMoreCustomerEvidence(evidenceReadiness)) {
+    const hasUsefulEvidenceProgress = hasNewRecognizedEvidence(
+      evidenceBeforeReplies,
+      evidenceReadiness,
+    );
     return {
       evidenceReadiness: withLifecycleSupportState(
         evidenceReadiness,
-        "information-received",
+        hasUsefulEvidenceProgress
+          ? "information-received"
+          : "needs-information",
       ),
-      replyStage: "partial-follow-up",
+      replyStage: hasUsefulEvidenceProgress
+        ? "partial-follow-up"
+        : "first-contact",
     };
   }
 
   return {
     evidenceReadiness,
     replyStage: "all-evidence",
+  };
+}
+
+function hasNewRecognizedEvidence(
+  evidenceBeforeReplies: EvidenceReadiness,
+  evidenceAfterReplies: EvidenceReadiness,
+): boolean {
+  const providedBeforeReplies = new Set(
+    evidenceBeforeReplies.providedEvidence.map((requirement) => requirement.id),
+  );
+  return evidenceAfterReplies.providedEvidence.some(
+    (requirement) => !providedBeforeReplies.has(requirement.id),
+  );
+}
+
+function platformFixEvidenceReadiness(
+  evidenceReadiness: EvidenceReadiness,
+): EvidenceReadiness {
+  const requiredEvidence = evidenceReadiness.requiredEvidence.filter(
+    (requirement) => requirement.source !== "known-cause",
+  );
+  const requiredIds = new Set(requiredEvidence.map((requirement) => requirement.id));
+
+  return {
+    ...evidenceReadiness,
+    supportState: "waiting-on-platform-fix",
+    knownCause: null,
+    requiredEvidence,
+    providedEvidence: evidenceReadiness.providedEvidence.filter((requirement) =>
+      requiredIds.has(requirement.id),
+    ),
+    missingEvidence: evidenceReadiness.missingEvidence.filter((requirement) =>
+      requiredIds.has(requirement.id),
+    ),
+    nextInvestigationSteps: [
+      "Correlate affected region, event timing, ingestion delay, and profile timeline updates.",
+      "Confirm whether platform processing delay explains the customer impact.",
+    ],
   };
 }
 
@@ -630,6 +685,14 @@ function isCustomerConfirmation(value: string): boolean {
 }
 
 function hasPlatformFixContext(value: string): boolean {
+  const negatedImpact =
+    /\b(?:not|isn'?t|wasn'?t|aren'?t|weren'?t|no)\b.{0,24}\b(?:affecting|impacting)\b.{0,24}\b(?:all|multiple|many)\b.{0,40}\b(?:stores|accounts|profiles|customers)\b/i;
+  const negatedPlatform =
+    /\b(?:not|isn'?t|wasn'?t|aren'?t|weren'?t|no)\b.{0,24}\b(?:platform|platform-side|incident)\b/i;
+  if (negatedImpact.test(value) || negatedPlatform.test(value)) {
+    return false;
+  }
+
   return /\b(?:all|multiple|many)\b.{0,40}\b(?:stores|accounts|profiles|customers)\b/i.test(value) &&
     /\b(?:delayed|delay|missing|not showing|not processing)\b/i.test(value) &&
     /\b(?:api accepted|accepted by the api|platform|incident|processing)\b/i.test(value);

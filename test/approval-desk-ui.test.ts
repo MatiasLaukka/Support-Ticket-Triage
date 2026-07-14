@@ -79,6 +79,23 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("caps synthetic conversation replies at the HTTP request limit", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+
+    for (let index = 0; index < 9; index += 1) {
+      app.clickConversationScenario("vague-reply");
+    }
+
+    await app.createRecommendation();
+
+    const recommendationRequest = app.requests.find((request) =>
+      request.path.endsWith("/recommendations"),
+    );
+    const body = JSON.parse(String(recommendationRequest?.init?.body));
+    expect(body.customerReplies).toHaveLength(8);
+  });
+
   it("renders automation evidence cards and guardrails on initial load", async () => {
     const app = await startApprovalDeskApp();
 
