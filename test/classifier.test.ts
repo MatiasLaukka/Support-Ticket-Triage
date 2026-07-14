@@ -27,6 +27,11 @@ describe("classifyTicket", () => {
           target: "category:api",
         }),
         expect.objectContaining({
+          ruleId: "metadata-tag-shopify-category",
+          target: "category:integration",
+          weight: 1,
+        }),
+        expect.objectContaining({
           ruleId: "disagreement-category",
           target: "disagreement:category",
         }),

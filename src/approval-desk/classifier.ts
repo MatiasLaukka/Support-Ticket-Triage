@@ -54,6 +54,20 @@ const CATEGORY_DEFAULT_TEAMS: Record<Category, Team> = {
 
 const PRIORITY_ORDER: Priority[] = ["P1", "P2", "P3", "P4"];
 
+const TAG_CLASSIFICATIONS: Readonly<Record<string, { category: Category; team: Team }>> = {
+  api: { category: "api", team: "api-platform" },
+  billing: { category: "billing", team: "billing" },
+  campaign: { category: "api", team: "api-platform" },
+  catalog: { category: "integration", team: "integrations" },
+  connector: { category: "integration", team: "integrations" },
+  flow: { category: "integration", team: "integrations" },
+  integration: { category: "integration", team: "integrations" },
+  shopify: { category: "integration", team: "integrations" },
+  sms: { category: "api", team: "api-platform" },
+  sync: { category: "integration", team: "integrations" },
+  webhook: { category: "integration", team: "integrations" },
+};
+
 export function classifyTicket(ticket: Ticket): TicketClassification {
   const context = { ticket, content: ticketContent(ticket) };
   const signals = RULES.flatMap((rule) => (rule.when(context) ? rule.emit(context) : []));
@@ -120,6 +134,11 @@ const RULES: readonly Rule[] = [
       ];
     },
   })),
+  {
+    id: "metadata-tags",
+    when: ({ ticket }) => ticket.tags.some((tag) => TAG_CLASSIFICATIONS[tag.toLowerCase()] !== undefined),
+    emit: ({ ticket }) => ticket.tags.flatMap((tag) => tagSignals(tag)),
+  },
   {
     id: "security-exposure",
     when: ({ content }) => /(?:private |secret |exposed |leaked ).*(?:api key|token|credential)|(?:api key|token|credential).*(?:exposed|leaked|logs)/.test(content),
@@ -191,6 +210,27 @@ function productRule(category: Category, matcher: RegExp, team: Team, articleId:
       signal(`product-${category}-${articleId}-article`, `knowledge:${articleId}`, 5, `Use ${articleId} guidance.`),
     ],
   };
+}
+
+function tagSignals(tag: string): ClassificationSignal[] {
+  const normalizedTag = tag.toLowerCase();
+  const classification = TAG_CLASSIFICATIONS[normalizedTag];
+  if (classification === undefined) return [];
+
+  return [
+    signal(
+      `metadata-tag-${normalizedTag}-category`,
+      `category:${classification.category}`,
+      1,
+      `Submitted tag ${tag} is retained as weak category evidence.`,
+    ),
+    signal(
+      `metadata-tag-${normalizedTag}-team`,
+      `team:${classification.team}`,
+      1,
+      `Submitted tag ${tag} is retained as weak team evidence.`,
+    ),
+  ];
 }
 
 function resolveClassification(ticket: Ticket, signals: ClassificationSignal[]): TicketClassification {
