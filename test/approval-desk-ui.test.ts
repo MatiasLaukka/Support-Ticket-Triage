@@ -253,6 +253,27 @@ describe("approvalDeskHtml", () => {
 
     app.el("continueApproval").dispatch("click");
 
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Classification evidence available - 6 signals",
+    );
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "data-action=\"review-classifier-evidence\"",
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "Why this classification?",
+    );
+
+    app.el("recommendationPanel").dispatch("click", {
+      target: { dataset: { action: "review-classifier-evidence" } },
+    });
+
+    expect(app.el("approvalStage").hidden).toBe(true);
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Why this classification?",
+    );
+
+    app.el("continueApproval").dispatch("click");
+
     expect(app.el("approvalStage").hidden).toBe(false);
     expect(app.el("continueApproval").hidden).toBe(true);
     expect(app.el("backToRecommendation").hidden).toBe(false);
@@ -474,6 +495,60 @@ describe("approvalDeskHtml", () => {
     expect(html).not.toContain("<script>alert");
   });
 
+  it("shows compact classifier evidence with grouped escaped signal details", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    const html = app.el("recommendationPanel").innerHTML;
+    expect(html).toContain("Classifier evidence");
+    expect(html).toContain("Category: authentication");
+    expect(html).toContain("Priority: P2");
+    expect(html).toContain("Team: identity");
+    expect(html).toContain("Confidence: 0.87");
+    expect(html).toContain("Why this classification?");
+    expect(html).toContain("Safety signal");
+    expect(html).toContain("Known cause");
+    expect(html).toContain("Submitted metadata");
+    expect(html).toContain("Customer text");
+    expect(html).toContain("Safety rules");
+    expect(html).toContain("Other supporting rules");
+    expect(html).toContain("category-authentication");
+    expect(html).toContain("metadata-priority");
+    expect(html).toContain(
+      "&lt;script&gt;Security-sensitive account access language was detected.&lt;/script&gt;",
+    );
+    expect(html).not.toContain("<script>Security-sensitive");
+    expect(html.indexOf("Recommended Triage")).toBeLessThan(
+      html.indexOf("Classifier evidence"),
+    );
+    expect(html.indexOf("Classifier evidence")).toBeLessThan(
+      html.indexOf("Draft Customer Response"),
+    );
+    expect(html.indexOf("Classifier evidence")).toBeLessThan(
+      html.indexOf("GPT Assist"),
+    );
+  });
+
+  it("renders a graceful classifier evidence fallback for legacy recommendations", async () => {
+    const app = await startApprovalDeskApp({
+      recommendation: {
+        ...fixtureRecommendation,
+        classificationSignals: undefined,
+      },
+    });
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    const html = app.el("recommendationPanel").innerHTML;
+    expect(html).toContain("Classifier evidence");
+    expect(html).toContain("Category: authentication");
+    expect(html).toContain(
+      "No classifier signal snapshot stored for this recommendation.",
+    );
+    expect(html).not.toContain("Why this classification?");
+  });
+
   it("filters queue tickets by workflow state and updates filter chips", async () => {
     const app = await startApprovalDeskApp({
       tickets: [
@@ -625,6 +700,44 @@ const fixtureRecommendation = {
   },
   rationale: "Matches account access routing.",
   confidence: 0.87,
+  classificationSignals: [
+    {
+      ruleId: "category-authentication",
+      target: "category:authentication",
+      weight: 0.55,
+      reason: "Ticket text mentions login and account access failures.",
+    },
+    {
+      ruleId: "metadata-priority",
+      target: "metadata:priority:P3",
+      weight: 0.15,
+      reason: "Customer submitted the ticket as normal priority.",
+    },
+    {
+      ruleId: "risk-security",
+      target: "risk:security:possible",
+      weight: 0.4,
+      reason: "<script>Security-sensitive account access language was detected.</script>",
+    },
+    {
+      ruleId: "knowledge-account-access",
+      target: "knowledge:account-access-reset",
+      weight: 0.3,
+      reason: "Account access reset documentation matches the reported symptoms.",
+    },
+    {
+      ruleId: "known-cause-login-session-expiry",
+      target: "knownCause:login-session-expiry",
+      weight: 0.5,
+      reason: "Known login session expiry symptoms match the ticket.",
+    },
+    {
+      ruleId: "metadata-disagreement-priority",
+      target: "disagreement:priority",
+      weight: 0.35,
+      reason: "Submitted priority was lower than the detected account access risk.",
+    },
+  ],
   recommendedNextAction: "Review evidence before approval.",
   escalationRequired: true,
   escalationReasons: ["missing-information"],
@@ -664,14 +777,18 @@ const fixtureEvidence = {
   metrics: { pendingRecommendations: 1 },
 };
 
+type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationSignals"> & {
+  classificationSignals?: typeof fixtureRecommendation.classificationSignals;
+};
+
 async function startApprovalDeskApp(options: {
   failEvidenceAfter?: number;
   failRecommendation?: boolean;
   confirmResult?: boolean;
-  recommendation?: typeof fixtureRecommendation;
+  recommendation?: FixtureRecommendation;
   recommendationDelayTicks?: number;
   tickets?: Array<typeof fixtureTicket & { recommendationSummary?: Record<string, unknown> }>;
-  ticketDetailRecommendation?: typeof fixtureRecommendation;
+  ticketDetailRecommendation?: FixtureRecommendation;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -873,7 +990,7 @@ class FakeElement {
   type = "";
   value = "";
   private innerHtmlValue = "";
-  private readonly listeners = new Map<string, Array<() => void>>();
+  private readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
 
   get innerHTML(): string {
     return this.innerHtmlValue;
@@ -886,7 +1003,7 @@ class FakeElement {
     }
   }
 
-  addEventListener(type: string, listener: () => void): void {
+  addEventListener(type: string, listener: (event?: unknown) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
@@ -894,9 +1011,9 @@ class FakeElement {
     this.children.push(child);
   }
 
-  dispatch(type: string): void {
+  dispatch(type: string, event?: unknown): void {
     for (const listener of this.listeners.get(type) ?? []) {
-      listener();
+      listener(event);
     }
   }
 
