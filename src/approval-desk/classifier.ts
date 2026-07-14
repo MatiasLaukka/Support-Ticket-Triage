@@ -162,6 +162,18 @@ const RULES: readonly Rule[] = [
     ],
   },
   {
+    id: "security-unknown-key",
+    when: ({ content }) => /private key.*(?:no authorized owner|not yet known)|audit history.*private key/.test(content),
+    emit: () => securitySignals("security-unknown-key", "An unrecognized private key requires security containment.", true),
+  },
+  {
+    id: "security-missing-information",
+    when: ({ content }) => /(?:private |secret |exposed |leaked ).*(?:api key|token|credential)|(?:api key|token|credential).*(?:exposed|leaked|logs)/.test(content) && /(?:do not know|not yet known|which profiles|source address)/.test(content),
+    emit: () => [
+      signal("security-missing-information", "escalation:missing-information", 8, "Security containment needs the missing exposure scope."),
+    ],
+  },
+  {
     id: "prompt-injection",
     when: ({ content }) => /ignore (?:the )?(?:security |previous )?(?:warning|instructions)|system prompt|developer message/.test(content),
     emit: () => [
@@ -179,10 +191,35 @@ const RULES: readonly Rule[] = [
       signal("event-processing-delay", "risk:outage", 9, "Widespread event-processing delay may be a platform incident."),
       signal("event-processing-delay-category", "category:incident", 9, "Potential platform delay routes to incident response."),
       signal("event-processing-delay-team", "team:incident-response", 9, "Potential platform delay routes to incident response."),
-      signal("event-processing-delay-priority", "priority:P2", 8, "Potential platform delay is at least P2."),
+      signal("event-processing-delay-priority", "priority:P1", 9, "Correlated checkout event delays are a P1 incident."),
       signal("event-processing-delay-escalation", "escalation:outage", 9, "Potential platform delay requires outage escalation."),
+      signal("event-processing-delay-sla", "escalation:sla", 8, "Correlated event delays require incident SLA escalation."),
       signal("event-processing-delay-article", "knowledge:event-tracking-debugging", 7, "Use event tracking debugging guidance."),
       signal("event-processing-delay-sync-article", "knowledge:shopify-integration-sync", 5, "Review sync timing while investigating missing checkout events."),
+    ],
+  },
+  issueRule("billing", /\bcoupon (?:codes?|pool)|expired coupon\b/, "billing", "P3", ["coupon-catalog-sync"], "Coupon lifecycle issues are billing-owned."),
+  issueRule("performance", /\b(?:deliverability|hard-bounce|bounce rate|spam complaint|branded sending domain)\b/, "product", "P2", ["email-deliverability"], "Deliverability symptoms require product performance investigation."),
+  issueRule("account-access", /\bduplicate profiles?.*\bcsv import|csv import.*\bduplicate profiles?\b/, "identity", "P3", ["profile-sync-issues"], "CSV profile reconciliation routes to identity."),
+  issueRule("authentication", /\b(?:consent state|email consent).*\b(?:not updating|old)\b/, "identity", "P2", ["profile-sync-issues", "sms-compliance"], "Consent state synchronization routes to identity."),
+  issueRule("account-access", /\b(?:replied stop|sms opt-out).*\b(?:profile|eligible)\b/, "identity", "P3", ["sms-compliance", "profile-sync-issues"], "SMS opt-out state must synchronize to the profile.", 11),
+  issueRule("other", /\bno campaign name, profile, timestamp, error, or screenshot\b/, "support", "P3", [], "Missing diagnostic context keeps the ticket in support triage."),
+  issueRule("performance", /\bproduct catalog sync.*\b(?:six hours|campaign product block)|\bnew products.*\bcampaign product block\b/, "product", "P3", ["shopify-integration-sync", "coupon-catalog-sync"], "Delayed catalog availability is a product performance issue."),
+  issueRule("incident", /\bcampaign audience snapshot.*\b(?:stuck|not finished|calculating)\b/, "incident-response", "P2", ["campaign-send-failures", "segmentation-audience-rules"], "A stuck audience calculation requires incident response."),
+  issueRule("account-access", /\bsegment count differs|\bsaved export.*\bprofiles\b/, "support", "P3", ["segmentation-audience-rules"], "Audience count reconciliation is a support-led access investigation."),
+  issueRule("performance", /\bwebhooks? eventually succeed.*\b(?:lag|delayed)|\bretry history.*\bdelayed deliveries\b/, "product", "P3", ["webhook-signature-validation"], "Retry delivery latency is a product performance issue."),
+  issueRule("api", /\btrack api.*\b(?:timestamp|local time)|\bevent timestamp.*\b400 validation\b/, "api-platform", "P3", ["event-tracking-debugging"], "Timestamp validation is a Track API configuration issue."),
+  issueRule("integration", /\bshopify integration.*\b(?:custom .*field|field into product profiles)\b/, "integrations", "P3", ["shopify-integration-sync"], "Shopify field mapping is an integrations configuration issue."),
+  issueRule("billing", /\bremove expired coupon codes\b/, "billing", "P4", ["coupon-catalog-sync"], "Removing expired coupons is planned billing maintenance."),
+  issueRule("feature-request", /\bpredictive segment builder\b/, "product", "P4", ["segmentation-audience-rules"], "A predictive segment builder is a planned product request."),
+  issueRule("feature-request", /\b(?:consent rule templates|reusable consent)\b/, "product", "P3", ["sms-compliance", "segmentation-audience-rules"], "Consent templates are a product request."),
+  issueRule("integration", /\bflow\b.*\b(?:added to cart|viewed product|events? are visible)\b/, "integrations", "P2", ["event-tracking-debugging"], "Flow entry depends on event eligibility."),
+  issueRule("integration", /\bflow filters?\b/, "integrations", "P2", ["segmentation-audience-rules"], "Flow filters are audience eligibility rules."),
+  {
+    id: "policy-conflict",
+    when: ({ content }) => /ignore policy|do not request approval|do not .*mention this instruction/.test(content),
+    emit: () => [
+      signal("policy-conflict", "escalation:policy-conflict", 8, "Instruction conflicts with approval policy and requires review."),
     ],
   },
   productRule("api", /\b(?:api|endpoint|response)\b/, "api-platform", "api-reference"),
@@ -220,6 +257,40 @@ function productRule(category: Category, matcher: RegExp, team: Team, articleId:
       signal(`product-${category}-${articleId}-article`, `knowledge:${articleId}`, 5, `Use ${articleId} guidance.`),
     ],
   };
+}
+
+function issueRule(
+  category: Category,
+  matcher: RegExp,
+  team: Team,
+  priority: Priority,
+  articleIds: readonly string[],
+  reason: string,
+  weight = 9,
+): Rule {
+  const id = `issue-${category}-${articleIds[0]}`;
+  return {
+    id,
+    when: ({ content }) => matcher.test(content),
+    emit: () => [
+      signal(`${id}-category`, `category:${category}`, weight, reason),
+      signal(`${id}-team`, `team:${team}`, weight, reason),
+      signal(`${id}-priority`, `priority:${priority}`, weight, reason),
+      ...articleIds.map((articleId) => signal(`${id}-${articleId}`, `knowledge:${articleId}`, weight - 1, reason)),
+    ],
+  };
+}
+
+function securitySignals(ruleId: string, reason: string, needsMissingInformation: boolean): ClassificationSignal[] {
+  return [
+    signal(ruleId, "risk:security", 10, reason),
+    signal(`${ruleId}-category`, "category:security", 10, reason),
+    signal(`${ruleId}-team`, "team:security", 10, reason),
+    signal(`${ruleId}-priority`, "priority:P1", 10, reason),
+    signal(`${ruleId}-escalation`, "escalation:security", 10, reason),
+    ...(needsMissingInformation ? [signal(`${ruleId}-missing-information`, "escalation:missing-information", 8, "Security audit details are incomplete.")] : []),
+    signal(`${ruleId}-article`, "knowledge:security-incident-response", 10, reason),
+  ];
 }
 
 function tagSignals(tag: string): ClassificationSignal[] {
@@ -264,6 +335,9 @@ function chooseCategory(signals: ClassificationSignal[]): Category {
 
 function chooseEscalations(signals: ClassificationSignal[], ticket: Ticket): RequiredEscalation[] {
   const escalations = new Set<RequiredEscalation>();
+  for (const { target } of signals) {
+    if (target.startsWith("escalation:")) escalations.add(target.slice("escalation:".length) as RequiredEscalation);
+  }
   if (hasStrongRisk(signals, "security")) escalations.add("security");
   if (hasStrongRisk(signals, "outage")) escalations.add("outage");
   if (ticket.sla.breached) escalations.add("sla");

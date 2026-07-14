@@ -246,6 +246,91 @@ describe("classifyTicket", () => {
     expect(result.knowledgeArticleIds).toContain("billing-and-invoices");
     expect(result.knowledgeArticleIds).not.toContain("campaign-send-failures");
   });
+
+  it.each([
+    {
+      name: "routes coupon lifecycle requests to billing without elevating VIP pressure",
+      subject: "VIP executive wants coupon pool fixed before launch",
+      description: "Coupon codes are not attaching to preview emails for a campaign launch.",
+      category: "billing",
+      priority: "P3",
+      team: "billing",
+      articles: ["coupon-catalog-sync", "campaign-send-failures"],
+    },
+    {
+      name: "routes deliverability symptoms to product performance",
+      subject: "Elevated bounces for latest newsletter",
+      description: "Hard-bounce and spam complaint rates increased after a domain change.",
+      category: "performance",
+      priority: "P2",
+      team: "product",
+      articles: ["email-deliverability"],
+    },
+    {
+      name: "routes unknown private key creation to security",
+      subject: "Unexpected private key created overnight",
+      description: "Audit history shows a private key that no authorized owner recognizes.",
+      category: "security",
+      priority: "P1",
+      team: "security",
+      articles: ["security-incident-response"],
+      escalations: ["security", "missing-information"],
+    },
+    {
+      name: "routes consent synchronization to identity",
+      subject: "Consent state not updating from API",
+      description: "Profiles updated through the API still show old email consent values.",
+      category: "authentication",
+      priority: "P2",
+      team: "identity",
+      articles: ["profile-sync-issues", "sms-compliance"],
+    },
+    {
+      name: "keeps track API timestamp validation at P3",
+      subject: "Track API rejects event timestamp",
+      description: "The Track API returns a 400 validation error when an event timestamp uses local time.",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      articles: ["event-tracking-debugging"],
+    },
+    {
+      name: "routes SMS STOP profile state to identity synchronization",
+      subject: "SMS opt-out not reflected on profile",
+      description: "A subscriber replied STOP, but the profile still appears eligible for the next SMS campaign.",
+      category: "account-access",
+      priority: "P3",
+      team: "identity",
+      articles: ["sms-compliance", "profile-sync-issues"],
+    },
+    {
+      name: "keeps missing campaign evidence in support triage",
+      subject: "Email issue",
+      description: "Emails are weird. No campaign name, profile, timestamp, error, or screenshot is available.",
+      category: "other",
+      priority: "P3",
+      team: "support",
+      articles: ["campaign-send-failures"],
+    },
+  ])("$name", ({ subject, description, category, priority, team, articles, escalations = [] }) => {
+    const result = classifyTicket(makeTicket({ subject, description }));
+
+    expect(result).toMatchObject({ category, priority, team });
+    expect(result.knowledgeArticleIds).toEqual(expect.arrayContaining(articles));
+    expect(result.requiredEscalations).toEqual(expect.arrayContaining(escalations));
+  });
+
+  it("promotes correlated checkout event outages to P1 and SLA escalation", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "EU checkout events missing from activity timeline",
+        description: "Checkout events from multiple EU stores are delayed for the last hour.",
+      }),
+    );
+
+    expect(result.priority).toBe("P1");
+    expect(result.requiredEscalations).toEqual(expect.arrayContaining(["outage", "sla"]));
+  });
 });
 
 function makeTicket(overrides: Partial<Ticket>): Ticket {
