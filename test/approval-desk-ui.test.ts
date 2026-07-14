@@ -601,6 +601,35 @@ describe("approvalDeskHtml", () => {
     expect(html).not.toContain("Why this classification?");
   });
 
+  it("shows compact lifecycle summary in the recommendation draft view", async () => {
+    const app = await startApprovalDeskApp({
+      recommendation: {
+        ...fixtureRecommendation,
+        supportState: "information-received",
+        knownCause: null,
+        providedEvidence: [
+          { id: "endpoint-url", label: "Endpoint URL", customerQuestion: "Endpoint URL", source: "knowledge" },
+        ],
+        missingEvidence: [
+          { id: "raw-body-change-status", label: "Raw body change status", customerQuestion: "Raw body handling changed?", source: "knowledge" },
+        ],
+        recommendedNextAction: "Thank the customer and collect only the remaining evidence.",
+      },
+    });
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    const html = app.el("recommendationPanel").innerHTML;
+    expect(html).toContain("Lifecycle summary");
+    expect(html).toContain("State: information-received");
+    expect(html).toContain("Provided evidence: 1");
+    expect(html).toContain("Missing evidence: 1");
+    expect(html).toContain("Thank the customer and collect only the remaining evidence.");
+    expect(html.indexOf("Lifecycle summary")).toBeLessThan(
+      html.indexOf("Draft Customer Response"),
+    );
+  });
+
   it("uses the classifier evidence fallback reference in approval mode for legacy recommendations", async () => {
     const app = await startApprovalDeskApp({
       recommendation: {
@@ -929,6 +958,11 @@ const fixtureEvidence = {
 
 type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationSignals"> & {
   classificationSignals?: typeof fixtureRecommendation.classificationSignals;
+  supportState?: string;
+  knownCause?: string | null;
+  providedEvidence?: Array<{ id: string; label: string; customerQuestion: string; source: string }>;
+  missingEvidence?: Array<{ id: string; label: string; customerQuestion: string; source: string }>;
+  recommendedNextAction?: string;
 };
 
 async function startApprovalDeskApp(options: {

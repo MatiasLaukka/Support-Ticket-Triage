@@ -1094,6 +1094,7 @@ export const approvalDeskHtml = `<!doctype html>
               '</div>' +
             '</div>' +
             renderClassifierEvidenceCard(recommendation) +
+            renderLifecycleSummaryCard(recommendation) +
             '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
             '<p class="hint">Continue to approval when the draft looks ready.</p>' +
             '<details><summary>Why this draft is safe</summary>' +
@@ -1582,6 +1583,24 @@ export const approvalDeskHtml = `<!doctype html>
           '<div class="chips">' + topChips + '</div>' +
           '<details><summary>Why this classification?</summary>' +
             renderClassifierSignalRows(signals) +
+          '</details>' +
+        '</div>';
+      }
+
+      function renderLifecycleSummaryCard(recommendation) {
+        const provided = Array.isArray(recommendation.providedEvidence) ? recommendation.providedEvidence : [];
+        const missing = Array.isArray(recommendation.missingEvidence) ? recommendation.missingEvidence : [];
+        return '<div class="hero-card lifecycle-summary"><strong>Lifecycle summary</strong>' +
+          '<div class="chips">' +
+            chip('State: ' + (recommendation.supportState ?? 'not assessed')) +
+            chip('Known cause: ' + (recommendation.knownCause ?? 'none')) +
+            chip('Provided evidence: ' + provided.length) +
+            chip('Missing evidence: ' + missing.length) +
+          '</div>' +
+          '<p class="hint">' + escapeHtml(recommendation.recommendedNextAction ?? 'Review the recommendation before approval.') + '</p>' +
+          '<details><summary>Lifecycle evidence</summary>' +
+            '<p class="meta"><strong>Provided</strong> ' + escapeHtml(formatEvidenceLabels(provided)) + '</p>' +
+            '<p class="meta"><strong>Missing</strong> ' + escapeHtml(formatEvidenceLabels(missing)) + '</p>' +
           '</details>' +
         '</div>';
       }
