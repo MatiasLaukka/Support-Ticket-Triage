@@ -177,6 +177,52 @@ describe("classifyTicket", () => {
       ]),
     );
   });
+
+  it("does not route product categories from submitted tags alone", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "Support request",
+        description: "Please help.",
+        tags: ["flow"],
+      }),
+    );
+
+    expect(result.category).toBe("other");
+    expect(result.priority).toBe("P3");
+    expect(result.team).toBe("support");
+  });
+
+  it("does not let metadata alone trigger security precedence", () => {
+    const result = classifyTicket(
+      makeTicket({
+        category: "security",
+        team: "security",
+        subject: "Support request",
+        description: "Please help.",
+        tags: ["private api key exposed"],
+      }),
+    );
+
+    expect(result.category).toBe("other");
+    expect(result.priority).toBe("P3");
+    expect(result.team).toBe("support");
+    expect(result.requiredEscalations).not.toContain("security");
+  });
+
+  it("routes generic invoice sending requests to billing", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "Please send an invoice",
+        description: "We need a copy of our invoice for accounting.",
+        tags: [],
+      }),
+    );
+
+    expect(result.category).toBe("billing");
+    expect(result.team).toBe("billing");
+    expect(result.knowledgeArticleIds).toContain("billing-and-invoices");
+    expect(result.knowledgeArticleIds).not.toContain("campaign-send-failures");
+  });
 });
 
 function makeTicket(overrides: Partial<Ticket>): Ticket {

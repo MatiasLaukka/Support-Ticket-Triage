@@ -30,7 +30,6 @@ type ScoreTarget =
 
 interface ClassifierContext {
   ticket: Ticket;
-  text: string;
   content: string;
 }
 
@@ -56,7 +55,7 @@ const CATEGORY_DEFAULT_TEAMS: Record<Category, Team> = {
 const PRIORITY_ORDER: Priority[] = ["P1", "P2", "P3", "P4"];
 
 export function classifyTicket(ticket: Ticket): TicketClassification {
-  const context = { ticket, text: normalizeTicket(ticket), content: ticketContent(ticket) };
+  const context = { ticket, content: ticketContent(ticket) };
   const signals = RULES.flatMap((rule) => (rule.when(context) ? rule.emit(context) : []));
   const knownCause = detectKnownCause({
     ticket,
@@ -92,27 +91,8 @@ export function classifyTicket(ticket: Ticket): TicketClassification {
   return resolveClassification(ticket, signals);
 }
 
-function normalizeTicket(ticket: Ticket): string {
-  return [
-    ticket.subject,
-    ticket.description,
-    ticket.category ?? "",
-    ticket.priority ?? "",
-    ticket.team ?? "",
-    ticket.customer.name,
-    ticket.customer.plan,
-    ticket.customer.region,
-    ticket.requester?.role ?? "",
-    ticket.requester?.department ?? "",
-    ticket.requester?.technicalLevel ?? "",
-    ...ticket.tags,
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
 function ticketContent(ticket: Ticket): string {
-  return [ticket.subject, ticket.description, ...ticket.tags].join(" ").toLowerCase();
+  return [ticket.subject, ticket.description].join(" ").toLowerCase();
 }
 
 function signal(
@@ -142,7 +122,7 @@ const RULES: readonly Rule[] = [
   })),
   {
     id: "security-exposure",
-    when: ({ text }) => /(?:private |secret |exposed |leaked ).*(?:api key|token|credential)|(?:api key|token|credential).*(?:exposed|leaked|logs)/.test(text),
+    when: ({ content }) => /(?:private |secret |exposed |leaked ).*(?:api key|token|credential)|(?:api key|token|credential).*(?:exposed|leaked|logs)/.test(content),
     emit: () => [
       signal("security-exposure", "risk:security", 10, "Potential credential exposure requires security handling."),
       signal("security-exposure-category", "category:security", 10, "Credential exposure routes to security."),
@@ -154,7 +134,7 @@ const RULES: readonly Rule[] = [
   },
   {
     id: "prompt-injection",
-    when: ({ text }) => /ignore (?:the )?(?:security |previous )?(?:warning|instructions)|system prompt|developer message/.test(text),
+    when: ({ content }) => /ignore (?:the )?(?:security |previous )?(?:warning|instructions)|system prompt|developer message/.test(content),
     emit: () => [
       signal("prompt-injection", "risk:security", 8, "Instruction manipulation attempt requires security review."),
       signal("prompt-injection-category", "category:security", 8, "Instruction manipulation routes to security."),
@@ -165,7 +145,7 @@ const RULES: readonly Rule[] = [
   },
   {
     id: "event-processing-delay",
-    when: ({ text }) => /(?:activity timeline|profiles?).*(?:missing|not showing).*(?:events?|checkout)|(?:events?|checkout).*(?:missing|delay|not showing)/.test(text),
+    when: ({ content }) => /(?:activity timeline|profiles?).*(?:missing|not showing).*(?:events?|checkout)|(?:events?|checkout).*(?:missing|delay|not showing)/.test(content),
     emit: () => [
       signal("event-processing-delay", "risk:outage", 9, "Widespread event-processing delay may be a platform incident."),
       signal("event-processing-delay-category", "category:incident", 9, "Potential platform delay routes to incident response."),
@@ -180,7 +160,7 @@ const RULES: readonly Rule[] = [
   productRule("integration", /\b(?:shopify|catalog|connector|integration|sync)\b/, "integrations", "shopify-integration-sync"),
   productRule("integration", /\b(?:webhook|signature|delivery)\b/, "integrations", "webhook-signature-validation"),
   productRule("api", /\b(?:sms|text message|quiet-hours?)\b/, "api-platform", "sms-compliance"),
-  productRule("api", /\b(?:campaign|audience snapshot|send)\b/, "api-platform", "campaign-send-failures"),
+  productRule("api", /\b(?:campaign|audience snapshot)\b/, "api-platform", "campaign-send-failures"),
   productRule("integration", /\b(?:flow|automation trigger)\b/, "integrations", "flow-trigger-troubleshooting"),
   productRule("billing", /\b(?:billing|invoice|charge|payment|subscription)\b/, "billing", "billing-and-invoices"),
   productRule("account-access", /\b(?:cannot access|access denied|role access)\b/, "identity", "account-access"),
