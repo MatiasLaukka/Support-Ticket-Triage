@@ -337,6 +337,49 @@ export const approvalDeskHtml = `<!doctype html>
         padding: 0.28rem 0.55rem;
       }
 
+      .classifier-card {
+        background: #f8fbff;
+      }
+
+      .classifier-card .chips {
+        margin-bottom: 0.35rem;
+      }
+
+      .classifier-summary {
+        display: grid;
+        gap: 0.45rem;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        margin-bottom: 0.65rem;
+      }
+
+      .classifier-signal-group {
+        border-top: 1px solid var(--line);
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+      }
+
+      .classifier-signal-group h4 {
+        font-size: 0.92rem;
+        margin: 0 0 0.45rem;
+      }
+
+      .classifier-signal-row {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        display: grid;
+        gap: 0.3rem;
+        margin-top: 0.45rem;
+        padding: 0.65rem;
+      }
+
+      .classifier-signal-row code {
+        color: var(--muted);
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
       details {
         border: 1px solid var(--line);
         border-radius: 14px;
@@ -944,6 +987,15 @@ export const approvalDeskHtml = `<!doctype html>
             '</div>';
         } else {
           els.recommendationPanel.innerHTML =
+            '<div class="hero-card"><strong>Recommended Triage</strong>' +
+              '<div class="chips">' +
+                chip('Category: ' + recommendation.category) +
+                chip('Priority: ' + recommendation.priority) +
+                chip('Team: ' + recommendation.team) +
+                chip('Risk: ' + (recommendation.escalationRequired ? 'escalation' : 'none')) +
+              '</div>' +
+            '</div>' +
+            renderClassifierEvidenceCard(recommendation) +
             '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
             '<p class="hint">Continue to approval when the draft looks ready.</p>' +
             '<details><summary>Why this draft is safe</summary>' +
@@ -958,14 +1010,6 @@ export const approvalDeskHtml = `<!doctype html>
               '<p class="meta"><strong>Human approval</strong> Reviewer must approve or edit before use.</p>' +
             '</details>' +
             renderGptAssistCard(recommendation.gptAssist) +
-            '<div class="hero-card"><strong>Recommended Triage</strong>' +
-              '<div class="chips">' +
-                chip('Category: ' + recommendation.category) +
-                chip('Priority: ' + recommendation.priority) +
-                chip('Team: ' + recommendation.team) +
-                chip('Risk: ' + (recommendation.escalationRequired ? 'escalation' : 'none')) +
-              '</div>' +
-            '</div>' +
             '<details><summary>Evidence and internal details</summary>' +
               '<div class="details-grid">' +
                 card('Recommendation ID', recommendation.id) +
@@ -1409,6 +1453,146 @@ export const approvalDeskHtml = `<!doctype html>
 
       function chip(value) {
         return '<span class="chip">' + escapeHtml(value) + '</span>';
+      }
+
+      function renderClassifierEvidenceCard(recommendation) {
+        const signals = Array.isArray(recommendation.classificationSignals)
+          ? recommendation.classificationSignals
+          : [];
+        const summary =
+          '<div class="classifier-summary" aria-label="Category: ' + escapeHtml(recommendation.category) + '; Priority: ' + escapeHtml(recommendation.priority) + '; Team: ' + escapeHtml(recommendation.team) + '; Confidence: ' + escapeHtml(String(recommendation.confidence)) + '">' +
+            card('Category', recommendation.category) +
+            card('Priority', recommendation.priority) +
+            card('Team', recommendation.team) +
+            card('Confidence', String(recommendation.confidence)) +
+          '</div>';
+        if (signals.length === 0) {
+          return '<div class="hero-card classifier-card"><strong>Classifier evidence</strong>' +
+            summary +
+            '<p class="hint">No classifier signal snapshot stored for this recommendation.</p>' +
+          '</div>';
+        }
+        const topChips = signals
+          .slice()
+          .sort(function (left, right) {
+            return classifierSignalRank(right) - classifierSignalRank(left);
+          })
+          .slice(0, 3)
+          .map(function (signal) {
+            return chip(classifierSignalLabel(signal));
+          })
+          .join('');
+        return '<div class="hero-card classifier-card"><strong>Classifier evidence</strong>' +
+          summary +
+          '<div class="chips">' + topChips + '</div>' +
+          '<details><summary>Why this classification?</summary>' +
+            renderClassifierSignalRows(signals) +
+          '</details>' +
+        '</div>';
+      }
+
+      function classificationSignalCount(recommendation) {
+        return Array.isArray(recommendation.classificationSignals)
+          ? recommendation.classificationSignals.length
+          : 0;
+      }
+
+      function renderClassifierSignalRows(signals) {
+        const groups = [
+          ['Customer text', signals.filter(function (signal) { return classifierSignalGroup(signal) === 'Customer text'; })],
+          ['Submitted metadata', signals.filter(function (signal) { return classifierSignalGroup(signal) === 'Submitted metadata'; })],
+          ['Safety rules', signals.filter(function (signal) { return classifierSignalGroup(signal) === 'Safety rules'; })],
+          ['Known cause', signals.filter(function (signal) { return classifierSignalGroup(signal) === 'Known cause'; })],
+          ['Other supporting rules', signals.filter(function (signal) { return classifierSignalGroup(signal) === 'Other supporting rules'; })]
+        ];
+        return groups
+          .filter(function (entry) { return entry[1].length > 0; })
+          .map(function (entry) {
+            return '<section class="classifier-signal-group"><h4>' + escapeHtml(entry[0]) + '</h4>' +
+              entry[1].map(renderClassifierSignalRow).join('') +
+            '</section>';
+          })
+          .join('');
+      }
+
+      function renderClassifierSignalRow(signal) {
+        return '<div class="classifier-signal-row">' +
+          '<strong>' + escapeHtml(classifierSignalLabel(signal)) + ' · weight ' + escapeHtml(formatSignalWeight(signal.weight)) + '</strong>' +
+          '<span>' + escapeHtml(signal.reason ?? 'No reason recorded.') + '</span>' +
+          '<code>' + escapeHtml((signal.ruleId ?? 'unknown-rule') + ' -> ' + (signal.target ?? 'unknown-target')) + '</code>' +
+        '</div>';
+      }
+
+      function classifierSignalGroup(signal) {
+        const target = String(signal.target ?? '');
+        const ruleId = String(signal.ruleId ?? '');
+        if (target.startsWith('metadata:') || ruleId.startsWith('metadata-')) {
+          return 'Submitted metadata';
+        }
+        if (target.startsWith('risk:') || target.startsWith('escalation:') || ruleId.startsWith('risk-') || ruleId.startsWith('escalation-')) {
+          return 'Safety rules';
+        }
+        if (target.startsWith('knownCause:') || ruleId.startsWith('known-cause-')) {
+          return 'Known cause';
+        }
+        if (target.startsWith('category:') || target.startsWith('team:') || target.startsWith('priority:')) {
+          return 'Customer text';
+        }
+        return 'Other supporting rules';
+      }
+
+      function classifierSignalLabel(signal) {
+        const target = String(signal.target ?? '');
+        if (target.startsWith('risk:') || target.startsWith('escalation:')) {
+          return 'Safety signal';
+        }
+        if (target.startsWith('knownCause:')) {
+          return 'Known cause';
+        }
+        if (target.startsWith('disagreement:')) {
+          return 'Metadata disagreement';
+        }
+        if (target.startsWith('metadata:')) {
+          return 'Submitted metadata';
+        }
+        if (target.startsWith('category:')) {
+          return 'Category reason';
+        }
+        if (target.startsWith('priority:')) {
+          return 'Priority reason';
+        }
+        if (target.startsWith('team:')) {
+          return 'Team reason';
+        }
+        if (target.startsWith('knowledge:')) {
+          return 'Knowledge context';
+        }
+        return 'Supporting signal';
+      }
+
+      function classifierSignalRank(signal) {
+        const target = String(signal.target ?? '');
+        const base = Number(signal.weight ?? 0);
+        if (target.startsWith('risk:') || target.startsWith('escalation:')) {
+          return base + 10;
+        }
+        if (target.startsWith('knownCause:')) {
+          return base + 8;
+        }
+        if (target.startsWith('category:') || target.startsWith('team:') || target.startsWith('priority:')) {
+          return base + 5;
+        }
+        if (target.startsWith('disagreement:')) {
+          return base + 4;
+        }
+        if (target.startsWith('metadata:')) {
+          return base - 2;
+        }
+        return base;
+      }
+
+      function formatSignalWeight(value) {
+        return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '0.00';
       }
 
       function formatList(values) {
