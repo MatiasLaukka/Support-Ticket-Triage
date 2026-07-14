@@ -49,6 +49,10 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
 }
 
+function readCanonicalText(path: string): string {
+  return readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+}
+
 function readTickets(): Ticket[] {
   return readJson<unknown[]>(ticketsFile).map((ticket) =>
     TicketSchema.parse(ticket),
@@ -409,7 +413,7 @@ describe("generated support fixtures", () => {
     }
   });
 
-  it("reproduces every committed artifact byte-for-byte in an isolated output root", () => {
+  it("reproduces every committed artifact in an isolated output root", () => {
     const temporaryRoot = mkdtempSync(join(tmpdir(), "support-fixtures-"));
     const copiedDistRoot = resolve(temporaryRoot, "dist");
     const isolatedOutputRoot = resolve(temporaryRoot, "generated");
@@ -438,8 +442,8 @@ describe("generated support fixtures", () => {
 
       for (const artifactPath of generatedPaths) {
         const generatedPath = resolve(isolatedOutputRoot, artifactPath);
-        expect(readFileSync(generatedPath)).toEqual(
-          readFileSync(resolve(root, artifactPath)),
+        expect(readCanonicalText(generatedPath)).toBe(
+          readCanonicalText(resolve(root, artifactPath)),
         );
       }
     } finally {

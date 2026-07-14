@@ -44,7 +44,7 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("/api/tickets");
     expect(approvalDeskHtml).toContain("/api/metrics");
     expect(approvalDeskHtml).toContain("/api/evidence");
-    expect(approvalDeskHtml).not.toContain("fetch('https://");
+    expect(approvalDeskHtml).not.toMatch(/fetch\(\s*['"`]https?:\/\//);
   });
 
   it("keeps conversation context compact and sends replies with recommendation creation", async () => {
@@ -621,6 +621,8 @@ describe("approvalDeskHtml", () => {
 
     const html = app.el("recommendationPanel").innerHTML;
     expect(html).toContain("Lifecycle summary");
+    expect(html).toContain("<details");
+    expect(html).toContain("<summary>Lifecycle evidence</summary>");
     expect(html).toContain("State: information-received");
     expect(html).toContain("Provided evidence: 1");
     expect(html).toContain("Missing evidence: 1");
