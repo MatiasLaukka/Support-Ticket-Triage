@@ -155,7 +155,13 @@ const RULES: readonly Rule[] = [
   {
     id: "prompt-injection",
     when: ({ text }) => /ignore (?:the )?(?:security |previous )?(?:warning|instructions)|system prompt|developer message/.test(text),
-    emit: () => [signal("prompt-injection", "risk:security", 8, "Instruction manipulation attempt requires security review.")],
+    emit: () => [
+      signal("prompt-injection", "risk:security", 8, "Instruction manipulation attempt requires security review."),
+      signal("prompt-injection-category", "category:security", 8, "Instruction manipulation routes to security."),
+      signal("prompt-injection-team", "team:security", 8, "Instruction manipulation routes to the security team."),
+      signal("prompt-injection-priority", "priority:P1", 8, "Instruction manipulation is P1."),
+      signal("prompt-injection-escalation", "escalation:security", 8, "Instruction manipulation requires security escalation."),
+    ],
   },
   {
     id: "event-processing-delay",
@@ -170,9 +176,12 @@ const RULES: readonly Rule[] = [
       signal("event-processing-delay-sync-article", "knowledge:shopify-integration-sync", 5, "Review sync timing while investigating missing checkout events."),
     ],
   },
-  productRule("api", /\b(?:api|endpoint|request|response)\b/, "api-platform", "api-reference"),
+  productRule("api", /\b(?:api|endpoint|response)\b/, "api-platform", "api-reference"),
   productRule("integration", /\b(?:shopify|catalog|connector|integration|sync)\b/, "integrations", "shopify-integration-sync"),
   productRule("integration", /\b(?:webhook|signature|delivery)\b/, "integrations", "webhook-signature-validation"),
+  productRule("api", /\b(?:sms|text message|quiet-hours?)\b/, "api-platform", "sms-compliance"),
+  productRule("api", /\b(?:campaign|audience snapshot|send)\b/, "api-platform", "campaign-send-failures"),
+  productRule("integration", /\b(?:flow|automation trigger)\b/, "integrations", "flow-trigger-troubleshooting"),
   productRule("billing", /\b(?:billing|invoice|charge|payment|subscription)\b/, "billing", "billing-and-invoices"),
   productRule("account-access", /\b(?:cannot access|access denied|role access)\b/, "identity", "account-access"),
   productRule("authentication", /\b(?:sign in|password reset|two-factor|authentication)\b/, "identity", "authentication"),
@@ -266,8 +275,15 @@ function calculateConfidence(signals: ClassificationSignal[], category: Category
 
 function chooseScoredValue(signals: ClassificationSignal[], kind: "category" | "priority" | "team", fallback: string): string {
   const scores = new Map<string, number>();
-  for (const { target, weight } of signals) {
-    if (target.startsWith(`${kind}:`)) {
+  const hasIndependentEvidence = signals.some(
+    ({ ruleId, target }) =>
+      target.startsWith(`${kind}:`) && !ruleId.startsWith("metadata-"),
+  );
+  for (const { ruleId, target, weight } of signals) {
+    if (
+      target.startsWith(`${kind}:`) &&
+      (hasIndependentEvidence || !ruleId.startsWith("metadata-"))
+    ) {
       const value = target.slice(kind.length + 1);
       scores.set(value, (scores.get(value) ?? 0) + weight);
     }
