@@ -1,5 +1,4 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { resolve } from "node:path";
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
@@ -16,6 +15,7 @@ import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
 import {
+  buildApprovalDeskRecommendationInput,
   buildApprovalDeskRecommendationInputWithDrafting,
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
@@ -27,9 +27,6 @@ import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 import { buildConversationHistory } from "./conversation-history.js";
 
-const DEFAULT_EXPECTED_OUTCOMES_PATH = resolve(
-  "data/seed/expected-outcomes.json",
-);
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
 
@@ -365,21 +362,22 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const [ticket, outcomes] = await Promise.all([
-    deps.tickets.get(ticketId),
-    loadExpectedOutcomes(
-      options.expectedOutcomesPath ?? DEFAULT_EXPECTED_OUTCOMES_PATH,
+  const ticket = await deps.tickets.get(ticketId);
+  const outcomes =
+    options.expectedOutcomesPath === undefined
+      ? undefined
+      : await loadExpectedOutcomes(options.expectedOutcomesPath);
+  const outcome = outcomes?.get(ticket.id);
+  const deterministicInput = buildApprovalDeskRecommendationInput({
+    ticket,
+    outcome,
+    actor: body.actor,
+  });
+  const knowledgeArticles = await Promise.all(
+    deterministicInput.knowledgeArticleIds.map((articleId) =>
+      deps.knowledge.get(articleId),
     ),
-  ]);
-  const outcome = outcomes.get(ticket.id);
-  const knowledgeArticles =
-    outcome === undefined
-      ? []
-      : await Promise.all(
-          outcome.knowledgeArticleIds.map((articleId) =>
-            deps.knowledge.get(articleId),
-          ),
-        );
+  );
   const input = await buildApprovalDeskRecommendationInputWithDrafting({
     ticket,
     outcome,

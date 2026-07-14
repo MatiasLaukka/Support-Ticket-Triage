@@ -55,7 +55,28 @@ describe("classifyTicket", () => {
     expect(result.team).toBe("security");
     expect(result.priority).toBe("P1");
     expect(result.requiredEscalations).toContain("security");
-    expect(result.knowledgeArticleIds).toContain("security-incident-response");
+    expect(result.knowledgeArticleIds).toEqual(["security-incident-response"]);
+  });
+
+  it.each([
+    ["webhook signing secret leaked in logs", "The webhook signing secret leaked in application logs."],
+    ["secret key exposed", "A secret key was exposed in a shared diagnostic bundle."],
+    ["password exposure", "Public logs exposed the service account password."],
+  ])("forces security routing when %s", (_name, description) => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "Possible security issue",
+        description,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      category: "security",
+      priority: "P1",
+      team: "security",
+      knowledgeArticleIds: ["security-incident-response"],
+    });
+    expect(result.requiredEscalations).toContain("security");
   });
 
   it("detects likely platform event-processing delay", () => {
@@ -255,7 +276,7 @@ describe("classifyTicket", () => {
       category: "billing",
       priority: "P3",
       team: "billing",
-      articles: ["coupon-catalog-sync", "campaign-send-failures"],
+      articles: ["coupon-catalog-sync"],
     },
     {
       name: "routes deliverability symptoms to product performance",
@@ -310,13 +331,13 @@ describe("classifyTicket", () => {
       category: "other",
       priority: "P3",
       team: "support",
-      articles: ["campaign-send-failures"],
+      articles: [],
     },
   ])("$name", ({ subject, description, category, priority, team, articles, escalations = [] }) => {
     const result = classifyTicket(makeTicket({ subject, description }));
 
     expect(result).toMatchObject({ category, priority, team });
-    expect(result.knowledgeArticleIds).toEqual(expect.arrayContaining(articles));
+    expect(result.knowledgeArticleIds).toEqual(articles);
     expect(result.requiredEscalations).toEqual(expect.arrayContaining(escalations));
   });
 

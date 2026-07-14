@@ -328,6 +328,28 @@ describe("evaluateClassifications", () => {
     expect(report.securityEscalationRecall).toBe(1);
     expect(report.outageEscalationRecall).toBe(1);
     expect(report.knowledgeCitationCoverage).toBeGreaterThanOrEqual(0.85);
+
+    const expectedByTicket = new Map(
+      outcomes.map((outcome) => [outcome.ticketId, outcome]),
+    );
+    const predictedKnowledgeCount = classifications.reduce(
+      (total, classification) =>
+        total + classification.knowledgeArticleIds.length,
+      0,
+    );
+    const matchingKnowledgeCount = classifications.reduce(
+      (total, classification) =>
+        total +
+        classification.knowledgeArticleIds.filter((articleId) =>
+          expectedByTicket
+            .get(classification.ticketId)!
+            .knowledgeArticleIds.includes(articleId),
+        ).length,
+      0,
+    );
+    expect(matchingKnowledgeCount / predictedKnowledgeCount).toBeGreaterThanOrEqual(
+      0.95,
+    );
   });
 });
 

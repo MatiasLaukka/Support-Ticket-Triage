@@ -287,6 +287,41 @@ describe("analyzeEvidenceReadiness", () => {
     expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
       "catalog-sync-time",
     );
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual([
+      "exposure-location",
+    ]);
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).toEqual([
+      "key-identifier",
+      "key-usage-status",
+      "rotation-status",
+      "audit-source",
+      "affected-scope",
+    ]);
+  });
+
+  it("keeps unknown private-key facts missing for TKT-1019", async () => {
+    const ticket = await loadSeedTicket("TKT-1019");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1019",
+        category: "security",
+        acceptablePriorities: ["P1"],
+        team: "security",
+        requiredEscalations: ["security", "missing-information"],
+        knowledgeArticleIds: ["security-incident-response"],
+      },
+    });
+
+    expect(readiness.providedEvidence).toEqual([]);
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).toEqual([
+      "key-identifier",
+      "exposure-location",
+      "key-usage-status",
+      "rotation-status",
+      "audit-source",
+      "affected-scope",
+    ]);
   });
 });
 

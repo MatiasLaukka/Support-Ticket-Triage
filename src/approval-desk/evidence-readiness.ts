@@ -570,6 +570,18 @@ function isEvidenceProvided(
       return /\b(request id|req[-_][a-z0-9]+)\b/i.test(text);
     case "delivery-id":
       return /\b(delivery id|deliv[-_][a-z0-9]+)\b/i.test(text);
+    case "key-identifier":
+      return hasConcreteKeyIdentifier(text);
+    case "exposure-location":
+      return hasExposureLocation(text);
+    case "key-usage-status":
+      return hasKnownKeyUsageStatus(text);
+    case "rotation-status":
+      return hasKnownRotationStatus(text);
+    case "audit-source":
+      return hasConcreteAuditSource(text);
+    case "affected-scope":
+      return hasKnownAffectedScope(text);
     case "failure-timestamp":
       return /\b(failure timestamp|failure time|failed at|fails at)\b/i.test(
         text,
@@ -588,9 +600,88 @@ function isEvidenceProvided(
       );
     default:
       return requirement.aliases.some((alias) =>
-        text.includes(alias.toLowerCase()),
+        hasAffirmativeAliasMention(text, alias),
       );
   }
+}
+
+function hasConcreteKeyIdentifier(text: string): boolean {
+  return /\b(?:key (?:id|identifier)|last (?:four|4)(?: characters)?|ending in)\s*(?:is|was|:)?\s*[a-z0-9][a-z0-9_-]{2,}\b/i.test(
+    text,
+  );
+}
+
+function hasExposureLocation(text: string): boolean {
+  if (
+    /\b(?:do not know|don't know|not known|unknown|unclear)\b.{0,60}\b(?:where|location)\b|\b(?:where|location)\b.{0,40}\b(?:not known|unknown|unclear)\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  return /\b(?:shared|pasted|posted|published|included|exposed|leaked)\b.{0,80}\b(?:logs?|log bundle|ticket|chat|email|repository|repo|document|file)\b|\b(?:logs?|log bundle|ticket|chat|email|repository|repo|document|file)\b.{0,80}\b(?:contained|included|exposed|leaked|showed)\b/i.test(
+    text,
+  );
+}
+
+function hasKnownKeyUsageStatus(text: string): boolean {
+  const subject = "(?:used|usage|actions taken)";
+  if (hasUnknownQualification(text, subject)) return false;
+  return /\b(?:key|credential|token|secret|password)\b.{0,50}\b(?:was|has been|had been|was not|has not been|never) used\b|\bno (?:post-exposure )?usage\b|\bactions taken (?:were|include|included|:)\b/i.test(
+    text,
+  );
+}
+
+function hasKnownRotationStatus(text: string): boolean {
+  const subject = "(?:rotated|rotation|revoked|revocation)";
+  if (hasUnknownQualification(text, subject)) return false;
+  return /\b(?:key|credential|token|secret|password)\b.{0,50}\b(?:(?:was|has been|had been|is) (?:not )?(?:rotated|revoked)|remains active)\b|\b(?:rotated|revoked)\b.{0,50}\b(?:key|credential|token|secret|password)\b/i.test(
+    text,
+  );
+}
+
+function hasConcreteAuditSource(text: string): boolean {
+  const subject = "(?:audit source|source address|source ip|actor)";
+  if (hasUnknownQualification(text, subject)) return false;
+  return /\bsource (?:ip|address)\s*(?:is|was|:)?\s*(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:audit source|actor)\s*(?:is|was|:)\s*[a-z0-9][a-z0-9@._-]{2,}\b/i.test(
+    text,
+  );
+}
+
+function hasKnownAffectedScope(text: string): boolean {
+  const subject = "(?:affected scope|affected profiles|profiles? (?:were )?accessed|accounts? (?:were )?accessed)";
+  if (hasUnknownQualification(text, subject)) return false;
+  return /\b\d+\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:affected|accessed|exposed|impacted)\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:profiles?|accounts?) were (?:accessed|exposed|affected)\b/i.test(
+    text,
+  );
+}
+
+function hasAffirmativeAliasMention(text: string, alias: string): boolean {
+  const normalizedAlias = alias.toLowerCase();
+  let offset = text.indexOf(normalizedAlias);
+  while (offset !== -1) {
+    const start = Math.max(0, offset - 80);
+    const end = Math.min(text.length, offset + normalizedAlias.length + 50);
+    const window = text.slice(start, end);
+    if (!hasUnknownQualification(window, escapeRegExp(normalizedAlias))) {
+      return true;
+    }
+    offset = text.indexOf(normalizedAlias, offset + normalizedAlias.length);
+  }
+  return false;
+}
+
+function hasUnknownQualification(text: string, subjectPattern: string): boolean {
+  const unknown =
+    "(?:do not know|don't know|not known|not yet known|unknown|unclear|not sure|cannot confirm|can't confirm|unable to confirm)";
+  return new RegExp(
+    `(?:${unknown}.{0,100}${subjectPattern}|${subjectPattern}.{0,60}${unknown})`,
+    "i",
+  ).test(text);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function classifyTicketAudience(ticket: Ticket): "merchant-admin" | "developer" {

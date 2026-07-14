@@ -35,8 +35,14 @@ interface ClassifierContext {
 
 interface Rule {
   id: string;
+  knowledgeCategory?: Category;
   when: (context: ClassifierContext) => boolean;
   emit: (context: ClassifierContext) => ClassificationSignal[];
+}
+
+interface RuleMatch {
+  rule: Rule;
+  signals: ClassificationSignal[];
 }
 
 const CATEGORY_DEFAULT_TEAMS: Record<Category, Team> = {
@@ -54,6 +60,23 @@ const CATEGORY_DEFAULT_TEAMS: Record<Category, Team> = {
 
 const PRIORITY_ORDER: Priority[] = ["P1", "P2", "P3", "P4"];
 
+const CREDENTIAL_EXPOSURE_PATTERN = new RegExp(
+  "(?:api[ -]?key|access token|auth(?:entication)? token|bearer token|token|credential|private key|secret key|signing secret|password)" +
+    ".{0,80}(?:exposed?|exposure|leak(?:ed|age)?|shared|pasted|published|disclosed|visible|logged|in (?:the )?(?:application |shared )?logs?)" +
+    "|(?:exposed?|exposure|leak(?:ed|age)?|shared|pasted|published|disclosed|visible|logged)" +
+    ".{0,80}(?:api[ -]?key|access token|auth(?:entication)? token|bearer token|token|credential|private key|secret key|signing secret|password)",
+);
+
+const SAFETY_KNOWLEDGE_ARTICLES = {
+  security: new Set(["security-incident-response"]),
+  outage: new Set(["event-tracking-debugging", "shopify-integration-sync"]),
+} as const;
+
+const FALLBACK_KNOWLEDGE_ARTICLES = new Set([
+  "api-reference",
+  "product-feedback",
+]);
+
 const TAG_CLASSIFICATIONS: Readonly<Record<string, { category: Category; team: Team }>> = {
   api: { category: "api", team: "api-platform" },
   billing: { category: "billing", team: "billing" },
@@ -70,16 +93,24 @@ const TAG_CLASSIFICATIONS: Readonly<Record<string, { category: Category; team: T
 
 export function classifyTicket(ticket: Ticket): TicketClassification {
   const context = { ticket, content: ticketContent(ticket) };
-  const signals = RULES.flatMap((rule) => (rule.when(context) ? rule.emit(context) : []));
+  const matches: RuleMatch[] = RULES.flatMap((rule) =>
+    rule.when(context) ? [{ rule, signals: rule.emit(context) }] : [],
+  );
+  const signals = matches.flatMap(({ signals: matchedSignals }) => matchedSignals);
+  const preliminaryCategory = chooseCategory(signals);
   const knownCause = detectKnownCause({
     ticket: ticketForKnownCause(ticket),
     outcome: {
       ticketId: ticket.id,
-      category: chooseCategory(signals),
+      category: preliminaryCategory,
       acceptablePriorities: [choosePriority(signals, [], ticket)],
-      team: chooseTeam(signals, chooseCategory(signals), []),
+      team: chooseTeam(signals, preliminaryCategory, []),
       requiredEscalations: [],
-      knowledgeArticleIds: chooseKnowledgeArticles(signals, chooseCategory(signals)),
+      knowledgeArticleIds: chooseKnowledgeArticles(
+        matches,
+        signals,
+        preliminaryCategory,
+      ),
     },
   });
 
@@ -102,7 +133,12 @@ export function classifyTicket(ticket: Ticket): TicketClassification {
     );
   }
 
-  return resolveClassification(ticket, signals);
+  return resolveClassification(
+    ticket,
+    signals,
+    matches,
+    knownCause?.knowledgeArticleIds ?? [],
+  );
 }
 
 function ticketContent(ticket: Ticket): string {
@@ -136,7 +172,7 @@ const RULES: readonly Rule[] = [
       const value = ticket[field]!;
       return [
         signal(
-          `metadata-${field}-${value}`,
+          `metadata-${field}-${String(value).toLowerCase()}`,
           `${field}:${value}` as ScoreTarget,
           1,
           `Submitted ${field} is retained as weak evidence.`,
@@ -151,7 +187,8 @@ const RULES: readonly Rule[] = [
   },
   {
     id: "security-exposure",
-    when: ({ content }) => /(?:private |secret |exposed |leaked ).*(?:api key|token|credential)|(?:api key|token|credential).*(?:exposed|leaked|logs)/.test(content),
+    knowledgeCategory: "security",
+    when: ({ content }) => CREDENTIAL_EXPOSURE_PATTERN.test(content),
     emit: () => [
       signal("security-exposure", "risk:security", 10, "Potential credential exposure requires security handling."),
       signal("security-exposure-category", "category:security", 10, "Credential exposure routes to security."),
@@ -163,12 +200,13 @@ const RULES: readonly Rule[] = [
   },
   {
     id: "security-unknown-key",
+    knowledgeCategory: "security",
     when: ({ content }) => /private key.*(?:no authorized owner|not yet known)|audit history.*private key/.test(content),
     emit: () => securitySignals("security-unknown-key", "An unrecognized private key requires security containment.", true),
   },
   {
     id: "security-missing-information",
-    when: ({ content }) => /(?:private |secret |exposed |leaked ).*(?:api key|token|credential)|(?:api key|token|credential).*(?:exposed|leaked|logs)/.test(content) && /(?:do not know|not yet known|which profiles|source address)/.test(content),
+    when: ({ content }) => CREDENTIAL_EXPOSURE_PATTERN.test(content) && /(?:do not know|not yet known|which profiles|source address)/.test(content),
     emit: () => [
       signal("security-missing-information", "escalation:missing-information", 8, "Security containment needs the missing exposure scope."),
     ],
@@ -186,6 +224,7 @@ const RULES: readonly Rule[] = [
   },
   {
     id: "event-processing-delay",
+    knowledgeCategory: "incident",
     when: ({ content }) => /(?:activity timeline|profiles?).*(?:missing|not showing).*(?:events?|checkout)|(?:events?|checkout).*(?:missing|delay|not showing)/.test(content),
     emit: () => [
       signal("event-processing-delay", "risk:outage", 9, "Widespread event-processing delay may be a platform incident."),
@@ -247,6 +286,7 @@ const RULES: readonly Rule[] = [
 function productRule(category: Category, matcher: RegExp, team: Team, articleId: string): Rule {
   return {
     id: `product-${category}-${articleId}`,
+    knowledgeCategory: category,
     when: ({ content }) =>
       !/\b(?:not sure whether|not sure if|unclear whether)\b/.test(content) &&
       matcher.test(content),
@@ -268,9 +308,10 @@ function issueRule(
   reason: string,
   weight = 9,
 ): Rule {
-  const id = `issue-${category}-${articleIds[0]}`;
+  const id = `issue-${category}-${articleIds[0] ?? "routing"}`;
   return {
     id,
+    knowledgeCategory: category,
     when: ({ content }) => matcher.test(content),
     emit: () => [
       signal(`${id}-category`, `category:${category}`, weight, reason),
@@ -314,12 +355,22 @@ function tagSignals(tag: string): ClassificationSignal[] {
   ];
 }
 
-function resolveClassification(ticket: Ticket, signals: ClassificationSignal[]): TicketClassification {
+function resolveClassification(
+  ticket: Ticket,
+  signals: ClassificationSignal[],
+  matches: readonly RuleMatch[],
+  knownCauseArticleIds: readonly string[],
+): TicketClassification {
   const category = chooseCategory(signals);
   const requiredEscalations = chooseEscalations(signals, ticket);
   const team = chooseTeam(signals, category, requiredEscalations);
   const priority = choosePriority(signals, requiredEscalations, ticket);
-  const knowledgeArticleIds = chooseKnowledgeArticles(signals, category);
+  const knowledgeArticleIds = chooseKnowledgeArticles(
+    matches,
+    signals,
+    category,
+    knownCauseArticleIds,
+  );
   const disagreementSignals = buildDisagreementSignals(ticket, { category, priority, team });
   const allSignals = [...signals, ...disagreementSignals];
   const confidence = calculateConfidence(allSignals, category);
@@ -357,8 +408,50 @@ function choosePriority(signals: ClassificationSignal[], escalations: RequiredEs
   return scored;
 }
 
-function chooseKnowledgeArticles(signals: ClassificationSignal[], _category: Category): string[] {
-  return [...new Set(signals.filter(({ target }) => target.startsWith("knowledge:")).map(({ target }) => target.slice("knowledge:".length)))];
+function chooseKnowledgeArticles(
+  matches: readonly RuleMatch[],
+  signals: readonly ClassificationSignal[],
+  category: Category,
+  knownCauseArticleIds: readonly string[] = [],
+): string[] {
+  const allowed = new Set(knownCauseArticleIds);
+  const allMatchedArticleIds = new Set<string>();
+  const hasKnownCauseArticles = knownCauseArticleIds.length > 0;
+
+  for (const match of matches) {
+    const articleIds = uniqueKnowledgeArticleIds(match.signals);
+    articleIds.forEach((articleId) => allMatchedArticleIds.add(articleId));
+    if (!hasKnownCauseArticles && match.rule.knowledgeCategory === category) {
+      articleIds.forEach((articleId) => allowed.add(articleId));
+    }
+  }
+
+  for (const risk of ["security", "outage"] as const) {
+    if (!hasStrongRisk(signals, risk)) continue;
+    for (const articleId of SAFETY_KNOWLEDGE_ARTICLES[risk]) {
+      if (allMatchedArticleIds.has(articleId)) allowed.add(articleId);
+    }
+  }
+
+  if ([...allowed].some((articleId) => !FALLBACK_KNOWLEDGE_ARTICLES.has(articleId))) {
+    FALLBACK_KNOWLEDGE_ARTICLES.forEach((articleId) => allowed.delete(articleId));
+  }
+
+  return uniqueKnowledgeArticleIds(signals).filter((articleId) =>
+    allowed.has(articleId),
+  );
+}
+
+function uniqueKnowledgeArticleIds(
+  signals: readonly ClassificationSignal[],
+): string[] {
+  return [
+    ...new Set(
+      signals
+        .filter(({ target }) => target.startsWith("knowledge:"))
+        .map(({ target }) => target.slice("knowledge:".length)),
+    ),
+  ];
 }
 
 function buildDisagreementSignals(ticket: Ticket, classification: Pick<TicketClassification, "category" | "priority" | "team">): ClassificationSignal[] {
@@ -395,7 +488,10 @@ function chooseScoredValue(signals: ClassificationSignal[], kind: "category" | "
   return [...scores.entries()].sort(([leftValue, leftScore], [rightValue, rightScore]) => rightScore - leftScore || leftValue.localeCompare(rightValue))[0]?.[0] ?? fallback;
 }
 
-function hasStrongRisk(signals: ClassificationSignal[], risk: "security" | "outage"): boolean {
+function hasStrongRisk(
+  signals: readonly ClassificationSignal[],
+  risk: "security" | "outage",
+): boolean {
   return signals.some(({ target, weight }) => target === `risk:${risk}` && weight >= 8);
 }
 

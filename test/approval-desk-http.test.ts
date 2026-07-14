@@ -8,7 +8,6 @@ import { AuditEventSchema } from "../src/domain.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
-const expectedOutcomesPath = resolve("data/seed/expected-outcomes.json");
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
 
@@ -238,6 +237,35 @@ describe("createApprovalDeskHttpServer", () => {
     );
     expect(seenArticleBodies.join("\n")).toContain("webhook");
     expect(seenResponseStyles).toEqual(["technical"]);
+  });
+
+  it("uses classifier routing and classifier-selected knowledge by default", async () => {
+    const seenArticleIds: string[][] = [];
+    const { json } = await startFixture({
+      draftProvider: {
+        draft: async (input) => {
+          seenArticleIds.push(input.knowledgeArticles.map(({ id }) => id));
+          throw new Error("Use the deterministic fallback after capturing articles.");
+        },
+      },
+    });
+
+    const created = await json("/api/tickets/TKT-1004/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      category: "security",
+      priority: "P1",
+      team: "security",
+      knowledgeArticleIds: ["security-incident-response"],
+      classificationSignals: expect.arrayContaining([
+        expect.objectContaining({ target: "risk:security" }),
+      ]),
+    });
+    expect(seenArticleIds).toEqual([["security-incident-response"]]);
   });
 
   it("accepts auto draft style and returns the resolved recommended style", async () => {
@@ -634,10 +662,7 @@ async function startFixture(
     },
     now: () => now,
   });
-  const server = createApprovalDeskHttpServer(deps, {
-    expectedOutcomesPath,
-    ...options,
-  });
+  const server = createApprovalDeskHttpServer(deps, options);
   servers.push(server);
   await new Promise<void>((resolveListen) => {
     server.listen(0, "127.0.0.1", resolveListen);

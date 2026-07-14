@@ -263,6 +263,64 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("does not treat negated resolution language as customer confirmation", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-negative",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "This is not fixed and the webhook is still unresolved.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("ready-for-close");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
+  it("uses the newest customer reply by createdAt for confirmation", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-newer",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "That fixed it. Thanks for the help!",
+        },
+        {
+          id: "reply-older",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "The endpoint URL is https://hooks.juniper.example/webhooks/orders.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("ready-for-close");
+    expect(input.draftCustomerResponse).toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
   it("keeps multiple knowledge IDs internal while using merchant-friendly flow guidance", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

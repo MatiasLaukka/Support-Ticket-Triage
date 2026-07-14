@@ -521,6 +521,10 @@ function analyzeCustomerReplyLifecycle(input: {
 }): { evidenceReadiness: EvidenceReadiness; replyStage: CustomerReplyStage } {
   const ticketReplies = input.customerReplies.filter(
     (reply) => reply.ticketId === input.ticket.id,
+  ).sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id.localeCompare(right.id),
   );
   if (ticketReplies.length === 0) {
     const evidenceReadiness = analyzeEvidenceReadiness({
@@ -597,8 +601,17 @@ function requiresMoreCustomerEvidence(
 }
 
 function isCustomerConfirmation(value: string): boolean {
-  return /\b(fixed|resolved|works now|working now|that worked|that fixed it)\b/i.test(
-    value,
+  const clauses = value.toLowerCase().split(
+    /(?:[.!?\n]+|\bbut\b|\bhowever\b)/,
+  );
+  return clauses.some(
+    (clause) =>
+      /\b(?:that|this|it) (?:has )?(?:worked|fixed it|resolved (?:it|the issue|the problem))\b|\b(?:works|working|fixed|resolved) now\b|\b(?:the |this )?(?:issue|problem) (?:is|has been) resolved\b|\b(?:fixed|resolved)[, ]+(?:thanks|thank you|on my end|for us)\b/i.test(
+        clause,
+      ) &&
+      !/\b(?:not|never|isn'?t|wasn'?t|hasn'?t|still)\b.{0,24}\b(?:fixed|resolved|working|works)\b|\b(?:unresolved|broken|failing|not working)\b/i.test(
+        clause,
+      ),
   );
 }
 
