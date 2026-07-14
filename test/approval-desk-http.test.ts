@@ -164,6 +164,42 @@ describe("createApprovalDeskHttpServer", () => {
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
 
+  it("passes customer reply context into lifecycle-aware recommendation creation", async () => {
+    const { json } = await startFixture();
+
+    const created = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "demo-reply-1",
+            createdAt: "2026-06-10T09:05:00.000Z",
+            body:
+              "Endpoint URL is https://hooks.juniper.example/webhooks/orders and delivery ID is deliv_7788.",
+          },
+        ],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      ticketId: "TKT-1008",
+      supportState: "information-received",
+    });
+    expect(created.body.recommendation.providedEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "endpoint-url" }),
+        expect.objectContaining({ id: "delivery-id" }),
+      ]),
+    );
+    expect(created.body.recommendation.missingEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "raw-body-change-status" }),
+      ]),
+    );
+  });
+
   it("creates recommendations with a provider draft from cited knowledge", async () => {
     const seenArticleBodies: string[] = [];
     const seenResponseStyles: string[] = [];

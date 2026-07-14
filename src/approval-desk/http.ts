@@ -42,10 +42,18 @@ const TicketListQuerySchema = z
   .strict();
 
 const RecommendationIdSchema = z.uuid();
+const CustomerReplyBodySchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    createdAt: z.iso.datetime(),
+    body: z.string().trim().min(1).max(4_000),
+  })
+  .strict();
 const SubmitBodySchema = z
   .object({
     actor: z.string().trim().min(1).default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
+    customerReplies: z.array(CustomerReplyBodySchema).max(8).default([]),
   })
   .strict();
 const ApprovalBodySchema = z
@@ -363,6 +371,10 @@ async function createRecommendation(
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
   const ticket = await deps.tickets.get(ticketId);
+  const customerReplies = body.customerReplies.map((reply) => ({
+    ...reply,
+    ticketId,
+  }));
   const outcomes =
     options.expectedOutcomesPath === undefined
       ? undefined
@@ -372,6 +384,7 @@ async function createRecommendation(
     ticket,
     outcome,
     actor: body.actor,
+    customerReplies,
   });
   const knowledgeArticles = await Promise.all(
     deterministicInput.knowledgeArticleIds.map((articleId) =>
@@ -384,6 +397,7 @@ async function createRecommendation(
     actor: body.actor,
     knowledgeArticles,
     responseStyle: body.responseStyle,
+    customerReplies,
     draftProvider:
       options.draftProvider ??
       createCustomerResponseDraftProviderFromEnv(process.env, {
