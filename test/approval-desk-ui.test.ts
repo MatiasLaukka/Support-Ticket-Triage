@@ -289,6 +289,12 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).not.toContain(
       "Why this draft is safe",
     );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "risk-security",
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "&lt;script&gt;Security-sensitive account access language was detected.&lt;/script&gt;",
+    );
 
     app.el("backToRecommendation").dispatch("click");
 
