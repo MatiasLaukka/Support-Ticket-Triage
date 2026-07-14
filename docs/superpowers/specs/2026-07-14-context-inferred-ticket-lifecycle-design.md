@@ -56,6 +56,8 @@ These controls are demo fixtures. They simulate customer messages but do not set
 
 The section should show the current synthetic replies so the reviewer can see what context the automation is reading.
 
+Keep this section visually compact. By default it should show a short summary such as the number of replies currently attached and the most recent reply preview. The full reply list and scenario controls should be tucked into a disclosure or similarly lightweight panel so the ticket subject, description, draft response, classifier evidence, and lifecycle summary remain the main presentation elements.
+
 ## Recommendation View
 
 The recommendation panel should include a compact lifecycle summary, preferably near the classifier evidence and before the customer draft:
