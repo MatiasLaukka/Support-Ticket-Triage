@@ -285,6 +285,27 @@ export const approvalDeskHtml = `<!doctype html>
         margin: 0.35rem 0 0;
       }
 
+      .conversation-context details {
+        margin-top: 0.55rem;
+      }
+
+      .conversation-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin: 0.65rem 0;
+      }
+
+      .conversation-controls button {
+        padding: 0.45rem 0.65rem;
+      }
+
+      .reply-preview {
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.4;
+      }
+
       .requester-card .requester-name {
         display: block;
         line-height: 1.35;
@@ -663,6 +684,12 @@ export const approvalDeskHtml = `<!doctype html>
             <p class="hint">Raw local API result for debugging and audit verification.</p>
             <pre id="resultPanel" class="result">{}</pre>
           </details>
+          <section class="card conversation-context" aria-label="Conversation Context">
+            <h3>Conversation Context</h3>
+            <div id="conversationContextPanel">
+              <p class="hint">Select a ticket to add customer reply context.</p>
+            </div>
+          </section>
           <section class="card" aria-label="Recommendation setup">
             <h3>Recommendation setup</h3>
             <p class="hint">Choose who signs the customer draft and let GPT recommend tone, or override it manually.</p>
@@ -790,7 +817,8 @@ export const approvalDeskHtml = `<!doctype html>
         recommendation: null,
         stage: 'empty',
         queueFilter: 'active',
-        approvedFields: []
+        approvedFields: [],
+        customerRepliesByTicketId: {}
       };
 
       const els = {
@@ -801,6 +829,7 @@ export const approvalDeskHtml = `<!doctype html>
         backToRecommendation: document.getElementById('backToRecommendation'),
         categoryOverride: document.getElementById('categoryOverride'),
         confirmApproval: document.getElementById('confirmApproval'),
+        conversationContextPanel: document.getElementById('conversationContextPanel'),
         continueApproval: document.getElementById('continueApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
         draftStyle: document.getElementById('draftStyle'),
@@ -935,6 +964,57 @@ export const approvalDeskHtml = `<!doctype html>
               card('Tags', ticket.tags.join(', ')) +
             '</div>' +
           '</details>';
+      }
+
+      function currentCustomerReplies() {
+        if (state.selectedTicket === null) {
+          return [];
+        }
+        return state.customerRepliesByTicketId[state.selectedTicket.id] ?? [];
+      }
+
+      function renderConversationContext() {
+        if (state.selectedTicket === null) {
+          els.conversationContextPanel.innerHTML = '<p class="hint">Select a ticket to add customer reply context.</p>';
+          return;
+        }
+        const replies = currentCustomerReplies();
+        const latest = replies[replies.length - 1];
+        const summary = replies.length === 0
+          ? 'No customer replies added.'
+          : replies.length + ' ' + (replies.length === 1 ? 'reply' : 'replies') + ' attached. Latest: ' + previewText(latest.body);
+        els.conversationContextPanel.innerHTML =
+          '<p class="hint">' + escapeHtml(summary) + '</p>' +
+          '<details><summary>Add or review synthetic replies</summary>' +
+            '<p class="hint">These buttons add customer-message context only. The backend still infers lifecycle state from the text.</p>' +
+            '<div class="conversation-controls">' +
+              scenarioButton('vague-reply', 'Add vague reply') +
+              scenarioButton('partial-evidence', 'Add partial evidence') +
+              scenarioButton('complete-evidence', 'Add complete evidence') +
+              scenarioButton('known-cause-evidence', 'Add known-cause evidence') +
+              scenarioButton('platform-fix-context', 'Add platform-fix context') +
+              scenarioButton('resolved-confirmation', 'Add resolved confirmation') +
+              scenarioButton('clear-replies', 'Clear replies') +
+            '</div>' +
+            renderConversationReplies(replies) +
+          '</details>';
+      }
+
+      function scenarioButton(value, label) {
+        return '<button type="button" class="secondary conversation-scenario" value="' + escapeHtml(value) + '">' + escapeHtml(label) + '</button>';
+      }
+
+      function renderConversationReplies(replies) {
+        if (replies.length === 0) {
+          return '<p class="reply-preview">No synthetic replies are attached to this ticket.</p>';
+        }
+        return replies.map(function (reply) {
+          return '<div class="card description"><strong>' + escapeHtml(reply.id) + '</strong>' + escapeHtml(reply.body) + '</div>';
+        }).join('');
+      }
+
+      function previewText(value) {
+        return value.length > 110 ? value.slice(0, 107) + '...' : value;
       }
 
       function renderQueueBadges(ticket) {
@@ -1191,6 +1271,7 @@ export const approvalDeskHtml = `<!doctype html>
             : 'draft';
         renderTicketList();
         renderTicket();
+        renderConversationContext();
         renderRecommendation();
         setResult(data);
       }
@@ -1219,7 +1300,8 @@ export const approvalDeskHtml = `<!doctype html>
             method: 'POST',
             body: JSON.stringify({
               actor: els.actor.value.trim() || 'approval-desk',
-              responseStyle: els.draftStyle.value
+              responseStyle: els.draftStyle.value,
+              customerReplies: currentCustomerReplies()
             })
           });
           state.recommendation = data.recommendation;
@@ -1738,6 +1820,44 @@ export const approvalDeskHtml = `<!doctype html>
           .replaceAll("'", '&#039;');
       }
 
+      function appendConversationScenario(value) {
+        if (state.selectedTicket === null) {
+          return;
+        }
+        if (value === 'clear-replies') {
+          state.customerRepliesByTicketId[state.selectedTicket.id] = [];
+          renderConversationContext();
+          return;
+        }
+        const body = conversationScenarioBody(value);
+        const replies = currentCustomerReplies();
+        state.customerRepliesByTicketId[state.selectedTicket.id] = replies.concat({
+          id: 'demo-reply-' + String(replies.length + 1),
+          createdAt: new Date(Date.UTC(2026, 5, 10, 9, replies.length * 7)).toISOString(),
+          body
+        });
+        renderConversationContext();
+      }
+
+      function conversationScenarioBody(value) {
+        if (value === 'partial-evidence') {
+          return 'The endpoint URL is https://hooks.example.test/webhooks/orders and the delivery ID is deliv_7788.';
+        }
+        if (value === 'complete-evidence') {
+          return 'Endpoint URL is https://hooks.example.test/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.';
+        }
+        if (value === 'known-cause-evidence') {
+          return 'We rotated the signing secret yesterday. Endpoint URL is https://hooks.example.test/webhooks/orders, delivery ID is deliv_7788, and raw body handling has not changed.';
+        }
+        if (value === 'platform-fix-context') {
+          return 'This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.';
+        }
+        if (value === 'resolved-confirmation') {
+          return 'This works now. The issue is resolved on our end.';
+        }
+        return 'It is still happening, but I am not sure where to find the technical details.';
+      }
+
       els.actor.addEventListener('input', updateControls);
       els.backToRecommendation.addEventListener('click', function () {
         if (state.recommendation !== null) {
@@ -1760,6 +1880,11 @@ export const approvalDeskHtml = `<!doctype html>
         if (event.target?.dataset?.action === 'review-classifier-evidence' && state.recommendation !== null) {
           state.stage = 'draft';
           renderRecommendation(true);
+        }
+      });
+      els.conversationContextPanel.addEventListener('click', function (event) {
+        if (event.target?.className?.includes('conversation-scenario')) {
+          appendConversationScenario(event.target.value);
         }
       });
       els.editedCustomerResponse.addEventListener('input', updateControls);
@@ -1798,6 +1923,7 @@ export const approvalDeskHtml = `<!doctype html>
       ])
         .catch(function (error) { setResult({ error: error.message }); });
       renderTicket();
+      renderConversationContext();
       renderFieldApprovalButtons();
       updateControls();
     </script>

@@ -34,13 +34,49 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("safety-note");
     expect(approvalDeskHtml).toContain("requester-pill");
     expect(approvalDeskHtml).toContain("risk-security");
+    expect(approvalDeskHtml).toContain("Conversation Context");
+    expect(approvalDeskHtml).toContain("conversationContextPanel");
+    expect(approvalDeskHtml).toContain("Add partial evidence");
+    expect(approvalDeskHtml).toContain("Clear replies");
   });
 
   it("uses only local API routes", () => {
     expect(approvalDeskHtml).toContain("/api/tickets");
     expect(approvalDeskHtml).toContain("/api/metrics");
     expect(approvalDeskHtml).toContain("/api/evidence");
-    expect(approvalDeskHtml).not.toContain("https://");
+    expect(approvalDeskHtml).not.toContain("fetch('https://");
+  });
+
+  it("keeps conversation context compact and sends replies with recommendation creation", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+
+    expect(app.el("conversationContextPanel").innerHTML).toContain(
+      "No customer replies added.",
+    );
+    expect(app.el("conversationContextPanel").innerHTML).toContain("<details");
+
+    app.clickConversationScenario("partial-evidence");
+
+    const contextHtml = app.el("conversationContextPanel").innerHTML;
+    expect(contextHtml).toContain("1 reply attached");
+    expect(contextHtml).toContain("Latest:");
+    expect(contextHtml).toContain("Add complete evidence");
+    expect(contextHtml).not.toContain("Detected lifecycle state");
+
+    await app.createRecommendation();
+
+    const recommendationRequest = app.requests.find((request) =>
+      request.path.endsWith("/recommendations"),
+    );
+    expect(JSON.parse(String(recommendationRequest?.init?.body))).toMatchObject({
+      customerReplies: [
+        expect.objectContaining({
+          id: expect.stringMatching(/^demo-reply-/),
+          body: expect.stringContaining("endpoint URL"),
+        }),
+      ],
+    });
   });
 
   it("renders automation evidence cards and guardrails on initial load", async () => {
@@ -1001,6 +1037,11 @@ async function startApprovalDeskApp(options: {
         .find((field) => field.value === value)!
         .dispatch("click");
     },
+    clickConversationScenario: (value: string) => {
+      elements.conversationContextPanel.children
+        .find((button) => button.value === value)!
+        .dispatch("click");
+    },
     requests,
     parsedResult: () => JSON.parse(elements.resultPanel.textContent),
     selectFirstTicket: async () => {
@@ -1039,6 +1080,7 @@ function createElements(): Record<string, FakeElement> {
       "backToRecommendation",
       "confirmApproval",
       "continueApproval",
+      "conversationContextPanel",
       "createRecommendation",
       "draftStyle",
       "editedCustomerResponse",
@@ -1103,6 +1145,7 @@ class FakeElement {
   textContent = "";
   type = "";
   value = "";
+  private parent: FakeElement | undefined;
   private innerHtmlValue = "";
   private readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
 
@@ -1112,8 +1155,13 @@ class FakeElement {
 
   set innerHTML(value: string) {
     this.innerHtmlValue = value;
-    if (value === "") {
-      this.children = [];
+    this.children = [];
+    for (const match of value.matchAll(/<button[^>]*class="([^"]*)"[^>]*value="([^"]*)"[^>]*>/g)) {
+      const button = new FakeElement();
+      button.className = match[1]!;
+      button.value = match[2]!;
+      button.parent = this;
+      this.children.push(button);
     }
   }
 
@@ -1122,12 +1170,17 @@ class FakeElement {
   }
 
   append(child: FakeElement): void {
+    child.parent = this;
     this.children.push(child);
   }
 
   dispatch(type: string, event?: unknown): void {
+    const dispatchedEvent = event ?? { target: this };
     for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
+      listener(dispatchedEvent);
+    }
+    if (this.parent !== undefined) {
+      this.parent.dispatch(type, dispatchedEvent);
     }
   }
 
