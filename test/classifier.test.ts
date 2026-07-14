@@ -103,6 +103,24 @@ describe("classifyTicket", () => {
     );
   });
 
+  it("does not let submitted tags complete a known-cause match", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "Invalid webhook signatures",
+        description: "Order webhook deliveries are failing signature validation.",
+        tags: ["secret rotation"],
+      }),
+    );
+
+    expect(result.signals).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: "knownCause:webhook-secret-rotation",
+        }),
+      ]),
+    );
+  });
+
   it("returns lower confidence for ambiguous tickets", () => {
     const result = classifyTicket(
       makeTicket({

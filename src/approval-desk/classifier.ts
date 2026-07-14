@@ -72,7 +72,7 @@ export function classifyTicket(ticket: Ticket): TicketClassification {
   const context = { ticket, content: ticketContent(ticket) };
   const signals = RULES.flatMap((rule) => (rule.when(context) ? rule.emit(context) : []));
   const knownCause = detectKnownCause({
-    ticket,
+    ticket: ticketForKnownCause(ticket),
     outcome: {
       ticketId: ticket.id,
       category: chooseCategory(signals),
@@ -107,6 +107,16 @@ export function classifyTicket(ticket: Ticket): TicketClassification {
 
 function ticketContent(ticket: Ticket): string {
   return [ticket.subject, ticket.description].join(" ").toLowerCase();
+}
+
+function ticketForKnownCause(ticket: Ticket): Ticket {
+  return {
+    ...ticket,
+    category: undefined,
+    priority: undefined,
+    team: undefined,
+    tags: [],
+  };
 }
 
 function signal(
