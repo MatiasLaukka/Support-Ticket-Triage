@@ -1012,12 +1012,6 @@ export const approvalDeskHtml = `<!doctype html>
           els.conversationContextPanel.innerHTML = '<p class="hint">Select a ticket to add customer reply context.</p>';
           return;
         }
-        if (!hasAnySentSupportResponse()) {
-          els.conversationContextPanel.innerHTML =
-            '<p class="hint">Mark a customer response as sent before adding demo replies.</p>' +
-            '<p class="hint">This keeps the showcase lifecycle honest: draft, approve, mark sent, then receive customer replies.</p>';
-          return;
-        }
         els.conversationContextPanel.innerHTML =
           '<p class="hint">Use demo replies to advance the conversation lifecycle through the local API.</p>' +
           '<details><summary>Add synthetic customer replies</summary>' +
@@ -1252,14 +1246,6 @@ export const approvalDeskHtml = `<!doctype html>
         });
       }
 
-      function hasAnySentSupportResponse() {
-        const summary = state.selectedTicket?.recommendationSummary ?? {};
-        return summary.hasSentResponse === true ||
-          (Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
-            return item.kind === 'support-response-sent';
-          }));
-      }
-
       function renderPreviousRecommendations() {
         if (!Array.isArray(state.recommendationHistory) || state.recommendationHistory.length <= 1) {
           return '';
@@ -1410,7 +1396,7 @@ export const approvalDeskHtml = `<!doctype html>
           setResult({ error: 'Mark the approved response as sent before creating a new recommendation for this ticket.' });
           return;
         }
-        if (state.recommendation?.resolution === 'pending') {
+        if (state.recommendation?.resolution === 'pending' && !hasCustomerReplyAfterCurrentRecommendation()) {
           const confirmed = confirm('This ticket already has a pending recommendation. Create a new one and mark the old one superseded?');
           if (!confirmed) {
             return;
@@ -1549,10 +1535,6 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
-        if (!hasAnySentSupportResponse()) {
-          setResult({ error: 'Mark a customer response as sent before adding demo replies.' });
-          return;
-        }
         await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/customer-replies', {
           method: 'POST',
           body: JSON.stringify({
@@ -1562,6 +1544,15 @@ export const approvalDeskHtml = `<!doctype html>
           })
         });
         await refreshSelectedTicketQueueAndEvidence();
+      }
+
+      function hasCustomerReplyAfterCurrentRecommendation() {
+        if (state.recommendation?.createdAt === undefined) {
+          return false;
+        }
+        return Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
+          return item.kind === 'customer-reply' && String(item.timestamp ?? '') > state.recommendation.createdAt;
+        });
       }
 
       async function refreshSelectedTicketQueueAndEvidence() {

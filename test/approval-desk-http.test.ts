@@ -563,6 +563,56 @@ describe("createApprovalDeskHttpServer", () => {
     ]);
   });
 
+  it("uses multiple customer replies to complete known-cause evidence", async () => {
+    let currentNow = now;
+    const { deps, json } = await startFixture({}, { now: () => currentNow });
+    const first = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    currentNow = new Date("2026-06-10T09:02:00.000Z");
+    await json("/api/tickets/TKT-1008/customer-replies", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "Dev Support",
+        body:
+          "Endpoint URL is https://hooks.juniper.example/webhooks/orders and delivery ID is deliv_7788.",
+      }),
+    });
+    currentNow = new Date("2026-06-10T09:03:00.000Z");
+    await json("/api/tickets/TKT-1008/customer-replies", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "Dev Support",
+        body: "Raw body handling has not changed since yesterday.",
+      }),
+    });
+    currentNow = new Date("2026-06-10T09:04:00.000Z");
+
+    const second = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(second.status).toBe(201);
+    expect(await deps.recommendations.get(first.body.recommendation.id)).toMatchObject({
+      resolution: "superseded",
+    });
+    expect(second.body.recommendation).toMatchObject({
+      supportState: "known-cause",
+      knownCause: "webhook-secret-rotation",
+      missingEvidence: [],
+    });
+    expect(second.body.recommendation.providedEvidence.map((item: any) => item.id)).toEqual(
+      expect.arrayContaining([
+        "endpoint-url",
+        "delivery-id",
+        "signing-secret-rotation-time",
+        "raw-body-change-status",
+      ]),
+    );
+  });
+
   it("keeps the earlier pending recommendation when replacement creation fails", async () => {
     let currentNow = now;
     const { deps, json } = await startFixture({}, { now: () => currentNow });

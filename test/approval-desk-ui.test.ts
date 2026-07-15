@@ -50,25 +50,7 @@ describe("approvalDeskHtml", () => {
   });
 
   it("persists synthetic customer replies and refreshes ticket, queue, and evidence", async () => {
-    const app = await startApprovalDeskApp({
-      ticketDetail: {
-        conversationTimeline: [
-          {
-            kind: "support-response-sent",
-            timestamp: "2026-06-10T09:04:00.000Z",
-            actor: "approval-desk",
-            recommendationId: fixtureRecommendation.id,
-            body: "Earlier sent response.",
-          },
-        ],
-        recommendationSummary: {
-          workflowState: "waiting",
-          latestResolution: "approved",
-          hasSentResponse: true,
-          hasCustomerReply: false,
-        },
-      },
-    });
+    const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
 
     expect(app.el("conversationContextPanel").innerHTML).toContain(
@@ -96,17 +78,16 @@ describe("approvalDeskHtml", () => {
     expect(app.evidenceRequests()).toBe(2);
   });
 
-  it("does not offer synthetic customer replies before a support response is sent", async () => {
+  it("explains partial and complete synthetic evidence before a support response is sent", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
 
     expect(app.el("conversationContextPanel").innerHTML).toContain(
-      "Mark a customer response as sent before adding demo replies.",
+      "Partial evidence gives an endpoint URL and delivery ID; complete evidence also includes raw body handling.",
     );
-    expect(app.el("conversationContextPanel").children).toHaveLength(0);
-    expect(
-      app.requests.some((request) => request.path.endsWith("/customer-replies")),
-    ).toBe(false);
+    expect(app.el("conversationContextPanel").innerHTML).toContain(
+      "Add synthetic customer replies",
+    );
   });
 
   it("renders the task 3 conversation timeline in the ticket panel", async () => {
@@ -242,6 +223,49 @@ describe("approvalDeskHtml", () => {
     expect(repliedApp.el("recommendationPanel").innerHTML).toContain(
       "Previous recommendations",
     );
+  });
+
+  it("lets the backend supersede pending drafts after newer customer replies", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "pending",
+      },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestResolution: "pending",
+          hasPendingRecommendation: true,
+          hasSentResponse: false,
+          hasCustomerReply: true,
+        },
+        conversationTimeline: [
+          {
+            kind: "recommendation-event",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "approval-desk",
+            action: "recommendation-submitted",
+            recommendationId: fixtureRecommendation.id,
+          },
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "Avery Brooks",
+            body: "I sent the remaining evidence.",
+          },
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(
+      app.requests.some((request) => request.path.endsWith("/recommendations")),
+    ).toBe(true);
+    expect(
+      app.requests.some((request) => request.path.endsWith("/reject")),
+    ).toBe(false);
   });
 
   it("keeps the latest approved recommendation sendable after older sent and reply events", async () => {
