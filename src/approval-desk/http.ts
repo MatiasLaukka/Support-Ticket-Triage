@@ -10,7 +10,7 @@ import {
   TicketIdSchema,
   TicketStatusSchema,
 } from "../domain.js";
-import type { TriageRecommendation } from "../domain.js";
+import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
@@ -25,7 +25,10 @@ import {
 } from "./draft-response-provider.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
-import { buildConversationHistory } from "./conversation-history.js";
+import {
+  buildConversationHistory,
+  buildConversationTimeline,
+} from "./conversation-history.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -129,6 +132,19 @@ const CancelApprovalBodySchema = z
     reason: z.string().trim().min(1),
   })
   .strict();
+const CustomerReplyRouteBodySchema = z
+  .object({
+    actor: z.string().trim().min(1),
+    body: z.string().trim().min(1).max(4_000),
+    source: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const MarkSentBodySchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: z.string().trim().min(1),
+  })
+  .strict();
 
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
@@ -196,6 +212,16 @@ function matchRoute(
     };
   }
 
+  const customerReply = /^\/api\/tickets\/([^/]+)\/customer-replies$/.exec(
+    pathname,
+  );
+  if (method === "POST" && customerReply !== null) {
+    return {
+      status: 201,
+      handle: (context) => addCustomerReply(context, customerReply[1]!),
+    };
+  }
+
   const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(pathname);
   if (method === "GET" && ticketDetail !== null) {
     return {
@@ -220,6 +246,14 @@ function matchRoute(
     return {
       status: 200,
       handle: (context) => approveRecommendation(context, approval[1]!),
+    };
+  }
+
+  const sent = /^\/api\/recommendations\/([^/]+)\/mark-sent$/.exec(pathname);
+  if (method === "POST" && sent !== null) {
+    return {
+      status: 200,
+      handle: (context) => markRecommendationSent(context, sent[1]!),
     };
   }
 
@@ -268,17 +302,19 @@ async function listTickets({ deps, url }: RouteContext): Promise<unknown> {
     offset: optionalParam(url.searchParams, "offset"),
     limit: optionalParam(url.searchParams, "limit"),
   });
-  const [tickets, recommendations] = await Promise.all([
+  const [tickets, recommendations, audits] = await Promise.all([
     deps.tickets.list(query),
     deps.recommendations.list(),
+    deps.audits.list(),
   ]);
   return {
     ...tickets,
     items: tickets.items.map((ticket) => ({
       ...ticket,
       recommendationSummary: summarizeRecommendationsForTicket(
-        ticket.id,
+        ticket,
         recommendations,
+        audits,
       ).summary,
     })),
   };
@@ -289,29 +325,43 @@ async function getTicketDetail(
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
-  const [ticket, audits, recommendations] = await Promise.all([
+  const [ticket, auditPage, ticketAudits, recommendations] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.listPage({ ticketId, offset: 0, limit: 10 }),
+    deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
   const recommendation = summarizeRecommendationsForTicket(
-    ticket.id,
+    ticket,
     recommendations,
+    ticketAudits,
   );
   return {
     ticket,
-    audits,
-    conversationHistory: buildConversationHistory(audits.events),
+    audits: auditPage,
+    conversationHistory: buildConversationHistory(ticketAudits),
+    conversationTimeline: buildConversationTimeline({
+      ticket,
+      audits: ticketAudits,
+      recommendations: recommendation.history,
+    }),
+    recommendationHistory: recommendation.history,
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
   };
 }
 
-type RecommendationWorkflowState = "active" | "pending" | "approved";
+type RecommendationWorkflowState =
+  | "active"
+  | "draft-ready"
+  | "waiting"
+  | "customer-replied"
+  | "resolved";
 
 function summarizeRecommendationsForTicket(
-  ticketId: string,
+  ticket: Ticket,
   recommendations: readonly TriageRecommendation[],
+  audits: readonly AuditEvent[],
 ): {
   summary: {
     latestRecommendationId?: string;
@@ -323,31 +373,48 @@ function summarizeRecommendationsForTicket(
     securityRisk?: TriageRecommendation["securityRisk"];
     slaRisk?: TriageRecommendation["slaRisk"];
     priority?: TriageRecommendation["priority"];
+    hasSentResponse: boolean;
+    hasCustomerReply: boolean;
+    latestSentAt?: string;
+    latestCustomerReplyAt?: string;
   };
   latest?: TriageRecommendation;
+  history: TriageRecommendation[];
 } {
   const related = recommendations
-    .filter((recommendation) => recommendation.ticketId === ticketId)
+    .filter((recommendation) => recommendation.ticketId === ticket.id)
     .sort(
       (left, right) =>
         right.createdAt.localeCompare(left.createdAt) ||
         right.id.localeCompare(left.id),
     );
-  const activeRelated = related.filter(
-    (recommendation) => recommendation.resolution !== "canceled",
+  const currentRelated = related.filter((recommendation) =>
+    ["pending", "approved"].includes(recommendation.resolution),
   );
-  const latest = activeRelated[0];
-  const hasPendingRecommendation = activeRelated.some(
+  const latest = currentRelated[0];
+  const hasPendingRecommendation = currentRelated.some(
     (recommendation) => recommendation.resolution === "pending",
   );
-  const hasApprovedRecommendation = activeRelated.some(
+  const hasApprovedRecommendation = currentRelated.some(
     (recommendation) => recommendation.resolution === "approved",
   );
-  const workflowState: RecommendationWorkflowState = hasPendingRecommendation
-    ? "pending"
-    : hasApprovedRecommendation
-      ? "approved"
-      : "active";
+  const ticketAudits = audits.filter((event) => event.ticketId === ticket.id);
+  const latestSentAt = latestAuditTimestamp(
+    ticketAudits,
+    "customer-response-sent",
+  );
+  const latestCustomerReplyAt = latestAuditTimestamp(
+    ticketAudits,
+    "customer-reply-received",
+  );
+  const hasSentResponse = latestSentAt !== undefined;
+  const hasCustomerReply = latestCustomerReplyAt !== undefined;
+  const workflowState = conversationWorkflowState({
+    ticket,
+    latest,
+    latestSentAt,
+    latestCustomerReplyAt,
+  });
   return {
     summary: {
       latestRecommendationId: latest?.id,
@@ -359,9 +426,118 @@ function summarizeRecommendationsForTicket(
       securityRisk: latest?.securityRisk,
       slaRisk: latest?.slaRisk,
       priority: latest?.priority,
+      hasSentResponse,
+      hasCustomerReply,
+      latestSentAt,
+      latestCustomerReplyAt,
     },
     latest,
+    history: related,
   };
+}
+
+function latestAuditTimestamp(
+  audits: readonly AuditEvent[],
+  action: AuditEvent["action"],
+): string | undefined {
+  return audits
+    .filter((event) => event.action === action)
+    .map((event) =>
+      action === "customer-response-sent" && typeof event.after.sentAt === "string"
+        ? event.after.sentAt
+        : event.timestamp,
+    )
+    .sort((left, right) => right.localeCompare(left))[0];
+}
+
+function conversationWorkflowState(input: {
+  ticket: Ticket;
+  latest?: TriageRecommendation;
+  latestSentAt?: string;
+  latestCustomerReplyAt?: string;
+}): RecommendationWorkflowState {
+  if (input.ticket.status === "resolved") {
+    return "resolved";
+  }
+
+  if (
+    input.latest?.resolution === "approved" &&
+    input.latestSentAt !== undefined &&
+    input.latestSentAt >= input.latest.createdAt
+  ) {
+    return input.latestCustomerReplyAt !== undefined &&
+      input.latestCustomerReplyAt > input.latestSentAt
+      ? "customer-replied"
+      : "waiting";
+  }
+
+  if (input.latest !== undefined) {
+    return input.latestCustomerReplyAt !== undefined &&
+      input.latestCustomerReplyAt > input.latest.createdAt
+      ? "customer-replied"
+      : "draft-ready";
+  }
+
+  if (
+    input.latestCustomerReplyAt !== undefined &&
+    (input.latestSentAt === undefined ||
+      input.latestCustomerReplyAt > input.latestSentAt)
+  ) {
+    return "customer-replied";
+  }
+
+  return input.latestSentAt === undefined ? "active" : "waiting";
+}
+
+function customerRepliesFromAudits(
+  ticketId: string,
+  audits: readonly AuditEvent[],
+): Array<{ id: string; ticketId: string; createdAt: string; body: string }> {
+  return audits
+    .filter(
+      (event) =>
+        event.ticketId === ticketId &&
+        event.action === "customer-reply-received" &&
+        typeof event.after.body === "string",
+    )
+    .map((event) => ({
+      id: event.id,
+      ticketId,
+      createdAt: event.timestamp,
+      body: event.after.body as string,
+    }));
+}
+
+async function supersedePendingRecommendationsWithNewerReply(input: {
+  deps: RuntimeDependencies;
+  ticketId: string;
+  actor: string;
+  recommendations: readonly TriageRecommendation[];
+  customerReplies: readonly { createdAt: string }[];
+}): Promise<void> {
+  const latestReplyAt = input.customerReplies
+    .map((reply) => reply.createdAt)
+    .sort((left, right) => right.localeCompare(left))[0];
+  if (latestReplyAt === undefined) {
+    return;
+  }
+
+  const supersededAt = input.deps.now().toISOString();
+  const pendingRecommendations = input.recommendations.filter(
+    (recommendation) =>
+      recommendation.ticketId === input.ticketId &&
+      recommendation.resolution === "pending" &&
+      latestReplyAt > recommendation.createdAt,
+  );
+  for (const recommendation of pendingRecommendations) {
+    await input.deps.service.supersedeRecommendation({
+      recommendationId: recommendation.id,
+      ticketId: input.ticketId,
+      actor: input.actor,
+      supersededAt,
+      reason: "A newer customer reply requires a fresh recommendation.",
+    });
+  }
 }
 
 async function createRecommendation(
@@ -370,11 +546,23 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const ticket = await deps.tickets.get(ticketId);
-  const customerReplies = body.customerReplies.map((reply) => ({
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+    deps.recommendations.list(),
+  ]);
+  const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
+  const customerReplies = [...persistedCustomerReplies, ...body.customerReplies.map((reply) => ({
     ...reply,
     ticketId,
-  }));
+  }))];
+  await supersedePendingRecommendationsWithNewerReply({
+    deps,
+    ticketId,
+    actor: body.actor,
+    recommendations,
+    customerReplies,
+  });
   const outcomes =
     options.expectedOutcomesPath === undefined
       ? undefined
@@ -412,6 +600,21 @@ async function createRecommendation(
   };
 }
 
+async function addCustomerReply(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const body = CustomerReplyRouteBodySchema.parse(await readJsonBody(request));
+  return {
+    auditEvent: await deps.service.addCustomerReply({
+      ...body,
+      ticketId,
+      receivedAt: deps.now().toISOString(),
+    }),
+  };
+}
+
 async function getRecommendation(
   { deps }: RouteContext,
   id: string,
@@ -431,6 +634,35 @@ async function approveRecommendation(
     recommendationId,
     approvedAt: deps.now().toISOString(),
   });
+}
+
+async function markRecommendationSent(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const recommendationId = RecommendationIdSchema.parse(id);
+  const body = MarkSentBodySchema.parse(await readJsonBody(request));
+  const audits = await deps.audits.list(body.ticketId);
+  const approval = audits
+    .filter(
+      (event) =>
+        event.action === "recommendation-approved" &&
+        event.recommendationId === recommendationId,
+    )
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+  if (approval === undefined) {
+    throw invalidRequest("Approved recommendation audit was not found.");
+  }
+  const sentAt = new Date(
+    new Date(approval.timestamp).getTime() + 5 * 60 * 1_000,
+  ).toISOString();
+  return {
+    auditEvent: await deps.service.markResponseSent({
+      ...body,
+      recommendationId,
+      sentAt,
+    }),
+  };
 }
 
 async function rejectRecommendation(
