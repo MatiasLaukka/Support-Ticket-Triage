@@ -72,16 +72,50 @@ export function buildConversationTimeline(input: {
       body: input.ticket.description,
     },
     ...input.audits.map((event) => buildTimelineAuditItem(event)),
+    ...input.recommendations
+      .filter(
+        (recommendation) =>
+          !input.audits.some(
+            (event) =>
+              event.recommendationId === recommendation.id &&
+              event.action === "recommendation-submitted",
+          ),
+      )
+      .map((recommendation) => buildRecommendationTimelineItem(recommendation)),
   ];
 
-  return items.sort((left, right) => {
-    const timestampOrder = left.timestamp.localeCompare(right.timestamp);
-    if (timestampOrder !== 0) {
-      return timestampOrder;
-    }
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const timestampOrder = left.item.timestamp.localeCompare(right.item.timestamp);
+      if (timestampOrder !== 0) {
+        return timestampOrder;
+      }
 
-    return left.kind === "original-ticket" ? -1 : right.kind === "original-ticket" ? 1 : 0;
-  });
+      if (left.item.kind === "original-ticket") {
+        return -1;
+      }
+
+      if (right.item.kind === "original-ticket") {
+        return 1;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
+}
+
+function buildRecommendationTimelineItem(
+  recommendation: TriageRecommendation,
+): ConversationTimelineItem {
+  return {
+    kind: "recommendation-event",
+    timestamp: recommendation.createdAt,
+    actor: "approval-desk",
+    action: "recommendation-submitted",
+    summary: `Recommendation version is ${recommendation.resolution}.`,
+    recommendationId: recommendation.id,
+  };
 }
 
 function buildTimelineAuditItem(event: AuditEvent): ConversationTimelineItem {
