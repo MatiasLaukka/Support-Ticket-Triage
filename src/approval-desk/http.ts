@@ -556,13 +556,6 @@ async function createRecommendation(
     ...reply,
     ticketId,
   }))];
-  await supersedePendingRecommendationsWithNewerReply({
-    deps,
-    ticketId,
-    actor: body.actor,
-    recommendations,
-    persistedCustomerReplies,
-  });
   const outcomes =
     options.expectedOutcomesPath === undefined
       ? undefined
@@ -592,12 +585,18 @@ async function createRecommendation(
         responseStyle: body.responseStyle,
       }),
   });
-  return {
-    recommendation: await deps.service.submit({
+  const recommendation = await deps.service.submit({
       ...input,
       submittedAt: deps.now().toISOString(),
-    }),
-  };
+  });
+  await supersedePendingRecommendationsWithNewerReply({
+    deps,
+    ticketId,
+    actor: body.actor,
+    recommendations,
+    persistedCustomerReplies,
+  });
+  return { recommendation };
 }
 
 async function addCustomerReply(
@@ -643,6 +642,14 @@ async function markRecommendationSent(
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = MarkSentBodySchema.parse(await readJsonBody(request));
   const audits = await deps.audits.list(body.ticketId);
+  const alreadySent = audits.some(
+    (event) =>
+      event.action === "customer-response-sent" &&
+      event.recommendationId === recommendationId,
+  );
+  if (alreadySent) {
+    throw invalidRequest("Customer response has already been marked sent.");
+  }
   const approval = audits
     .filter(
       (event) =>

@@ -388,6 +388,59 @@ describe("createApprovalDeskHttpServer", () => {
     );
   });
 
+  it("rejects duplicate mark-sent requests for the same recommendation", async () => {
+    const { json } = await startFixture();
+    const approvedResponse =
+      "Hi Prompt Streetwear, we reviewed this response and it is ready to send.";
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await json(`/api/recommendations/${created.body.recommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1005",
+        expectedRevision: 0,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: approvedResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${created.body.recommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1005",
+        actor: "approval-desk",
+      }),
+    });
+
+    const duplicate = await json(
+      `/api/recommendations/${created.body.recommendation.id}/mark-sent`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          actor: "approval-desk",
+        }),
+      },
+    );
+    const detail = await json("/api/tickets/TKT-1005");
+
+    expect(duplicate.status).toBe(400);
+    expect(duplicate.body).toEqual({
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Customer response has already been marked sent.",
+      },
+    });
+    expect(
+      detail.body.audits.events.filter(
+        (event: any) => event.action === "customer-response-sent",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("records a customer reply after a sent response and marks the ticket customer-replied", async () => {
     let currentNow = now;
     const { json } = await startFixture({}, { now: () => currentNow });
@@ -508,6 +561,41 @@ describe("createApprovalDeskHttpServer", () => {
         resolution: "superseded",
       },
     ]);
+  });
+
+  it("keeps the earlier pending recommendation when replacement creation fails", async () => {
+    let currentNow = now;
+    const { deps, json } = await startFixture({}, { now: () => currentNow });
+    const first = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    currentNow = new Date("2026-06-10T09:02:00.000Z");
+    await json("/api/tickets/TKT-1008/customer-replies", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "Dev Support",
+        body:
+          "Endpoint URL is https://hooks.juniper.example/webhooks/orders and delivery ID is deliv_7788.",
+      }),
+    });
+    deps.service.submit = async () => {
+      throw new Error("submit failed");
+    };
+
+    const response = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(await deps.recommendations.get(first.body.recommendation.id)).toMatchObject({
+      resolution: "pending",
+    });
+    expect(await deps.recommendations.list()).toHaveLength(1);
+    expect(await deps.audits.list("TKT-1008")).not.toContainEqual(
+      expect.objectContaining({ action: "recommendation-superseded" }),
+    );
   });
 
   it("does not supersede a pending recommendation when create is clicked twice without a new reply", async () => {
