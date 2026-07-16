@@ -24,7 +24,12 @@ import {
   analyzeEvidenceReadiness,
   type EvidenceReadiness,
 } from "./evidence-readiness.js";
-import { classifyTicket, type TicketClassification } from "./classifier.js";
+import {
+  classifyTicket,
+  classifyTicketFromContext,
+  type TicketClassification,
+} from "./classifier.js";
+import { buildConversationContextForTicket } from "./conversation-context.js";
 import { getKnownCause } from "./known-cause-catalog.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -88,7 +93,18 @@ export function buildApprovalDeskRecommendationInput(input: {
   previousSupportResponse?: PreviousSupportResponse;
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
   const { ticket, outcome, actor } = input;
-  const classification = outcome === undefined ? classifyTicket(ticket) : undefined;
+  const conversationContextForClassification = buildConversationContextForTicket({
+    ticket,
+    customerReplies: input.customerReplies ?? [],
+    previousSupportResponses:
+      input.previousSupportResponse === undefined
+        ? []
+        : [input.previousSupportResponse],
+  });
+  const classification =
+    outcome === undefined
+      ? classifyTicketFromContext(conversationContextForClassification)
+      : undefined;
   const resolvedOutcome =
     outcome ?? outcomeFromClassification(ticket, classification!);
   if (outcome !== undefined && outcome.ticketId !== ticket.id) {
@@ -112,9 +128,13 @@ export function buildApprovalDeskRecommendationInput(input: {
     recognizedEvidenceProgress: lifecycle.recognizedEvidenceProgress,
     previousSupportResponse: input.previousSupportResponse,
   });
+  const ticketWithCustomerReplyContext = ticketWithCustomerReplies(
+    ticket,
+    input.customerReplies ?? [],
+  );
 
   const draftCustomerResponse = buildDraftCustomerResponse({
-    ticket,
+    ticket: ticketWithCustomerReplyContext,
     outcome: resolvedOutcome,
     knowledgeArticleIds,
     escalationReasons,
@@ -284,6 +304,28 @@ function buildTags(ticket: Ticket, outcome: ExpectedOutcome): string[] {
   ]);
 }
 
+function ticketWithCustomerReplies(
+  ticket: Ticket,
+  customerReplies: readonly CustomerReply[],
+): Ticket {
+  const replyText = customerReplies
+    .filter((reply) => reply.ticketId === ticket.id)
+    .sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    )
+    .map((reply) => reply.body)
+    .join("\n\n");
+  if (replyText.trim() === "") {
+    return ticket;
+  }
+  return {
+    ...ticket,
+    description: `${ticket.description}\n\nCustomer follow-up:\n${replyText}`,
+  };
+}
+
 function buildDraftCustomerResponse(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
@@ -331,6 +373,24 @@ function buildDraftCustomerResponse(input: {
     });
   }
 
+  if (
+    input.outcome.category === "performance" &&
+    input.outcome.team === "product" &&
+    /\bcampaign editor\b.{0,80}\b(?:blank|not loading|stayed blank|empty page)|\b(?:blank|stayed blank|empty page)\b.{0,80}\bcampaign editor\b/i.test(
+      ticketText(ticket),
+    )
+  ) {
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      replyStage: input.replyStage,
+      problemSummary:
+        "The details you sent narrow this down to the campaign editor loading path rather than a general support issue.",
+      nextStep:
+        "We are checking the editor load path, account session state, and whether the behavior is isolated to one campaign or affecting other users before recommending the next action.",
+    });
+  }
+
   if (isGenericSupportIssue(input.outcome, knowledgeArticleIds)) {
     return buildStructuredDiagnosticResponse({
       ticket,
@@ -349,6 +409,7 @@ function buildDraftCustomerResponse(input: {
     replyStage: input.replyStage,
     problemSummary: `We are checking the ${formatKnowledgeTopic(
       knowledgeArticleIds,
+      ticket,
     )} reported in ${ticket.id}.`,
     nextStep:
       "Once we have those details, we will compare the examples with the relevant account setup and share the next recommended action.",
@@ -799,12 +860,24 @@ function buildCustomerConfirmedResponse(ticket: Ticket): string {
   ].join("\n");
 }
 
-function formatKnowledgeTopic(knowledgeArticleIds: readonly string[]): string {
+function formatKnowledgeTopic(
+  knowledgeArticleIds: readonly string[],
+  ticket: Ticket,
+): string {
+  const text = ticketText(ticket);
   if (knowledgeArticleIds.includes("webhook-signature-validation")) {
     return "webhook signature issue";
   }
   if (knowledgeArticleIds.includes("campaign-send-failures")) {
     return "campaign send issue";
+  }
+  if (
+    knowledgeArticleIds.includes("shopify-integration-sync") &&
+    knowledgeArticleIds.includes("coupon-catalog-sync") &&
+    /\b(?:product|catalog|sku)\b/i.test(text) &&
+    !/\b(?:coupon|promo(?:tion)? code|discount code)\b/i.test(text)
+  ) {
+    return "product catalog sync delay";
   }
   if (knowledgeArticleIds.includes("coupon-catalog-sync")) {
     return "coupon or catalog sync issue";

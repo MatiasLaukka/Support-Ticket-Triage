@@ -2085,10 +2085,99 @@ export const approvalDeskHtml = `<!doctype html>
         if (selected.length === 0) {
           return 'I think I have already sent the details I can find. Please let me know if there is anything specific you still need me to check.';
         }
+        const contextual = contextualEvidenceReply(context, selected);
+        if (contextual !== null) {
+          return contextual;
+        }
         const sentences = selected.map(function (requirement) {
           return sampleEvidenceSentence(requirement, context);
         });
         return sentences.join(' ');
+      }
+
+      function contextualEvidenceReply(context, selected) {
+        const ids = selected.map(function (requirement) {
+          return String(requirement.id ?? '').toLowerCase();
+        });
+        function has(id) {
+          return ids.includes(id);
+        }
+        function selectedSentence(id) {
+          if (!has(id)) {
+            return '';
+          }
+          return sampleEvidenceSentence({ id }, context);
+        }
+        function joinSentences(values) {
+          return values.filter(function (value) { return value.trim() !== ''; }).join(' ');
+        }
+
+        if (context.searchableText.includes('track api') || context.searchableText.includes('timestamp')) {
+          return joinSentences([
+            'I checked the Track API example that is failing with the Europe/Helsinki timestamp.',
+            selectedSentence('event-id'),
+            selectedSentence('api-response-status'),
+            selectedSentence('sample-payload')
+          ]);
+        }
+
+        if (
+          context.searchableText.includes('catalog') ||
+          context.searchableText.includes('shopify') ||
+          context.searchableText.includes('campaign product block')
+        ) {
+          return joinSentences([
+            'I checked the Shopify catalog sync delay, and this is the product that still is not appearing in the campaign product block.',
+            selectedSentence('store-url'),
+            selectedSentence('object-id'),
+            selectedSentence('catalog-sync-time'),
+            selectedSentence('source-update-time'),
+            selectedSentence('product-reference'),
+            selectedSentence('expected-field')
+          ]);
+        }
+
+        if (context.searchableText.includes('webhook') || context.searchableText.includes('signature')) {
+          return joinSentences([
+            'I checked the webhook delivery details for the failing endpoint.',
+            selectedSentence('endpoint-url'),
+            selectedSentence('delivery-id'),
+            selectedSentence('failure-timestamp'),
+            selectedSentence('signing-secret-rotation-time'),
+            selectedSentence('timestamp-tolerance'),
+            selectedSentence('endpoint-response-code'),
+            selectedSentence('raw-body-change-status'),
+            selectedSentence('retry-history')
+          ]);
+        }
+
+        if (
+          context.searchableText.includes('api key') ||
+          context.searchableText.includes('private key') ||
+          context.searchableText.includes('credential')
+        ) {
+          return joinSentences([
+            'I checked the security details I can see without sharing the secret value.',
+            selectedSentence('key-identifier'),
+            selectedSentence('exposure-location'),
+            selectedSentence('key-usage-status'),
+            selectedSentence('rotation-status'),
+            selectedSentence('audit-source'),
+            selectedSentence('affected-scope')
+          ]);
+        }
+
+        if (context.searchableText.includes('quiet-hour')) {
+          return joinSentences([
+            'This is about the SMS campaign that was blocked by quiet-hour protection.',
+            selectedSentence('campaign-name'),
+            selectedSentence('scheduled-send-time'),
+            selectedSentence('recipient-region'),
+            selectedSentence('compliance-banner')
+          ]);
+        }
+
+        return null;
       }
 
       function remainingEvidence(context) {
@@ -2118,6 +2207,7 @@ export const approvalDeskHtml = `<!doctype html>
           'api-response-status': ['api response', 'response status', '400 validation'],
           'audit-source': ['audit source', 'source ip', '198.51.100.24'],
           'bounce-samples': ['bounce samples', 'bounce code', '550 5.1.1'],
+          'browser-session-details': ['browser', 'session', 'signed out'],
           'campaign-name': ['campaign name', 'summer flash sale'],
           'catalog-sync-time': ['catalog sync time', 'last catalog sync'],
           'compliance-banner': ['compliance banner', 'quiet-hour protection'],
@@ -2174,6 +2264,7 @@ export const approvalDeskHtml = `<!doctype html>
           'api-response-status': 'The API response status is 400 validation_error.',
           'audit-source': 'The audit source shown is IP 198.51.100.24.',
           'bounce-samples': 'A sample bounce code is 550 5.1.1 user unknown.',
+          'browser-session-details': 'I use Chrome, and the page is still blank after signing out and back in.',
           'campaign-name': 'The campaign name is Summer Flash Sale.',
           'catalog-sync-time': 'The last catalog sync time I can see is 2026-06-10 09:20 UTC.',
           'compliance-banner': 'The dashboard banner says quiet-hour protection blocked delivery.',
@@ -2205,7 +2296,7 @@ export const approvalDeskHtml = `<!doctype html>
           'reproduction-steps': 'The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.',
           'retry-history': 'The retry history shows the delivery eventually succeeded after three retries.',
           'rotation-status': 'The exposed key has been rotated and the old key was revoked.',
-          'sample-payload': 'I can share a sample payload with secrets removed.',
+          'sample-payload': 'The redacted sample payload is {"event":"Checkout Started","timestamp":"2026-06-10T09:15:00Z","profile_id":"customer_123"}.',
           'scheduled-send-time': 'The scheduled send time was 8:30 PM US Eastern.',
           'screenshot-or-error': 'The message on screen says "Something went wrong"; I can attach a screenshot.',
           'segment-name': 'The segment name is Engaged Subscribers - 30 days.',
@@ -2234,6 +2325,18 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function vagueReply(context) {
+        if (context.searchableText.includes('track api') || context.searchableText.includes('timestamp')) {
+          return 'The same Track API request still fails with a 400 timestamp validation error, but I am not sure which payload details you need.';
+        }
+        if (context.searchableText.includes('catalog') || context.searchableText.includes('shopify')) {
+          return 'The Shopify catalog sync still looks delayed, and the new product still is not appearing in the campaign product block.';
+        }
+        if (context.searchableText.includes('webhook') || context.searchableText.includes('signature')) {
+          return 'The webhook is still failing signature validation, but I am not sure which delivery details you need from the logs.';
+        }
+        if (context.searchableText.includes('api key') || context.searchableText.includes('private key')) {
+          return 'I am still worried about the exposed key, but I am not sure which security details are safe to send.';
+        }
         if (context.recommendation?.supportState === 'needs-information') {
           return 'It is still happening, but I am not sure where to find the details you asked for.';
         }

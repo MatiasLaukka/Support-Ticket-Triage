@@ -129,6 +129,66 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("keeps product catalog delay drafts separate from coupon-pool wording", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1020");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1020")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.draftCustomerResponse).toContain(
+      "product catalog sync delay",
+    );
+    expect(input.draftCustomerResponse).toContain("Affected store URL");
+    expect(input.draftCustomerResponse).toContain("Last catalog sync time");
+    expect(input.draftCustomerResponse).not.toContain("coupon");
+    expect(input.draftCustomerResponse).not.toContain("Coupon pool");
+    expect(input.draftCustomerResponse).not.toContain("unused coupon");
+  });
+
+  it("adapts vague ticket classification and draft after campaign editor blank-page reply", async () => {
+    const ticket = await loadSeedTicket("TKT-1010");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.",
+        },
+      ],
+    });
+
+    expect(input.category).toBe("performance");
+    expect(input.team).toBe("product");
+    expect(input.supportState).toMatch(/diagnosing|information-received/);
+    expect(input.providedEvidence?.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["problem-summary", "reproduction-steps"]),
+    );
+    expect(input.missingEvidence?.map((requirement) => requirement.id)).not.toContain(
+      "screenshot-or-error",
+    );
+    expect(input.missingEvidence?.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining([
+        "campaign-name",
+        "failure-timestamp",
+        "browser-session-details",
+        "affected-scope",
+      ]),
+    );
+    expect(input.draftCustomerResponse).toContain("campaign editor");
+    expect(input.draftCustomerResponse).toContain("loading");
+    expect(input.draftCustomerResponse).not.toContain("screenshot or exact message");
+  });
+
   it("adapts webhook known-cause drafts across customer follow-up turns", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

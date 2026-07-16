@@ -206,6 +206,175 @@ describe("approvalDeskHtml", () => {
     expect(body).not.toContain("deliv_7788");
   });
 
+  it("uses concrete sample payload text in synthetic evidence replies", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        missingEvidence: [
+          evidenceRequirement(
+            "sample-payload",
+            "Sample payload",
+            "Sample payload with secrets removed",
+          ),
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+    await app.clickConversationScenario("complete-evidence");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    const body = JSON.parse(String(replyRequest?.init?.body)).body;
+    expect(body).toContain("The redacted sample payload is");
+    expect(body).not.toContain("I can share a sample payload");
+  });
+
+  it("generates product-catalog customer replies from ticket context", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          id: "TKT-1020",
+          customer: {
+            name: "Delta Research",
+            plan: "business",
+            region: "ap-southeast",
+            vip: false,
+          },
+          subject: "Product catalog sync is delayed",
+          description:
+            "New products from Shopify take more than six hours to appear in the campaign product block.",
+          category: "performance",
+          team: "product",
+          tags: ["catalog", "shopify", "sync", "delay"],
+        },
+      ],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        ticketId: "TKT-1020",
+        category: "performance",
+        team: "product",
+        missingEvidence: [
+          evidenceRequirement("store-url", "Store URL", "Affected store URL"),
+          evidenceRequirement(
+            "object-id",
+            "Affected object ID",
+            "Affected object ID, SKU, order number, or profile ID",
+          ),
+          evidenceRequirement(
+            "catalog-sync-time",
+            "Last catalog sync time",
+            "Last catalog sync time",
+          ),
+          evidenceRequirement(
+            "product-reference",
+            "Product or cart reference",
+            "product URL or product ID",
+          ),
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+    await app.clickConversationScenario("complete-evidence");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    const body = JSON.parse(String(replyRequest?.init?.body)).body;
+    expect(body).toContain("Shopify catalog sync");
+    expect(body).toContain("https://store.example.test");
+    expect(body).toContain("sku-7788");
+    expect(body).toContain("campaign product block");
+    expect(body).not.toContain("coupon");
+    expect(body).not.toContain("For ");
+  });
+
+  it("generates Track API timestamp replies from ticket context", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          id: "TKT-1027",
+          subject: "Track API rejects event timestamp",
+          description:
+            "The Track API returns a 400 validation error when our event timestamp uses Europe/Helsinki local time.",
+          category: "api",
+          team: "api-platform",
+          tags: ["api", "events", "400", "timestamp"],
+        },
+      ],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        ticketId: "TKT-1027",
+        category: "api",
+        team: "api-platform",
+        missingEvidence: [
+          evidenceRequirement("event-id", "Event ID", "event ID or event time"),
+          evidenceRequirement(
+            "api-response-status",
+            "API response status",
+            "API response status or validation error",
+          ),
+          evidenceRequirement(
+            "sample-payload",
+            "Sample payload",
+            "Sample payload with secrets removed",
+          ),
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+    await app.clickConversationScenario("complete-evidence");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    const body = JSON.parse(String(replyRequest?.init?.body)).body;
+    expect(body).toContain("Track API");
+    expect(body).toContain("Europe/Helsinki");
+    expect(body).toContain("400 validation_error");
+    expect(body).toContain("evt_12345");
+    expect(body).toContain("redacted sample payload");
+    expect(body).not.toContain("For ");
+  });
+
+  it("keeps vague customer replies tied to the ticket topic", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          id: "TKT-1027",
+          subject: "Track API rejects event timestamp",
+          description:
+            "The Track API returns a 400 validation error when our event timestamp uses Europe/Helsinki local time.",
+          category: "api",
+          team: "api-platform",
+          tags: ["api", "events", "400", "timestamp"],
+        },
+      ],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        ticketId: "TKT-1027",
+        category: "api",
+        team: "api-platform",
+        supportState: "needs-information",
+      },
+    });
+    await app.selectFirstTicket();
+    await app.clickConversationScenario("vague-reply");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    const body = JSON.parse(String(replyRequest?.init?.body)).body;
+    expect(body).toContain("timestamp");
+    expect(body).toContain("400");
+    expect(body).not.toBe(
+      "It is still happening, but I am not sure where to find the details you asked for.",
+    );
+  });
+
   it("explains synthetic evidence replies are based on current missing evidence", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();

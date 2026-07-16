@@ -323,6 +323,120 @@ describe("analyzeEvidenceReadiness", () => {
       "affected-scope",
     ]);
   });
+
+  it("credits a blank-page follow-up as a concrete vague-ticket problem summary", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1010")),
+      description:
+        "It does not work. Customer reply: I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign and clicked Edit.",
+    });
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1010",
+        category: "other",
+        acceptablePriorities: ["P3"],
+        team: "support",
+        requiredEscalations: [],
+        knowledgeArticleIds: [],
+      },
+    });
+
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["problem-summary", "reproduction-steps"]),
+    );
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).toEqual([
+      "screenshot-or-error",
+    ]);
+  });
+
+  it("uses app-loading evidence after campaign editor blank-page context", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1010")),
+      description:
+        "It does not work.\n\nCustomer follow-up:\nI was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.",
+    });
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1010",
+        category: "performance",
+        acceptablePriorities: ["P3"],
+        team: "product",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["campaign-send-failures"],
+      },
+    });
+
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["problem-summary", "reproduction-steps"]),
+    );
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "campaign-name",
+      "failure-timestamp",
+      "browser-session-details",
+      "affected-scope",
+      "problem-summary",
+      "reproduction-steps",
+    ]);
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).not.toContain(
+      "screenshot-or-error",
+    );
+  });
+
+  it("credits negative post-exposure usage as security evidence", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1004")),
+      description:
+        "A private API key may have been pasted into a shared integration log bundle. We do not know whether it was used or which profiles were accessed. Customer reply: The key identifier ends in 4f8a; I am not sending the secret value. I cannot see any post-exposure key usage in the audit view.",
+    });
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1004",
+        category: "security",
+        acceptablePriorities: ["P1"],
+        team: "security",
+        requiredEscalations: ["security", "missing-information"],
+        knowledgeArticleIds: ["security-incident-response"],
+      },
+    });
+
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["key-identifier", "key-usage-status"]),
+    );
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).not.toContain(
+      "key-usage-status",
+    );
+  });
+
+  it("uses catalog sync evidence without coupon-pool evidence for product catalog delays", async () => {
+    const ticket = await loadSeedTicket("TKT-1020");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1020",
+        category: "performance",
+        acceptablePriorities: ["P3"],
+        team: "product",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["shopify-integration-sync", "coupon-catalog-sync"],
+      },
+    });
+
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "store-url",
+      "object-id",
+      "catalog-sync-time",
+      "product-reference",
+    ]);
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "coupon-pool-name",
+    );
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "unused-coupon-status",
+    );
+  });
 });
 
 async function loadSeedTicket(ticketId: string): Promise<Ticket> {
