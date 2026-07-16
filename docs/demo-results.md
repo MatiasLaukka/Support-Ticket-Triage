@@ -16,6 +16,32 @@ prints a local URL.
 
 ## Primary Scenario
 
+Ticket: `TKT-1010`
+
+Scenario: the initial ticket is vague: subject `Problem`, description `It does
+not work`. The reviewer adds a realistic customer reply:
+
+```text
+I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.
+```
+
+Expected recommendation:
+
+| Field | Expected value |
+| --- | --- |
+| Category | `performance` |
+| Priority | `P3` |
+| Team | `product` |
+| Support state | `information-received` or `diagnosing` |
+| Missing evidence | campaign name, failure timestamp, browser/session details, affected scope |
+
+The important behavior is that the recommendation updates from the full
+conversation. The system should stop treating the ticket as a generic support
+request, should not require a screenshot of a blank page, and should draft a
+reply about the campaign editor loading path.
+
+## Alternate Incident Scenario
+
 Ticket: `TKT-1001`
 
 Scenario: recent EU Checkout Started events are delayed or missing from
@@ -72,6 +98,14 @@ In the Approval Desk, use the **Why this draft is safe** panel:
 - `Retrieved context`: lists the local knowledge article IDs used internally.
 - `Human approval`: confirms that the response is pending review before use.
 
+Also point out the **Classifier evidence** and **Lifecycle summary** panels:
+
+- deterministic safety and metadata signals are visible;
+- GPT advisory signals, when configured, appear as `gpt-advisory-*` evidence;
+- lifecycle state controls whether the draft asks for missing evidence,
+  thanks the customer for partial information, explains a known cause, or
+  prepares to close.
+
 ## Reproducible Fixture Evaluation
 
 Run:
@@ -108,4 +142,5 @@ expected outcomes. It does not evaluate real queues or live model quality.
 | `TKT-1004` | Security routing takes priority and requires missing scope evidence. |
 | `TKT-1017` | Known-cause SMS quiet-hour blocks get solution-first wording. |
 | `TKT-1008` | Webhook troubleshooting asks for delivery and signature evidence. |
+| `TKT-1010` | Vague tickets can evolve after replies into a specific product diagnosis. |
 
