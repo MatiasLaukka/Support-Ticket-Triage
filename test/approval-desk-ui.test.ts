@@ -37,7 +37,7 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("risk-security");
     expect(approvalDeskHtml).toContain("Conversation Context");
     expect(approvalDeskHtml).toContain("conversationContextPanel");
-    expect(approvalDeskHtml).toContain("Add partial evidence");
+    expect(approvalDeskHtml).toContain("Insert partial evidence sample");
     expect(approvalDeskHtml).toContain("conversationTimeline");
     expect(approvalDeskHtml).toContain("recommendationHistory");
     expect(approvalDeskHtml).toContain("Mark response as sent");
@@ -106,7 +106,7 @@ describe("approvalDeskHtml", () => {
     await app.clickConversationScenario("partial-evidence");
 
     const contextHtml = app.el("conversationContextPanel").innerHTML;
-    expect(contextHtml).toContain("Add complete evidence");
+    expect(contextHtml).toContain("Insert complete evidence sample");
     expect(contextHtml).not.toContain("Detected lifecycle state");
 
     const replyRequest = app.requests.find((request) =>
@@ -121,6 +121,77 @@ describe("approvalDeskHtml", () => {
     expect(app.ticketDetailRequests()).toBe(2);
     expect(app.queueRequests()).toBe(2);
     expect(app.evidenceRequests()).toBe(2);
+  });
+
+  it("adds a manual customer reply from the conversation workspace", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+
+    app.el("customerReplyBody").value =
+      "The campaign editor opens, but the page stays blank after I click Edit.";
+    app.el("customerReplyBody").dispatch("input");
+    await app.addCustomerReply();
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    expect(replyRequest?.path).toBe("/api/tickets/TKT-1001/customer-replies");
+    expect(JSON.parse(String(replyRequest?.init?.body))).toMatchObject({
+      actor: "approval-desk",
+      body:
+        "The campaign editor opens, but the page stays blank after I click Edit.",
+      source: "manual",
+    });
+    expect(app.el("customerReplyBody").value).toBe("");
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.queueRequests()).toBe(2);
+    expect(app.evidenceRequests()).toBe(2);
+  });
+
+  it("shows what changed between previous and latest recommendations", async () => {
+    const previous = {
+      ...fixtureRecommendation,
+      id: "22222222-2222-4222-8222-222222222222",
+      category: "other",
+      team: "support",
+      priority: "P3",
+      supportState: "needs-information",
+      missingEvidence: [
+        evidenceRequirement(
+          "problem-summary",
+          "Problem summary",
+          "what happened",
+        ),
+      ],
+      createdAt: "2026-06-10T08:20:00.000Z",
+    };
+    const latest = {
+      ...fixtureRecommendation,
+      category: "performance",
+      team: "product",
+      priority: "P3",
+      supportState: "diagnosing",
+      missingEvidence: [
+        evidenceRequirement(
+          "campaign-name",
+          "Campaign or flow name",
+          "Campaign or flow name",
+        ),
+      ],
+    };
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: latest,
+      ticketDetail: {
+        recommendationHistory: [latest, previous],
+      },
+    });
+    await app.selectFirstTicket();
+
+    const html = app.el("recommendationPanel").innerHTML;
+    expect(html).toContain("What changed");
+    expect(html).toContain("Category: other -&gt; performance");
+    expect(html).toContain("Team: support -&gt; product");
+    expect(html).toContain("State: needs-information -&gt; diagnosing");
   });
 
   it("generates gentle generic evidence replies for vague tickets", async () => {
@@ -1762,6 +1833,10 @@ async function startApprovalDeskApp(options: {
         .dispatch("click");
       await settle();
     },
+    addCustomerReply: async () => {
+      elements.addCustomerReply.dispatch("click");
+      await settle();
+    },
     requests,
     parsedResult: () => JSON.parse(elements.resultPanel.textContent),
     selectFirstTicket: async () => {
@@ -1804,10 +1879,12 @@ function createElements(): Record<string, FakeElement> {
       "approvalStage",
       "approveButton",
       "backToRecommendation",
+      "addCustomerReply",
       "confirmApproval",
       "continueApproval",
       "conversationContextPanel",
       "createRecommendation",
+      "customerReplyBody",
       "draftStyle",
       "editedCustomerResponse",
       "categoryOverride",

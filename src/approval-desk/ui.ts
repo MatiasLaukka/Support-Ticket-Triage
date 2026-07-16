@@ -698,6 +698,10 @@ export const approvalDeskHtml = `<!doctype html>
           </details>
           <section class="card conversation-context" aria-label="Conversation Context">
             <h3>Conversation Context</h3>
+            <label for="customerReplyBody">Add customer reply</label>
+            <textarea id="customerReplyBody" rows="4" placeholder="Paste the customer's latest reply here"></textarea>
+            <p class="hint">Paste or type the customer's latest message. The next recommendation will use the full timeline.</p>
+            <button id="addCustomerReply" type="button" class="secondary">Add customer reply</button>
             <div id="conversationContextPanel">
               <p class="hint">Select a ticket to add customer reply context.</p>
             </div>
@@ -834,7 +838,8 @@ export const approvalDeskHtml = `<!doctype html>
         recommendationHistory: []
       };
 
-      const els = {
+        const els = {
+        addCustomerReply: document.getElementById('addCustomerReply'),
         actor: document.getElementById('actor'),
         approvalStage: document.getElementById('approvalStage'),
         assigneeOverride: document.getElementById('assigneeOverride'),
@@ -845,6 +850,7 @@ export const approvalDeskHtml = `<!doctype html>
         conversationContextPanel: document.getElementById('conversationContextPanel'),
         continueApproval: document.getElementById('continueApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
+        customerReplyBody: document.getElementById('customerReplyBody'),
         draftStyle: document.getElementById('draftStyle'),
         editedCustomerResponse: document.getElementById('editedCustomerResponse'),
         evidencePanel: document.getElementById('evidencePanel'),
@@ -1013,16 +1019,17 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         els.conversationContextPanel.innerHTML =
-          '<p class="hint">Use demo replies to advance the conversation lifecycle through the local API.</p>' +
-          '<details><summary>Add synthetic customer replies</summary>' +
+          '<p class="hint">Use sample replies only when you want a quick demo path.</p>' +
+          '<details><summary>Insert sample reply</summary>' +
+            '<p class="hint">Add synthetic customer replies for demo pacing.</p>' +
             '<p class="hint">Replies are generated from the current ticket evidence and conversation timeline, then persisted through the local API.</p>' +
             '<div class="conversation-controls">' +
-              scenarioButton('vague-reply', 'Add vague reply') +
-              scenarioButton('partial-evidence', 'Add partial evidence') +
-              scenarioButton('complete-evidence', 'Add complete evidence') +
-              scenarioButton('known-cause-evidence', 'Add known-cause evidence') +
-              scenarioButton('platform-fix-context', 'Add platform-fix context') +
-              scenarioButton('resolved-confirmation', 'Add resolved confirmation') +
+              scenarioButton('vague-reply', 'Insert vague sample') +
+              scenarioButton('partial-evidence', 'Insert partial evidence sample') +
+              scenarioButton('complete-evidence', 'Insert complete evidence sample') +
+              scenarioButton('known-cause-evidence', 'Insert known-cause sample') +
+              scenarioButton('platform-fix-context', 'Insert platform-fix sample') +
+              scenarioButton('resolved-confirmation', 'Insert resolved sample') +
             '</div>' +
           '</details>';
       }
@@ -1159,6 +1166,7 @@ export const approvalDeskHtml = `<!doctype html>
             '</div>' +
             renderClassifierEvidenceCard(recommendation) +
             renderLifecycleSummaryCard(recommendation) +
+            renderRecommendationChangeSummary(recommendation) +
             '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
             '<p class="hint">Continue to approval when the draft looks ready.</p>' +
             '<details><summary>Why this draft is safe</summary>' +
@@ -1258,6 +1266,32 @@ export const approvalDeskHtml = `<!doctype html>
             '</div>';
           }).join('') +
         '</details>';
+      }
+
+      function renderRecommendationChangeSummary(recommendation) {
+        if (!Array.isArray(state.recommendationHistory) || state.recommendationHistory.length < 2) {
+          return '';
+        }
+        const previous = state.recommendationHistory[1];
+        const changes = [];
+        if (previous.category !== recommendation.category) {
+          changes.push('Category: ' + previous.category + ' -> ' + recommendation.category);
+        }
+        if (previous.team !== recommendation.team) {
+          changes.push('Team: ' + previous.team + ' -> ' + recommendation.team);
+        }
+        if (previous.priority !== recommendation.priority) {
+          changes.push('Priority: ' + previous.priority + ' -> ' + recommendation.priority);
+        }
+        if (previous.supportState !== recommendation.supportState) {
+          changes.push('State: ' + (previous.supportState ?? 'not assessed') + ' -> ' + (recommendation.supportState ?? 'not assessed'));
+        }
+        if (changes.length === 0) {
+          return '';
+        }
+        return '<section class="card description"><strong>What changed</strong><ul>' +
+          changes.map(function (change) { return '<li>' + escapeHtml(change) + '</li>'; }).join('') +
+          '</ul></section>';
       }
 
       function previewRecommendationDraft(value) {
@@ -1543,6 +1577,27 @@ export const approvalDeskHtml = `<!doctype html>
             source: 'demo-scenario'
           })
         });
+        await refreshSelectedTicketQueueAndEvidence();
+      }
+
+      async function addManualCustomerReply() {
+        if (state.selectedTicket === null) {
+          return;
+        }
+        const body = els.customerReplyBody.value.trim();
+        if (body === '') {
+          setResult({ error: 'Customer reply cannot be empty.' });
+          return;
+        }
+        await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/customer-replies', {
+          method: 'POST',
+          body: JSON.stringify({
+            actor: els.actor.value.trim() || 'approval-desk',
+            body,
+            source: 'manual'
+          })
+        });
+        els.customerReplyBody.value = '';
         await refreshSelectedTicketQueueAndEvidence();
       }
 
@@ -2374,6 +2429,9 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       els.actor.addEventListener('input', updateControls);
+      els.addCustomerReply.addEventListener('click', function () {
+        void addManualCustomerReply().catch(function (error) { setResult({ error: error.message }); });
+      });
       els.backToRecommendation.addEventListener('click', function () {
         if (state.recommendation !== null) {
           state.stage = 'draft';
