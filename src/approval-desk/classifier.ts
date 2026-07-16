@@ -505,6 +505,17 @@ function chooseKnowledgeArticles(
     }
   }
 
+  if (!hasKnownCauseArticles) {
+    for (const signal of signals) {
+      if (
+        signal.ruleId.startsWith("gpt-advisory-") &&
+        signal.target.startsWith("knowledge:")
+      ) {
+        allowed.add(signal.target.slice("knowledge:".length));
+      }
+    }
+  }
+
   for (const risk of ["security", "outage"] as const) {
     if (!hasStrongRisk(signals, risk)) continue;
     for (const articleId of SAFETY_KNOWLEDGE_ARTICLES[risk]) {

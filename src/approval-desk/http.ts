@@ -15,6 +15,7 @@ import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
 import {
+  advisorySignalsFromGptReasoning,
   buildApprovalDeskRecommendationInput,
   buildApprovalDeskRecommendationInputWithDrafting,
   loadExpectedOutcomes,
@@ -22,7 +23,10 @@ import {
 import {
   createCustomerResponseDraftProviderFromEnv,
   type CustomerResponseDraftProvider,
+  type GptClassificationReasoningProvider,
 } from "./draft-response-provider.js";
+import { classifyTicketFromContext } from "./classifier.js";
+import { buildConversationContextForTicket } from "./conversation-context.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 import {
@@ -150,6 +154,7 @@ const MarkSentBodySchema = z
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
+  classificationReasoningProvider?: GptClassificationReasoningProvider;
 }
 
 export function createApprovalDeskHttpServer(
@@ -587,12 +592,34 @@ async function createRecommendation(
       ? undefined
       : await loadExpectedOutcomes(options.expectedOutcomesPath);
   const outcome = outcomes?.get(ticket.id);
+  const conversationContextForClassification = buildConversationContextForTicket({
+    ticket,
+    customerReplies,
+    previousSupportResponses:
+      previousSupportResponse === undefined ? [] : [previousSupportResponse],
+  });
+  const deterministicClassification = classifyTicketFromContext(
+    conversationContextForClassification,
+  );
+  const gptReasoning =
+    options.classificationReasoningProvider === undefined || outcome !== undefined
+      ? undefined
+      : await options.classificationReasoningProvider.reason({
+          ticket,
+          conversationContext: conversationContextForClassification,
+          deterministicClassification,
+        });
+  const advisoryClassificationSignals =
+    gptReasoning === undefined
+      ? undefined
+      : advisorySignalsFromGptReasoning(gptReasoning);
   const deterministicInput = buildApprovalDeskRecommendationInput({
     ticket,
     outcome,
     actor: body.actor,
     customerReplies,
     previousSupportResponse,
+    advisoryClassificationSignals,
   });
   const knowledgeArticles = await Promise.all(
     deterministicInput.knowledgeArticleIds.map((articleId) =>
@@ -607,6 +634,7 @@ async function createRecommendation(
     responseStyle: body.responseStyle,
     customerReplies,
     previousSupportResponse,
+    advisoryClassificationSignals,
     draftProvider:
       options.draftProvider ??
       createCustomerResponseDraftProviderFromEnv(process.env, {

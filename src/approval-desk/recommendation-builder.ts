@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   CategorySchema,
+  type ClassificationSignal,
   type KnowledgeArticle,
   type DraftCustomerResponseStyleInput,
   PrioritySchema,
@@ -17,6 +18,7 @@ import {
   DEFAULT_SUPPORT_COMPANY_NAME,
   draftCustomerResponseWithFallback,
   ensureDraftSignOff,
+  type GptClassificationReasoning,
   type CustomerResponseConversationContext,
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
@@ -91,6 +93,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   actor: string;
   customerReplies?: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
+  advisoryClassificationSignals?: readonly ClassificationSignal[];
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
   const { ticket, outcome, actor } = input;
   const conversationContextForClassification = buildConversationContextForTicket({
@@ -103,7 +106,10 @@ export function buildApprovalDeskRecommendationInput(input: {
   });
   const classification =
     outcome === undefined
-      ? classifyTicketFromContext(conversationContextForClassification)
+      ? classifyTicketFromContext(
+          conversationContextForClassification,
+          input.advisoryClassificationSignals ?? [],
+        )
       : undefined;
   const resolvedOutcome =
     outcome ?? outcomeFromClassification(ticket, classification!);
@@ -226,6 +232,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   responseStyle?: DraftCustomerResponseStyleInput;
   customerReplies?: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
+  advisoryClassificationSignals?: readonly ClassificationSignal[];
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const providerOutcome = input.outcome ?? {
@@ -278,6 +285,58 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     draftCustomerResponseChecks: draft.checks,
     gptAssist: draft.assist,
   };
+}
+
+export function advisorySignalsFromGptReasoning(
+  reasoning: GptClassificationReasoning,
+): ClassificationSignal[] {
+  const issueType = slugifySignalPart(reasoning.issueType);
+  const weight = Math.max(1, Math.min(4, Math.round(reasoning.confidence * 4)));
+  const signals: ClassificationSignal[] = [];
+
+  if (reasoning.candidateCategory !== undefined) {
+    signals.push({
+      ruleId: `gpt-advisory-${issueType}-category`,
+      target: `category:${reasoning.candidateCategory}`,
+      weight,
+      reason: reasoning.explanation,
+    });
+  }
+  if (reasoning.candidateTeam !== undefined) {
+    signals.push({
+      ruleId: `gpt-advisory-${issueType}-team`,
+      target: `team:${reasoning.candidateTeam}`,
+      weight,
+      reason: reasoning.explanation,
+    });
+  }
+  if (reasoning.candidatePriority !== undefined) {
+    signals.push({
+      ruleId: `gpt-advisory-${issueType}-priority`,
+      target: `priority:${reasoning.candidatePriority}`,
+      weight,
+      reason: reasoning.explanation,
+    });
+  }
+  for (const articleId of reasoning.knowledgeArticleIds) {
+    signals.push({
+      ruleId: `gpt-advisory-${issueType}-${slugifySignalPart(articleId)}`,
+      target: `knowledge:${articleId}`,
+      weight: Math.max(1, weight - 1),
+      reason: reasoning.explanation,
+    });
+  }
+
+  return signals;
+}
+
+function slugifySignalPart(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug === "" ? "unknown" : slug;
 }
 
 function outcomeFromClassification(

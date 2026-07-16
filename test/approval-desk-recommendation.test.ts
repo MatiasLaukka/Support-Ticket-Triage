@@ -189,6 +189,102 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).not.toContain("screenshot or exact message");
   });
 
+  it("uses bounded GPT advisory signals to classify ambiguous vague replies", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1010")),
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "The editor opens but the content area never finishes loading after I click edit.",
+        },
+      ],
+      advisoryClassificationSignals: [
+        {
+          ruleId: "gpt-advisory-campaign-editor-category",
+          target: "category:performance",
+          weight: 4,
+          reason:
+            "GPT interpreted the content area never finishing loading as a campaign editor loading issue.",
+        },
+        {
+          ruleId: "gpt-advisory-campaign-editor-team",
+          target: "team:product",
+          weight: 4,
+          reason:
+            "GPT suggested product routing because the editor UI fails after opening.",
+        },
+        {
+          ruleId: "gpt-advisory-campaign-editor-knowledge",
+          target: "knowledge:campaign-send-failures",
+          weight: 3,
+          reason:
+            "GPT suggested campaign troubleshooting context for the editor failure.",
+        },
+      ],
+    });
+
+    expect(input.category).toBe("performance");
+    expect(input.team).toBe("product");
+    expect(input.classificationSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "gpt-advisory-campaign-editor-category",
+          target: "category:performance",
+        }),
+      ]),
+    );
+  });
+
+  it("does not let GPT advisory signals override deterministic security classification", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1010")),
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "A private API key was pasted into shared logs.",
+        },
+      ],
+      advisoryClassificationSignals: [
+        {
+          ruleId: "gpt-advisory-performance-category",
+          target: "category:performance",
+          weight: 4,
+          reason: "GPT guessed performance.",
+        },
+      ],
+    });
+
+    expect(input.category).toBe("security");
+    expect(input.team).toBe("security");
+    expect(input.priority).toBe("P1");
+    expect(input.escalationReasons).toContain("security");
+  });
+
   it("adapts webhook known-cause drafts across customer follow-up turns", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

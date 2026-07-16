@@ -13,6 +13,8 @@ import type {
   DraftCustomerResponseStyle,
   DraftCustomerResponseStyleInput,
 } from "../domain.js";
+import type { TicketClassification } from "./classifier.js";
+import type { ConversationContext } from "./conversation-context.js";
 import { GptAssistAudienceSchema } from "../domain.js";
 import type { EvidenceReadiness } from "./evidence-readiness.js";
 import { extractAccountFacts } from "./account-facts.js";
@@ -73,6 +75,30 @@ export interface CustomerResponseDraft {
 
 export interface CustomerResponseDraftProvider {
   draft(input: CustomerResponseDraftInput): Promise<CustomerResponseDraft>;
+}
+
+export interface GptClassificationReasoning {
+  issueType: string;
+  candidateCategory?: string;
+  candidateTeam?: string;
+  candidatePriority?: string;
+  knowledgeArticleIds: string[];
+  confidence: number;
+  evidence: string[];
+  missingEvidenceThatWouldChangeClassification: string[];
+  explanation: string;
+}
+
+export interface GptClassificationReasoningInput {
+  ticket: Ticket;
+  conversationContext: ConversationContext;
+  deterministicClassification: TicketClassification;
+}
+
+export interface GptClassificationReasoningProvider {
+  reason(
+    input: GptClassificationReasoningInput,
+  ): Promise<GptClassificationReasoning>;
 }
 
 export interface ValidatedCustomerResponseDraft {

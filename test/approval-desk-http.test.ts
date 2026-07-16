@@ -760,6 +760,54 @@ describe("createApprovalDeskHttpServer", () => {
     expect(seenArticleIds).toEqual([["security-incident-response"]]);
   });
 
+  it("passes GPT advisory classification signals from the reasoning provider into recommendation creation", async () => {
+    const { json } = await startFixture({
+      classificationReasoningProvider: {
+        async reason() {
+          return {
+            issueType: "campaign-editor",
+            candidateCategory: "performance",
+            candidateTeam: "product",
+            knowledgeArticleIds: ["campaign-send-failures"],
+            confidence: 0.9,
+            evidence: ["customer says the campaign editor page stays blank"],
+            missingEvidenceThatWouldChangeClassification: [],
+            explanation: "The reply describes a campaign editor loading failure.",
+          };
+        },
+      },
+    });
+
+    const created = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "demo-reply-1",
+            createdAt: "2026-06-10T09:05:00.000Z",
+            body: "The editor opens but the content area never finishes loading after I click Edit.",
+          },
+        ],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      category: "performance",
+      team: "product",
+      knowledgeArticleIds: ["campaign-send-failures"],
+    });
+    expect(created.body.recommendation.classificationSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "gpt-advisory-campaign-editor-category",
+          target: "category:performance",
+        }),
+      ]),
+    );
+  });
+
   it("accepts auto draft style and returns the resolved recommended style", async () => {
     const { json } = await startFixture();
 
