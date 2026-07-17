@@ -56,6 +56,10 @@ should target quality without weakening governance:
 - add a validator warning when the draft asks for irrelevant information;
 - add a "known cause vs needs diagnosis" label to the safety panel;
 - add examples of good and bad customer replies in `docs/demo-results.md`.
+- improve `search_knowledge` recall so operator lookups surface the same
+  knowledge articles that classifier rule mappings cite;
+- normalize customer-facing evidence labels so list items read naturally, for
+  example `Event ID or event time` instead of lowercase sentence fragments;
 - keep GPT assist bounded: deterministic lifecycle and evidence state decide
   what the response must accomplish, while GPT can polish customer-facing
   wording and provide auditable advisory classification signals for ambiguous

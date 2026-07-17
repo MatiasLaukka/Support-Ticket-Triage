@@ -31,6 +31,12 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "Expected audience size",
     aliases: ["audience size", "expected recipients"],
   },
+  "billing-account": {
+    id: "billing-account",
+    label: "Billing account",
+    customerQuestion: "billing account or workspace name",
+    aliases: ["billing account", "workspace", "account name"],
+  },
   "affected-scope": {
     id: "affected-scope",
     label: "Affected scope",
@@ -147,11 +153,23 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "failure timestamp with time zone",
     aliases: ["failure timestamp", "failure time"],
   },
+  "feature-description": {
+    id: "feature-description",
+    label: "Feature description",
+    customerQuestion: "short description of the feature or workflow you want",
+    aliases: ["feature request", "would like", "please add", "feature"],
+  },
   "flow-id": {
     id: "flow-id",
     label: "Flow name or flow ID",
     customerQuestion: "flow name or flow ID",
     aliases: ["flow id", "flow name"],
+  },
+  "invoice-number": {
+    id: "invoice-number",
+    label: "Invoice number",
+    customerQuestion: "invoice number, if available",
+    aliases: ["invoice number", "invoice id", "invoice"],
   },
   "key-identifier": {
     id: "key-identifier",
@@ -208,6 +226,12 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion:
       "ecommerce platform, such as Shopify, Magento, WooCommerce, or custom",
     aliases: ["ecommerce platform", "shopify", "magento", "woocommerce"],
+  },
+  "plan-or-promotion": {
+    id: "plan-or-promotion",
+    label: "Plan or promotion",
+    customerQuestion: "affected plan, promotion, coupon, or subscription",
+    aliases: ["plan", "promotion", "coupon", "subscription", "charge"],
   },
   "profile-email": {
     id: "profile-email",
@@ -320,9 +344,42 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "Whether unused coupon codes remain available",
     aliases: ["unused coupon", "available codes"],
   },
+  "use-case": {
+    id: "use-case",
+    label: "Use case",
+    customerQuestion: "the use case and who would use it",
+    aliases: ["use case", "workflow", "would use", "users"],
+  },
 };
 
 const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
+  "account-access": [
+    "profile-email",
+    "object-id",
+    "error-banner",
+    "failure-timestamp",
+    "browser-session-details",
+  ],
+  "api-reference": [
+    "endpoint-url",
+    "request-id",
+    "api-response-status",
+    "sample-payload",
+    "failure-timestamp",
+  ],
+  authentication: [
+    "profile-email",
+    "error-banner",
+    "failure-timestamp",
+    "browser-session-details",
+  ],
+  "billing-and-invoices": [
+    "invoice-number",
+    "billing-account",
+    "plan-or-promotion",
+    "failure-timestamp",
+    "error-banner",
+  ],
   "campaign-send-failures": [
     "campaign-name",
     "scheduled-send-time",
@@ -356,6 +413,11 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
     "profile-email",
     "event-id",
     "product-reference",
+  ],
+  "product-feedback": [
+    "feature-description",
+    "use-case",
+    "affected-scope",
   ],
   "profile-sync-issues": [
     "profile-email",
@@ -614,7 +676,7 @@ function isEvidenceProvided(
   switch (requirement.id) {
     case "api-response-status":
     case "endpoint-response-code":
-      return /\b(api response|response status|response code|http status|400|401|403|404|429|500|validation error|accepted by the api)\b/i.test(
+      return /\b(api response|response status|response code|http status|200|202|400|401|403|404|429|500|validation error|accepted by the api|api accepted|accepted)\b/i.test(
         text,
       );
     case "platform":
@@ -634,7 +696,7 @@ function isEvidenceProvided(
         text,
       );
     case "profile-email":
-      return /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
+      return /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|\b(?:customer id|profile id|customer_id|profile_id)\b.{0,24}\b[a-z]{2,}[_-][a-z0-9]+\b/i.test(text);
     case "event-id":
       return /\bevent (id|time|timestamp)\b|\bevt[-_a-z0-9]+\b/i.test(text);
     case "request-id":
@@ -673,6 +735,8 @@ function isEvidenceProvided(
       return /\b(failure timestamp|failure time|failed at|fails at)\b/i.test(
         text,
       );
+    case "signing-secret-rotation-time":
+      return hasKnownSigningSecretRotationTime(text);
     case "scheduled-send-time":
     case "catalog-sync-time":
     case "source-update-time":
@@ -731,6 +795,16 @@ function hasKnownRotationStatus(text: string): boolean {
   return /\b(?:key|credential|token|secret|password)\b.{0,50}\b(?:(?:was|has been|had been|is) (?:not )?(?:rotated|revoked)|remains active)\b|\b(?:rotated|revoked)\b.{0,50}\b(?:key|credential|token|secret|password)\b/i.test(
     text,
   );
+}
+
+function hasKnownSigningSecretRotationTime(text: string): boolean {
+  const subject =
+    "(?:signing[ -]secret|secret).{0,40}(?:rotat(?:ed|ion)|changed)|(?:rotat(?:ed|ion)|changed).{0,40}(?:signing[ -]secret|secret)";
+  if (hasUnknownQualification(text, `(?:${subject})`)) return false;
+  return new RegExp(
+    `(?:${subject}).{0,80}(?:\\b\\d{1,2}:\\d{2}\\b|\\b\\d{4}-\\d{2}-\\d{2}\\b|\\byesterday\\b|\\btoday\\b|\\b(?:am|pm|utc|gmt|eet|est|pst)\\b)|(?:\\b\\d{1,2}:\\d{2}\\b|\\b\\d{4}-\\d{2}-\\d{2}\\b|\\byesterday\\b|\\btoday\\b|\\b(?:am|pm|utc|gmt|eet|est|pst)\\b).{0,80}(?:${subject})`,
+    "i",
+  ).test(text);
 }
 
 function hasConcreteAuditSource(text: string): boolean {

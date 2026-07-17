@@ -96,6 +96,40 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
+  it("treats confirmed but ambiguous diagnosis context as diagnostic narrowing", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      diagnosisContext: {
+        status: "completed",
+        causeType: "performance",
+        customerSafeSummary:
+          "The issue is either browser session state or a frontend loading issue.",
+        evidenceUsed: ["browser details"],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction:
+          "Use the next checks to decide which cause is responsible.",
+        doNotSay: ["Do not call this a final root cause."],
+      },
+    });
+
+    expect(input.draftCustomerResponse).toContain("narrows the issue");
+    expect(input.draftCustomerResponse).toContain("safest next step");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Thanks for completing those checks",
+    );
+    expect(input.draftCustomerResponse).not.toContain(
+      "Our engineering team is preparing the mitigation",
+    );
+  });
+
   it("uses known-cause guidance in webhook secret rotation draft responses", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -121,7 +155,7 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).toContain("delivery ID");
     expect(input.draftCustomerResponse).toContain("raw body");
     expect(input.draftCustomerResponse).not.toContain("timestamp tolerance");
-    expect(input.providedEvidence?.map((requirement) => requirement.id)).toContain(
+    expect(input.missingEvidence?.map((requirement) => requirement.id)).toContain(
       "signing-secret-rotation-time",
     );
     expect(input.draftCustomerResponse).not.toContain(
@@ -345,7 +379,8 @@ describe("Approval Desk recommendation builder", () => {
           id: "reply-2",
           ticketId: "TKT-1008",
           createdAt: "2026-06-10T09:18:00.000Z",
-          body: "Raw body handling has not changed since yesterday.",
+          body:
+            "We rotated the signing secret yesterday at 08:10 UTC. Raw body handling has not changed since yesterday.",
         },
       ],
     });
@@ -359,7 +394,7 @@ describe("Approval Desk recommendation builder", () => {
       "current signing secret",
     );
 
-    const customerConfirmed = buildApprovalDeskRecommendationInput({
+    const customerConfirmedWithoutSentSolution = buildApprovalDeskRecommendationInput({
       ticket,
       outcome,
       actor: "approval-desk",
@@ -385,11 +420,52 @@ describe("Approval Desk recommendation builder", () => {
       ],
     });
 
-    expect(customerConfirmed.supportState).toBe("ready-for-close");
-    expect(customerConfirmed.draftCustomerResponse).toContain(
+    expect(customerConfirmedWithoutSentSolution.supportState).not.toBe(
+      "ready-for-close",
+    );
+    expect(customerConfirmedWithoutSentSolution.draftCustomerResponse).not.toContain(
       "Glad to hear that resolved it.",
     );
-    expect(customerConfirmed.missingInformation).toEqual([]);
+
+    const customerConfirmedAfterSentSolution = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "The endpoint URL is https://hooks.juniper.example/webhooks/orders and the delivery ID is deliv_7788.",
+        },
+        {
+          id: "reply-2",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:18:00.000Z",
+          body:
+            "We rotated the signing secret yesterday at 08:10 UTC. Raw body handling has not changed since yesterday.",
+        },
+        {
+          id: "reply-3",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "That fixed it. Thanks for the help!",
+        },
+      ],
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:25:00.000Z",
+        body:
+          "The webhook failures match the documented signing secret rotation issue. Please confirm the receiving endpoint is using the current signing secret, then retry one delivery.",
+      },
+    });
+
+    expect(customerConfirmedAfterSentSolution.supportState).toBe(
+      "ready-for-close",
+    );
+    expect(customerConfirmedAfterSentSolution.draftCustomerResponse).toContain(
+      "Glad to hear that resolved it.",
+    );
+    expect(customerConfirmedAfterSentSolution.missingInformation).toEqual([]);
   });
 
   it("keeps needs-information when a vague reply adds no recognized evidence", async () => {
@@ -497,7 +573,7 @@ describe("Approval Desk recommendation builder", () => {
           ticketId: "TKT-1008",
           createdAt: "2026-06-10T09:05:00.000Z",
           body:
-            "Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
+            "Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. We rotated the signing secret yesterday at 08:10 UTC. Raw body handling has not changed since yesterday.",
         },
       ],
     });
@@ -522,8 +598,8 @@ describe("Approval Desk recommendation builder", () => {
       ],
     });
 
-    expect(resolvedAsFirstReply.supportState).toBe("ready-for-close");
-    expect(resolvedAsFirstReply.draftCustomerResponse).toContain(
+    expect(resolvedAsFirstReply.supportState).not.toBe("ready-for-close");
+    expect(resolvedAsFirstReply.draftCustomerResponse).not.toContain(
       "Glad to hear that resolved it.",
     );
 
@@ -606,6 +682,132 @@ describe("Approval Desk recommendation builder", () => {
       "please share:",
     );
     expect(input.draftCustomerResponse).not.toContain("Affected store URL");
+  });
+
+  it("answers current-status questions while waiting on customer details", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "Please send the endpoint URL, delivery ID, and whether raw body handling changed recently.",
+      },
+      customerReplies: [
+        {
+          id: "reply-current-status",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "What's the current status of the ticket?",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("needs-information");
+    expect(input.draftCustomerResponse).toContain("Current status:");
+    expect(input.draftCustomerResponse).toContain("waiting on a few details");
+    expect(input.draftCustomerResponse).toContain("endpoint URL");
+    expect(input.draftCustomerResponse).not.toContain(
+      "To move this forward, please share:",
+    );
+    expect(input.draftCustomerResponse).not.toContain("internal");
+    expect(input.draftCustomerResponse).not.toContain("audit");
+  });
+
+  it("answers current-status questions from a confirmed diagnosis", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      diagnosisContext: {
+        status: "completed",
+        causeType: "platform-delay",
+        customerSafeSummary:
+          "The evidence confirms a platform-side processing delay affecting accepted checkout events and profile timeline updates.",
+        evidenceUsed: [
+          "multiple affected store examples",
+          "accepted event or API evidence",
+          "missing profile timeline updates",
+        ],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction:
+          "Prepare the event-processing mitigation and ask the customer to verify the affected profile timelines after it is available.",
+        doNotSay: ["Do not ask the customer to resend the same examples."],
+      },
+      customerReplies: [
+        {
+          id: "reply-evidence",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "The affected store URL is https://store.example.test. One affected profile email is customer@example.test. The event ID is evt_12345. The request ID is req_12345. The API returned 202 Accepted but the event is still missing from the profile timeline. This affects multiple EU stores.",
+        },
+        {
+          id: "reply-current-status",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "What's the current status of the ticket?",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain("Current status:");
+    expect(input.draftCustomerResponse).toContain("confirmed");
+    expect(input.draftCustomerResponse).toContain(
+      "platform-side processing delay",
+    );
+    expect(input.draftCustomerResponse).toContain("no confirmed ETA");
+    expect(input.draftCustomerResponse).not.toContain("please share:");
+    expect(input.draftCustomerResponse).not.toContain("audit");
+  });
+
+  it("answers current-status questions from an available fix", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      fixContext: {
+        status: "available",
+        customerSafeSummary:
+          "The campaign editor loading mitigation has been applied for the affected campaign.",
+        customerAction:
+          "Please reopen the Summer Flash Sale campaign editor in Chrome and try editing the campaign again.",
+        verificationRequest:
+          "Let us know whether the editor now loads normally or if the blank page still appears.",
+      },
+      customerReplies: [
+        {
+          id: "reply-current-status",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "What's the current status of the ticket?",
+        },
+      ],
+    });
+
+    expect(input.draftCustomerResponse).toContain("Current status:");
+    expect(input.draftCustomerResponse).toContain("mitigation has been applied");
+    expect(input.draftCustomerResponse).toContain("Please reopen");
+    expect(input.draftCustomerResponse).not.toContain("please share:");
+    expect(input.draftCustomerResponse).not.toContain("audit");
   });
 
   it("answers platform-fix explanation requests without repeating the first diagnostic ask", async () => {
@@ -873,7 +1075,7 @@ describe("Approval Desk recommendation builder", () => {
           ticketId: "TKT-1008",
           createdAt: "2026-06-10T09:05:00.000Z",
           body:
-            "Since the secret rotation, webhook signature verification fails. Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
+            "Since the secret rotation at 08:10 UTC yesterday, webhook signature verification fails. Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
         },
       ],
     });
@@ -1000,6 +1202,11 @@ describe("Approval Desk recommendation builder", () => {
       ticket,
       outcome: outcomes.get("TKT-1008")!,
       actor: "approval-desk",
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:25:00.000Z",
+        body:
+          "The webhook failures match the documented signing secret rotation issue. Please confirm the receiving endpoint is using the current signing secret, then retry one delivery.",
+      },
       customerReplies: [
         {
           id: "reply-newer",

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
+  AuditEventSchema,
   CategorySchema,
   DraftCustomerResponseStyleInputSchema,
   DraftCustomerResponseStyleSchema,
@@ -10,7 +12,11 @@ import {
   TicketIdSchema,
   TicketStatusSchema,
 } from "../domain.js";
-import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
+import type {
+  AuditEvent,
+  Ticket,
+  TriageRecommendation,
+} from "../domain.js";
 import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
@@ -34,7 +40,9 @@ import {
   buildConversationHistory,
   buildConversationTimeline,
 } from "./conversation-history.js";
+import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
 import { getKnownCause } from "./known-cause-catalog.js";
+import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -251,6 +259,14 @@ function matchRoute(
     };
   }
 
+  const close = /^\/api\/tickets\/([^/]+)\/close$/.exec(pathname);
+  if (method === "POST" && close !== null) {
+    return {
+      status: 200,
+      handle: (context) => closeTicket(context, close[1]!),
+    };
+  }
+
   const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(pathname);
   if (method === "GET" && ticketDetail !== null) {
     return {
@@ -412,11 +428,7 @@ function summarizeRecommendationsForTicket(
 } {
   const related = recommendations
     .filter((recommendation) => recommendation.ticketId === ticket.id)
-    .sort(
-      (left, right) =>
-        right.createdAt.localeCompare(left.createdAt) ||
-        right.id.localeCompare(left.id),
-    );
+    .sort(compareRecommendationsNewestFirst(audits));
   const currentRelated = related.filter((recommendation) =>
     ["pending", "approved"].includes(recommendation.resolution),
   );
@@ -495,9 +507,35 @@ function latestSentAtForRecommendation(
     .sort((left, right) => right.localeCompare(left))[0];
 }
 
+function compareRecommendationsNewestFirst(
+  audits: readonly AuditEvent[],
+): (left: TriageRecommendation, right: TriageRecommendation) => number {
+  const submittedOrder = submittedAuditIndexByRecommendation(audits);
+  return (left, right) =>
+    right.createdAt.localeCompare(left.createdAt) ||
+    (submittedOrder.get(right.id) ?? -1) - (submittedOrder.get(left.id) ?? -1) ||
+    right.id.localeCompare(left.id);
+}
+
+function submittedAuditIndexByRecommendation(
+  audits: readonly AuditEvent[],
+): Map<string, number> {
+  const indexes = new Map<string, number>();
+  audits.forEach((event, index) => {
+    if (
+      event.action === "recommendation-submitted" &&
+      event.recommendationId !== undefined
+    ) {
+      indexes.set(event.recommendationId, index);
+    }
+  });
+  return indexes;
+}
+
 function latestCurrentRecommendation(
   ticketId: string,
   recommendations: readonly TriageRecommendation[],
+  audits: readonly AuditEvent[],
 ): TriageRecommendation | undefined {
   return recommendations
     .filter(
@@ -505,40 +543,113 @@ function latestCurrentRecommendation(
         recommendation.ticketId === ticketId &&
         ["pending", "approved"].includes(recommendation.resolution),
     )
-    .sort(
-      (left, right) =>
-        right.createdAt.localeCompare(left.createdAt) ||
-        right.id.localeCompare(left.id),
-    )[0];
+    .sort(compareRecommendationsNewestFirst(audits))[0];
 }
 
 function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
   return audits
+    .map((event, index) => ({ event, index }))
     .filter(
-      (event) =>
+      ({ event }) =>
         event.action === "diagnosis-completed" &&
         typeof event.after.diagnosis === "object" &&
         event.after.diagnosis !== null,
     )
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index,
+    )[0]?.event;
 }
 
 function latestDiagnosisContext(
   audits: readonly AuditEvent[],
 ): DiagnosisContext | undefined {
-  return parseDiagnosisContext(latestDiagnosisAudit(audits)?.after.diagnosis);
+  const event = latestDiagnosisAudit(audits);
+  if (
+    event === undefined ||
+    isSupersededByCustomerReply(audits, event, {
+      preserveForQuestionReplies: true,
+    })
+  ) {
+    return undefined;
+  }
+  return parseDiagnosisContext(event.after.diagnosis);
 }
 
 function latestFixContext(audits: readonly AuditEvent[]): FixContext | undefined {
-  const event = audits
-    .filter(
-      (audit) =>
-        audit.action === "fix-available" &&
-        typeof audit.after.fix === "object" &&
-        audit.after.fix !== null,
-    )
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+  const event = latestFixAudit(audits);
+  if (
+    event === undefined ||
+    isSupersededByCustomerReply(audits, event, {
+      preserveForQuestionReplies: true,
+    })
+  ) {
+    return undefined;
+  }
   return parseFixContext(event?.after.fix);
+}
+
+function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
+  return audits
+    .map((event, index) => ({ event, index }))
+    .filter(
+      ({ event }) =>
+        event.action === "fix-available" &&
+        typeof event.after.fix === "object" &&
+        event.after.fix !== null,
+    )
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index,
+    )[0]?.event;
+}
+
+function isSupersededByCustomerReply(
+  audits: readonly AuditEvent[],
+  event: AuditEvent,
+  options: { preserveForQuestionReplies?: boolean } = {},
+): boolean {
+  const eventIndex = audits.indexOf(event);
+  return audits.some(
+    (candidate, index) => {
+      if (candidate.action !== "customer-reply-received") {
+        return false;
+      }
+      const isNewer =
+        candidate.timestamp > event.timestamp ||
+        (candidate.timestamp === event.timestamp && index > eventIndex);
+      if (!isNewer) {
+        return false;
+      }
+      if (
+        options.preserveForQuestionReplies === true &&
+        customerReplyCanUseExistingDiagnosis(candidate)
+      ) {
+        return false;
+      }
+      return true;
+    },
+  );
+}
+
+function customerReplyCanUseExistingDiagnosis(event: AuditEvent): boolean {
+  const body =
+    typeof event.after.body === "string" ? event.after.body : "";
+  return isCustomerStatusFollowUp(body) || isCustomerExplanationRequest(body);
+}
+
+function isCustomerStatusFollowUp(value: string): boolean {
+  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s (?:the )?(?:current )?status|current status(?: of (?:the )?ticket)?|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(
+    value,
+  );
+}
+
+function isCustomerExplanationRequest(value: string): boolean {
+  return /\b(?:what'?s|what is|whats)\s+(?:the\s+)?(?:problem|issue|wrong|happening|going on|cause)|\bwhy\s+(?:is|are|did|does|do)\b.{0,80}\b(?:happening|broken|failing|delayed|missing|not working|not showing)|\bwhat happened\b|\bwhat caused\b|\broot cause\b/i.test(
+    value,
+  );
 }
 
 function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
@@ -598,32 +709,15 @@ function parseFixContext(value: unknown): FixContext | undefined {
 function diagnosisContextForTicket(
   ticket: Ticket,
   recommendation: TriageRecommendation,
+  audits: readonly AuditEvent[] = [],
 ): DiagnosisContext {
-  if (
-    ticket.id === "TKT-1010" ||
-    recommendation.knowledgeArticleIds.includes("performance-troubleshooting")
-  ) {
-    return {
-      status: "completed",
-      causeType: "performance",
-      customerSafeSummary:
-        "The details narrow the issue to campaign editor loading, but browser/session checks are needed before treating this as a frontend loading issue.",
-      evidenceUsed: [
-        "campaign name",
-        "failure timestamp",
-        "browser/session details",
-        "affected scope",
-      ],
-      confidence: "likely",
-      owner: "engineering",
-      recommendedNextAction:
-        "We will use the result of those checks to decide whether this can be resolved as a browser/session issue or needs frontend engineering investigation.",
-      doNotSay: [
-        "Do not claim the issue is fixed until a fix event is recorded.",
-        "Do not ask for another screenshot of the blank page.",
-        "Do not claim this is a confirmed frontend issue until browser/session checks fail.",
-      ],
-    };
+  const playbookDiagnosis = diagnoseFromPlaybook({
+    ticket,
+    recommendation,
+    customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
+  });
+  if (playbookDiagnosis !== undefined) {
+    return playbookDiagnosis;
   }
 
   if (
@@ -688,6 +782,21 @@ function providedEvidenceLabels(
 ): string[] {
   const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
   return labels.length > 0 ? labels : [fallback];
+}
+
+function customerReplyTextFromAudits(
+  ticketId: string,
+  audits: readonly AuditEvent[],
+): string {
+  return audits
+    .filter(
+      (event) =>
+        event.ticketId === ticketId &&
+        event.action === "customer-reply-received" &&
+        typeof event.after.body === "string",
+    )
+    .map((event) => event.after.body as string)
+    .join("\n\n");
 }
 
 function fixContextForTicket(
@@ -972,7 +1081,7 @@ async function recordDiagnosis(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const latest = latestCurrentRecommendation(ticketId, recommendations);
+  const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
   if (latest === undefined) {
     throw invalidRequest("A completed evaluation is required before diagnosis.");
   }
@@ -1007,7 +1116,7 @@ async function recordDiagnosis(
       ticketId,
       actor: body.actor,
       diagnosedAt: deps.now().toISOString(),
-      diagnosis: diagnosisContextForTicket(ticket, latest),
+      diagnosis: diagnosisContextForTicket(ticket, latest, audits),
       knowledgeArticleIds: latest.knowledgeArticleIds.length > 0
         ? latest.knowledgeArticleIds
         : [latest.knownCause ?? "known-cause"],
@@ -1030,6 +1139,13 @@ async function recordFix(
   if (latestDiagnosis === undefined) {
     throw invalidRequest("A completed diagnosis is required before marking a fix available.");
   }
+  const diagnosisContext = parseDiagnosisContext(latestDiagnosis.after.diagnosis);
+  if (diagnosisContext?.confidence !== "confirmed") {
+    throw invalidRequest("A confirmed diagnosis is required before marking a fix available.");
+  }
+  if (!["engineering", "integration-partner"].includes(diagnosisContext.owner)) {
+    throw invalidRequest("This confirmed diagnosis does not require a platform fix.");
+  }
   const latestFixAt = latestAuditTimestamp(audits, "fix-available");
   if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
     throw invalidRequest("A fix has already been recorded for the latest diagnosis.");
@@ -1042,7 +1158,7 @@ async function recordFix(
   if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
     throw invalidRequest("Evaluate the latest customer reply before marking a fix available.");
   }
-  const latest = latestCurrentRecommendation(ticketId, recommendations);
+  const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
 
   return {
     auditEvent: await deps.service.recordFix({
@@ -1053,6 +1169,79 @@ async function recordFix(
       knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
     }),
   };
+}
+
+async function closeTicket(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const body = WorkflowActionBodySchema.parse(await readJsonBody(request));
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+    deps.recommendations.list(),
+  ]);
+  if (ticket.status === "resolved") {
+    throw invalidRequest("Ticket is already closed.");
+  }
+
+  const summary = summarizeRecommendationsForTicket(
+    ticket,
+    recommendations,
+    audits,
+  );
+  const latest = summary.latest;
+  if (latest?.supportState !== "ready-for-close") {
+    throw invalidRequest(
+      "Ticket must have a ready-to-close recommendation before it can be closed.",
+    );
+  }
+  const sentAt = latestSentAtForRecommendation(audits, latest.id);
+  if (sentAt === undefined) {
+    throw invalidRequest(
+      "The ready-to-close response must be marked done before the ticket can be closed.",
+    );
+  }
+
+  const closedAt = deps.now().toISOString();
+  const { ticket: updated, result: auditEvent } =
+    await deps.tickets.updateWithCommit(
+      ticketId,
+      ticket.revision,
+      (current) => ({
+        ...current,
+        status: "resolved",
+        updatedAt: closedAt,
+      }),
+      async (updatedTicket, previousTicket) => {
+        const event = AuditEventSchema.parse({
+          id: randomUUID(),
+          timestamp: closedAt,
+          actor: body.actor,
+          action: "ticket-updated",
+          ticketId,
+          recommendationId: latest.id,
+          before: {
+            status: previousTicket.status,
+            revision: previousTicket.revision,
+          },
+          after: {
+            status: updatedTicket.status,
+            revision: updatedTicket.revision,
+            closedAt,
+          },
+          rationale:
+            "Ticket closed after the customer confirmed resolution and the closing response was sent.",
+          knowledgeArticleIds: latest.knowledgeArticleIds,
+          result: "success",
+        });
+        await deps.audits.append(event);
+        return event;
+      },
+    );
+
+  return { ticket: updated, auditEvent };
 }
 
 async function getRecommendation(
@@ -1140,21 +1329,21 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
   auditsBeforeSent: readonly AuditEvent[];
   sentAt: string;
 }): Promise<AuditEvent | undefined> {
-  const fixEvent = input.auditsBeforeSent
-    .filter((event) => event.action === "fix-available")
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
-  if (fixEvent === undefined || input.recommendation.createdAt < fixEvent.timestamp) {
-    return undefined;
-  }
-  const latestReplyAt = latestAuditTimestamp(
-    input.auditsBeforeSent,
+  const latestReplyAfterRecommendation = latestAuditTimestamp(
+    input.auditsBeforeSent.filter(
+      (event) => event.timestamp > input.recommendation.createdAt,
+    ),
     "customer-reply-received",
   );
-  if (latestReplyAt !== undefined && latestReplyAt > fixEvent.timestamp) {
+  if (latestReplyAfterRecommendation !== undefined) {
     return undefined;
   }
   const ticket = await input.deps.tickets.get(input.ticketId);
-  const body = automaticReplyForTicket(ticket);
+  const body = automaticReplyForTicket({
+    ticket,
+    recommendation: input.recommendation,
+    auditsBeforeSent: input.auditsBeforeSent,
+  });
   if (body === undefined) {
     return undefined;
   }
@@ -1165,13 +1354,6 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
     receivedAt: plusMilliseconds(input.sentAt, 1),
     source: "demo-auto-reply",
   });
-}
-
-function automaticReplyForTicket(ticket: Ticket): string | undefined {
-  if (ticket.id === "TKT-1010") {
-    return "It works now. The campaign editor loads normally again. Thanks for the help!";
-  }
-  return "It works now. Thanks for the help!";
 }
 
 function plusMilliseconds(timestamp: string, milliseconds: number): string {

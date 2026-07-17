@@ -79,6 +79,59 @@ describe("classifyTicket", () => {
     );
   });
 
+  it("does not let metadata text trigger generic performance routing in conversation classification", () => {
+    const ticket = makeTicket({
+      subject: "Deliverability dropped after domain change",
+      description:
+        "Open rate dropped sharply and bounce events increased after moving campaign sends to a new branded sending domain.",
+      category: "performance",
+      team: "product",
+      tags: ["deliverability", "bounce", "performance"],
+    });
+    const context = buildConversationContextForTicket({ ticket });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.team).toBe("product");
+    expect(classification.knowledgeArticleIds).toEqual([
+      "email-deliverability",
+    ]);
+    expect(classification.signals).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "product-performance-performance-troubleshooting-team",
+        }),
+      ]),
+    );
+  });
+
+  it("does not let metadata text trigger generic performance routing for catalog delays", () => {
+    const ticket = makeTicket({
+      subject: "Product catalog sync is delayed",
+      description:
+        "New products from Shopify are not available in the campaign product block after six hours.",
+      category: "performance",
+      team: "product",
+      tags: ["shopify", "catalog", "sync", "performance"],
+    });
+    const context = buildConversationContextForTicket({ ticket });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.team).toBe("product");
+    expect(classification.knowledgeArticleIds).toEqual([
+      "shopify-integration-sync",
+      "coupon-catalog-sync",
+    ]);
+    expect(classification.signals).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "product-performance-performance-troubleshooting-team",
+        }),
+      ]),
+    );
+  });
+
   it("reclassifies a vague ticket as API after Track API timestamp reply", () => {
     const ticket = makeTicket({
       subject: "Problem",
@@ -491,6 +544,51 @@ describe("classifyTicket", () => {
     expect(result.team).toBe("billing");
     expect(result.knowledgeArticleIds).toContain("billing-and-invoices");
     expect(result.knowledgeArticleIds).not.toContain("campaign-send-failures");
+  });
+
+  it.each([
+    {
+      name: "API endpoint issues",
+      subject: "API endpoint returns unexpected response",
+      description:
+        "The endpoint response does not match the order request we sent.",
+      category: "api",
+      team: "api-platform",
+      articles: ["api-reference"],
+    },
+    {
+      name: "account access issues",
+      subject: "Cannot access campaign reports",
+      description:
+        "The user cannot access campaign reports even though their role should allow it.",
+      category: "account-access",
+      team: "identity",
+      articles: ["account-access"],
+    },
+    {
+      name: "authentication issues",
+      subject: "Two-factor authentication blocks sign in",
+      description:
+        "The user cannot sign in after the two-factor authentication prompt.",
+      category: "authentication",
+      team: "identity",
+      articles: ["authentication"],
+    },
+    {
+      name: "product feedback",
+      subject: "Feature request for reusable approval workflows",
+      description:
+        "We would like reusable approval workflows for campaign launches.",
+      category: "feature-request",
+      team: "product",
+      articles: ["product-feedback"],
+    },
+  ])("routes generic $name to the matching knowledge article", ({ subject, description, category, team, articles }) => {
+    const result = classifyTicket(makeTicket({ subject, description }));
+
+    expect(result.category).toBe(category);
+    expect(result.team).toBe(team);
+    expect(result.knowledgeArticleIds).toEqual(articles);
   });
 
   it.each([

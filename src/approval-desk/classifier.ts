@@ -381,7 +381,12 @@ const RULES: readonly Rule[] = [
   productRule("integration", /\b(?:shopify|catalog|connector|integration|sync)\b/, "integrations", "shopify-integration-sync"),
   productRule("integration", /\b(?:webhook|signature|delivery)\b/, "integrations", "webhook-signature-validation"),
   productRule("api", /\b(?:sms|text message|quiet-hours?)\b/, "api-platform", "sms-compliance"),
-  productRule("api", /\b(?:campaign|audience snapshot)\b/, "api-platform", "campaign-send-failures"),
+  productRule(
+    "api",
+    /\b(?:campaign (?:send|sending|delivery|status)|scheduled campaign|send status|audience snapshot)\b/,
+    "api-platform",
+    "campaign-send-failures",
+  ),
   productRule("integration", /\b(?:flow|automation trigger)\b/, "integrations", "flow-trigger-troubleshooting"),
   productRule("billing", /\b(?:billing|invoice|charge|payment|subscription)\b/, "billing", "billing-and-invoices"),
   productRule("account-access", /\b(?:cannot access|access denied|role access)\b/, "identity", "account-access"),

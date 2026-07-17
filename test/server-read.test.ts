@@ -274,7 +274,7 @@ afterEach(async () => {
 });
 
 describe("createTriageServer read protocol", () => {
-  it("discovers exactly six bounded read-only tools and safety instructions", async () => {
+  it("discovers bounded read-only tools and safety instructions", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
 
@@ -287,6 +287,7 @@ describe("createTriageServer read protocol", () => {
       "get_audit_events",
       "get_queue_metrics",
       "get_ticket",
+      "get_ticket_workflow",
       "list_tickets",
       "search_knowledge",
     ]);
@@ -427,7 +428,39 @@ describe("createTriageServer read protocol", () => {
       limit: 10,
     });
 
-    for (const result of [listed, ticket, knowledge, similar, metrics, audits]) {
+    const workflow = await callTool(client, {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expectStableJson(textOf(workflow));
+    expect(workflow.structuredContent).toMatchObject({
+      ticket: expect.objectContaining({ id: "TKT-1001" }),
+      recommendationSummary: {
+        latestRecommendationId: "d61bba15-41f4-495b-a794-93696343cc9d",
+        latestResolution: "approved",
+        workflowState: "draft-ready",
+        hasSentResponse: false,
+        hasCustomerReply: false,
+      },
+      latestRecommendation: expect.objectContaining({
+        id: "d61bba15-41f4-495b-a794-93696343cc9d",
+        ticketId: "TKT-1001",
+      }),
+      recommendationHistory: [
+        expect.objectContaining({
+          id: "d61bba15-41f4-495b-a794-93696343cc9d",
+        }),
+      ],
+      conversationTimeline: [
+        expect.objectContaining({ kind: "original-ticket" }),
+        expect.objectContaining({
+          kind: "recommendation-event",
+          recommendationId: "d61bba15-41f4-495b-a794-93696343cc9d",
+        }),
+      ],
+    });
+
+    for (const result of [listed, ticket, knowledge, similar, metrics, audits, workflow]) {
       expect(JSON.stringify(result)).not.toContain(fixture.root);
     }
   });

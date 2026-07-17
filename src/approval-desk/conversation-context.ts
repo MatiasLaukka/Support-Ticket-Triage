@@ -43,10 +43,6 @@ export function buildConversationContextForTicket(
   const originalText = [
     input.ticket.subject,
     input.ticket.description,
-    input.ticket.category,
-    input.ticket.priority,
-    input.ticket.team,
-    ...input.ticket.tags,
   ]
     .filter(Boolean)
     .join("\n");

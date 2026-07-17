@@ -244,18 +244,23 @@ export const approvalDeskHtml = `<!doctype html>
         margin-top: 0.65rem;
       }
 
+      .workflow-action-stack {
+        bottom: 1rem;
+        display: grid;
+        gap: 0.5rem;
+        max-width: calc(100vw - 2rem);
+        position: fixed;
+        right: 1rem;
+        width: min(520px, calc(100vw - 2rem));
+        z-index: 20;
+      }
+
       .recommendation-setup-bar {
         background: rgba(255, 255, 255, 0.96);
         border: 1px solid var(--line);
         border-radius: 18px;
-        bottom: 1rem;
         box-shadow: 0 18px 44px rgba(23, 32, 51, 0.18);
-        right: 1rem;
-        max-width: calc(100vw - 2rem);
         padding: 0.7rem;
-        position: fixed;
-        width: min(520px, calc(100vw - 2rem));
-        z-index: 20;
       }
 
       .recommendation-setup-bar h3 {
@@ -378,6 +383,30 @@ export const approvalDeskHtml = `<!doctype html>
 
       .reply-mode {
         margin-top: 0.55rem;
+      }
+
+      .customer-reply-focus {
+        background: #f0f6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 14px;
+        box-shadow: 0 12px 34px rgba(23, 32, 51, 0.14);
+        color: var(--ink);
+        font-size: 0.9rem;
+        line-height: 1.45;
+        max-height: min(42vh, 360px);
+        overflow: auto;
+        padding: 0.65rem 0.75rem;
+      }
+
+      .customer-reply-focus strong {
+        color: var(--accent-dark);
+        display: block;
+        margin-bottom: 0.25rem;
+      }
+
+      .customer-reply-focus span {
+        display: block;
+        white-space: pre-wrap;
       }
 
       .reply-composer {
@@ -913,7 +942,7 @@ export const approvalDeskHtml = `<!doctype html>
             <button type="button" class="chip queue-filter" value="draft-ready">Draft ready</button>
             <button type="button" class="chip queue-filter" value="waiting">Waiting</button>
             <button type="button" class="chip queue-filter" value="customer-replied">Customer replied</button>
-            <button type="button" class="chip queue-filter" value="resolved">Resolved</button>
+            <button type="button" class="chip queue-filter" value="resolved">Closed</button>
             <button type="button" class="chip queue-filter" value="all">All</button>
           </div>
           <div id="ticketList" class="queue-list"></div>
@@ -947,114 +976,122 @@ export const approvalDeskHtml = `<!doctype html>
               <pre id="resultPanel" class="result">{}</pre>
             </section>
           </details>
-          <section class="recommendation-setup-bar" aria-label="Workflow actions">
-            <input id="confirmApproval" type="checkbox" hidden checked>
-            <div class="bar-topline">
-              <h3 id="actionBarTitle">Evaluate ticket</h3>
-              <span id="actionBarHint" class="meta">Uses the full conversation timeline.</span>
-            </div>
-            <div id="setupControls" class="bar-mode">
-              <div class="setup-grid">
+          <div class="workflow-action-stack">
+            <section id="customerReplyFocus" class="customer-reply-focus" aria-label="Latest customer reply" hidden></section>
+            <section class="recommendation-setup-bar" aria-label="Workflow actions">
+              <input id="confirmApproval" type="checkbox" hidden checked>
+              <div class="bar-topline">
+                <h3 id="actionBarTitle">Evaluate ticket</h3>
+                <span id="actionBarHint" class="meta">Uses the full conversation timeline.</span>
+              </div>
+              <div id="setupControls" class="bar-mode">
+                <div class="setup-grid">
+                  <label>
+                    Actor
+                    <input id="actor" value="approval-desk" autocomplete="off">
+                  </label>
+                  <label>
+                    Draft style
+                    <select id="draftStyle">
+                      <option value="auto" selected>Auto (Recommended)</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="concise">Concise</option>
+                      <option value="empathetic">Empathetic</option>
+                      <option value="technical">Technical</option>
+                      <option value="executive-update">Executive update</option>
+                    </select>
+                  </label>
+                  <button id="createRecommendation" type="button" title="Evaluate ticket and draft response">Evaluate</button>
+                </div>
+              </div>
+              <div id="decisionControls" class="bar-mode" hidden>
+                <div id="decisionChips" class="chips bar-chip-summary"></div>
+                <p id="decisionSummary" class="meta decision-summary">Review the response, then mark the task done.</p>
+                <div class="bar-actions">
+                  <button id="reviewDraftButton" type="button" class="secondary" title="Review response">Response</button>
+                  <button id="markSentButton" type="button" title="Mark response as sent" hidden>Done</button>
+                  <button id="createUpdatedRecommendation" type="button" title="Evaluate ticket again" hidden>Evaluate</button>
+                  <button id="diagnoseButton" type="button" class="secondary" title="Record diagnosis" hidden>Diagnose</button>
+                  <button id="fixButton" type="button" class="secondary accent-action" title="Record fix available" hidden>Fix</button>
+                  <button id="closeTicketButton" type="button" class="secondary accent-action" title="Close ticket" hidden>Close</button>
+                  <button id="continueApproval" type="button" class="secondary" title="Edit fields" hidden>Edit</button>
+                  <button id="startRejectButton" type="button" class="secondary">Reject</button>
+                  <button id="approveButton" type="button" title="Mark task done" disabled>Done</button>
+                </div>
+              </div>
+              <div id="editApprovalControls" class="bar-mode" hidden>
+                <div id="fieldChoices" hidden>
+                  <button class="field-approve-button" type="button" value="category">Approve</button>
+                  <button class="field-approve-button" type="button" value="priority">Approve</button>
+                  <button class="field-approve-button" type="button" value="team">Approve</button>
+                  <button class="field-approve-button" type="button" value="assignee">Approve</button>
+                  <button class="field-approve-button" type="button" value="status">Approve</button>
+                  <button class="field-approve-button" type="button" value="tags">Approve</button>
+                  <button class="field-approve-button" type="button" value="customerResponse">Approve</button>
+                </div>
+                <div class="compact-edit-grid">
+                  <label>Category<input id="categoryOverride" autocomplete="off"></label>
+                  <label>Priority<input id="priorityOverride" autocomplete="off"></label>
+                  <label>Team<input id="teamOverride" autocomplete="off"></label>
+                  <label>Assignee<input id="assigneeOverride" autocomplete="off"></label>
+                  <label>Status<input id="statusOverride" autocomplete="off"></label>
+                  <label>Tags<input id="tagsOverride" autocomplete="off"></label>
+                  <details>
+                    <summary>Edit customer response</summary>
+                    <textarea id="editedCustomerResponse" placeholder="Optional: edit the customer-facing draft before approval."></textarea>
+                  </details>
+                </div>
+                <div class="bar-actions">
+                  <button id="backToRecommendation" type="button" class="secondary" hidden>Cancel</button>
+                  <button id="approveEditedButton" type="button" title="Mark edited task done">Done</button>
+                </div>
+              </div>
+              <div id="rejectControls" class="bar-mode" hidden>
                 <label>
-                  Actor
-                  <input id="actor" value="approval-desk" autocomplete="off">
+                  Rejection feedback
+                  <textarea id="feedback" placeholder="Explain what must change before this recommendation can be approved."></textarea>
                 </label>
-                <label>
-                  Draft style
-                  <select id="draftStyle">
-                    <option value="auto" selected>Auto (Recommended)</option>
-                    <option value="balanced">Balanced</option>
-                    <option value="concise">Concise</option>
-                    <option value="empathetic">Empathetic</option>
-                    <option value="technical">Technical</option>
-                    <option value="executive-update">Executive update</option>
-                  </select>
-                </label>
-                <button id="createRecommendation" type="button" title="Evaluate ticket and draft response">Evaluate</button>
+                <div class="quick-reasons">
+                  <button class="quick-reason secondary" type="button" value="Wrong classification.">Wrong</button>
+                  <button class="quick-reason secondary" type="button" value="Needs better evidence.">Evidence</button>
+                  <button class="quick-reason secondary" type="button" value="Rewrite the customer response.">Rewrite</button>
+                </div>
+                <div class="bar-actions">
+                  <button id="cancelRejectButton" type="button" class="secondary">Cancel</button>
+                  <button id="rejectButton" type="button" class="danger" title="Reject and log feedback" disabled>Reject</button>
+                </div>
               </div>
-            </div>
-            <div id="decisionControls" class="bar-mode" hidden>
-              <div id="decisionChips" class="chips bar-chip-summary"></div>
-              <p id="decisionSummary" class="meta decision-summary">Review the response, then mark the task done.</p>
-              <div class="bar-actions">
-                <button id="reviewDraftButton" type="button" class="secondary" title="Review response">Response</button>
-                <button id="markSentButton" type="button" title="Mark response as sent" hidden>Done</button>
-                <button id="createUpdatedRecommendation" type="button" title="Evaluate ticket again" hidden>Evaluate</button>
-                <button id="diagnoseButton" type="button" class="secondary" title="Record diagnosis" hidden>Diagnose</button>
-                <button id="fixButton" type="button" class="secondary accent-action" title="Record fix available" hidden>Fix</button>
-                <button id="continueApproval" type="button" class="secondary" title="Edit fields" hidden>Edit</button>
-                <button id="startRejectButton" type="button" class="secondary">Reject</button>
-                <button id="approveButton" type="button" title="Mark task done" disabled>Done</button>
-              </div>
-            </div>
-            <div id="editApprovalControls" class="bar-mode" hidden>
-              <div id="fieldChoices" hidden>
-                <button class="field-approve-button" type="button" value="category">Approve</button>
-                <button class="field-approve-button" type="button" value="priority">Approve</button>
-                <button class="field-approve-button" type="button" value="team">Approve</button>
-                <button class="field-approve-button" type="button" value="assignee">Approve</button>
-                <button class="field-approve-button" type="button" value="status">Approve</button>
-                <button class="field-approve-button" type="button" value="tags">Approve</button>
-                <button class="field-approve-button" type="button" value="customerResponse">Approve</button>
-              </div>
-              <div class="compact-edit-grid">
-                <label>Category<input id="categoryOverride" autocomplete="off"></label>
-                <label>Priority<input id="priorityOverride" autocomplete="off"></label>
-                <label>Team<input id="teamOverride" autocomplete="off"></label>
-                <label>Assignee<input id="assigneeOverride" autocomplete="off"></label>
-                <label>Status<input id="statusOverride" autocomplete="off"></label>
-                <label>Tags<input id="tagsOverride" autocomplete="off"></label>
-                <details>
-                  <summary>Edit customer response</summary>
-                  <textarea id="editedCustomerResponse" placeholder="Optional: edit the customer-facing draft before approval."></textarea>
+              <div id="replyControls" class="bar-mode reply-mode" hidden>
+                <div id="pendingReplyPreview" class="bar-reply-preview"></div>
+                <details id="replyTestingMode" class="reply-composer">
+                  <summary>Testing mode</summary>
+                  <p class="meta">Use this only to manually inject a customer reply while testing edge cases. The normal showcase flow uses automatic replies.</p>
+                  <details id="replyComposer">
+                    <summary>Manual customer reply</summary>
+                    <label>
+                      Predicted reply text
+                      <select id="predictedReply">
+                        <option value="">Choose a predicted reply...</option>
+                        <option value="vague-reply">Vague follow-up</option>
+                        <option value="partial-evidence">Partial evidence</option>
+                        <option value="complete-evidence">All requested evidence</option>
+                        <option value="known-cause-evidence">Known-cause confirmation</option>
+                        <option value="platform-fix-context">Fix verification details</option>
+                        <option value="resolved-confirmation">Customer says it works</option>
+                      </select>
+                    </label>
+                    <label>
+                      Customer reply
+                      <textarea id="customerReplyBody" rows="3" placeholder="Paste the customer's latest reply here, or choose predicted reply text above."></textarea>
+                    </label>
+                    <div class="bar-actions">
+                      <button id="addCustomerReply" type="button" class="secondary">Add reply</button>
+                    </div>
+                  </details>
                 </details>
               </div>
-              <div class="bar-actions">
-                <button id="backToRecommendation" type="button" class="secondary" hidden>Cancel</button>
-                <button id="approveEditedButton" type="button" title="Mark edited task done">Done</button>
-              </div>
-            </div>
-            <div id="rejectControls" class="bar-mode" hidden>
-              <label>
-                Rejection feedback
-                <textarea id="feedback" placeholder="Explain what must change before this recommendation can be approved."></textarea>
-              </label>
-              <div class="quick-reasons">
-                <button class="quick-reason secondary" type="button" value="Wrong classification.">Wrong</button>
-                <button class="quick-reason secondary" type="button" value="Needs better evidence.">Evidence</button>
-                <button class="quick-reason secondary" type="button" value="Rewrite the customer response.">Rewrite</button>
-              </div>
-              <div class="bar-actions">
-                <button id="cancelRejectButton" type="button" class="secondary">Cancel</button>
-                <button id="rejectButton" type="button" class="danger" title="Reject and log feedback" disabled>Reject</button>
-              </div>
-            </div>
-            <div id="replyControls" class="bar-mode reply-mode" hidden>
-              <div id="pendingReplyPreview" class="bar-reply-preview"></div>
-              <details id="replyComposer" class="reply-composer">
-                <summary>Add customer reply</summary>
-                <label>
-                  Predicted reply text
-                  <select id="predictedReply">
-                    <option value="">Choose a predicted reply...</option>
-                    <option value="vague-reply">Vague follow-up</option>
-                    <option value="partial-evidence">Partial evidence</option>
-                    <option value="complete-evidence">Complete evidence</option>
-                    <option value="known-cause-evidence">Known-cause evidence</option>
-                    <option value="platform-fix-context">Platform-fix context</option>
-                    <option value="resolved-confirmation">Resolved confirmation</option>
-                  </select>
-                </label>
-                <label>
-                  Customer reply
-                  <textarea id="customerReplyBody" rows="3" placeholder="Paste the customer's latest reply here, or choose predicted reply text above."></textarea>
-                </label>
-                <div class="bar-actions">
-                  <button id="addCustomerReply" type="button" class="secondary">Add reply</button>
-                </div>
-              </details>
-            </div>
-          </section>
+            </section>
+          </div>
         </section>
 
         <section class="panel" aria-label="Ticket workflow">
@@ -1096,12 +1133,14 @@ export const approvalDeskHtml = `<!doctype html>
         backToRecommendation: document.getElementById('backToRecommendation'),
         cancelRejectButton: document.getElementById('cancelRejectButton'),
         categoryOverride: document.getElementById('categoryOverride'),
+        closeTicketButton: document.getElementById('closeTicketButton'),
         confirmApproval: document.getElementById('confirmApproval'),
         conversationContextPanel: document.getElementById('conversationContextPanel'),
         continueApproval: document.getElementById('continueApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
         createUpdatedRecommendation: document.getElementById('createUpdatedRecommendation'),
         customerReplyBody: document.getElementById('customerReplyBody'),
+        customerReplyFocus: document.getElementById('customerReplyFocus'),
         decisionChips: document.getElementById('decisionChips'),
         decisionControls: document.getElementById('decisionControls'),
         decisionSummary: document.getElementById('decisionSummary'),
@@ -1128,6 +1167,7 @@ export const approvalDeskHtml = `<!doctype html>
         rejectControls: document.getElementById('rejectControls'),
         replyComposer: document.getElementById('replyComposer'),
         replyControls: document.getElementById('replyControls'),
+        replyTestingMode: document.getElementById('replyTestingMode'),
         resultPanel: document.getElementById('resultPanel'),
         reviewDraftButton: document.getElementById('reviewDraftButton'),
         setupControls: document.getElementById('setupControls'),
@@ -1216,6 +1256,9 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (value === 'customer-replied') {
           return 'Customer replied';
+        }
+        if (value === 'resolved') {
+          return 'Closed';
         }
         return String(value ?? 'active').replace(/^./, function (letter) { return letter.toUpperCase(); });
       }
@@ -1476,10 +1519,13 @@ export const approvalDeskHtml = `<!doctype html>
           : isApprovedWorkflow()
             ? 'Ready to mark done from the action bar.'
             : 'Ready for human review from the action bar.';
-        return '<section class="hero-card description"><strong>Workflow steps</strong>' +
-          '<p><strong>Step 1: Ticket evaluated</strong> ' + escapeHtml(recommendation.category + ' · ' + recommendation.priority + ' · ' + (recommendation.supportState ?? 'not assessed')) + '</p>' +
-          '<p><strong>Step 2: GPT-assisted response</strong> ' + escapeHtml(recommendation.draftCustomerResponseSource ?? 'drafted') + ' response ready.</p>' +
-          '<p><strong>Step 3: Task status</strong> ' + escapeHtml(responseState) + '</p>' +
+        return '<section class="hero-card description"><strong>Next Step</strong>' +
+          '<p>' + escapeHtml(responseState) + '</p>' +
+          '<details><summary>Full workflow guide</summary>' +
+            '<p><strong>1. Evaluate</strong> Classify the ticket, check evidence, and draft a response from the full conversation.</p>' +
+            '<p><strong>2. Review</strong> Inspect the customer response, recommendation summary, and evidence before marking the task done.</p>' +
+            '<p><strong>3. Continue</strong> Automatic customer replies, diagnosis updates, fixes, and closing actions appear in the action bar as the ticket evolves.</p>' +
+          '</details>' +
         '</section>';
       }
 
@@ -1494,7 +1540,6 @@ export const approvalDeskHtml = `<!doctype html>
             chip('Lifecycle: ' + (recommendation.supportState ?? 'not assessed')) +
             chip('Evidence: ' + evidenceState) +
           '</div>' +
-          '<p class="hint">The action bar controls evaluation, response review, done status, and customer replies.</p>' +
         '</section>';
       }
 
@@ -1544,7 +1589,8 @@ export const approvalDeskHtml = `<!doctype html>
         const approvedWorkflow = isApprovedWorkflow();
         const waitingForReply = isTaskDoneWaitingForReply();
         const customerReplyReady = latestUnconsumedCustomerReply() !== null;
-        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || shouldShowDiagnoseAction() || shouldShowFixAction();
+        const closeReady = shouldShowCloseTicketAction();
+        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || shouldShowDiagnoseAction() || shouldShowFixAction() || closeReady;
         els.setupControls.hidden = hasRecommendation;
         els.decisionControls.hidden = !hasRecommendation || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
         els.editApprovalControls.hidden = !(hasRecommendation && state.stage === 'approval');
@@ -1553,6 +1599,8 @@ export const approvalDeskHtml = `<!doctype html>
         els.approvalStage.hidden = true;
         els.actionBarTitle.textContent = actionBarTitle();
         els.actionBarHint.textContent = actionBarHint();
+        els.customerReplyFocus.innerHTML = renderCustomerReplyFocus();
+        els.customerReplyFocus.hidden = els.customerReplyFocus.innerHTML === '';
         els.continueApproval.textContent = 'Edit';
         els.reviewDraftButton.textContent = 'Response';
         els.approveButton.textContent = 'Done';
@@ -1562,8 +1610,9 @@ export const approvalDeskHtml = `<!doctype html>
         els.createUpdatedRecommendation.hidden = !shouldShowCreateUpdatedRecommendation();
         els.diagnoseButton.hidden = !shouldShowDiagnoseAction();
         els.fixButton.hidden = !shouldShowFixAction();
-        els.approveButton.hidden = shouldShowCreateUpdatedRecommendation();
-        els.startRejectButton.hidden = approvedWorkflow;
+        els.closeTicketButton.hidden = !closeReady;
+        els.approveButton.hidden = shouldShowCreateUpdatedRecommendation() || closeReady;
+        els.startRejectButton.hidden = approvedWorkflow || closeReady;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
@@ -1576,6 +1625,9 @@ export const approvalDeskHtml = `<!doctype html>
       function actionBarTitle() {
         if (state.recommendation === null) {
           return 'Evaluate ticket';
+        }
+        if (shouldShowCloseTicketAction()) {
+          return 'Ready to close';
         }
         if (latestUnevaluatedWorkflowEvent() !== null && shouldShowCreateUpdatedRecommendation()) {
           return 'Diagnosis update';
@@ -1601,6 +1653,9 @@ export const approvalDeskHtml = `<!doctype html>
       function actionBarHint() {
         if (state.recommendation === null) {
           return 'Classify the ticket and draft a response.';
+        }
+        if (shouldShowCloseTicketAction()) {
+          return 'Customer confirmed the solution. Close preserves the audit trail.';
         }
         if (latestUnevaluatedWorkflowEvent() !== null && shouldShowCreateUpdatedRecommendation()) {
           return 'Draft the customer update from the latest diagnosis or fix.';
@@ -1641,6 +1696,9 @@ export const approvalDeskHtml = `<!doctype html>
         if (shouldShowCreateUpdatedRecommendation()) {
           return 'A customer reply is waiting. Evaluate again to refresh classification, evidence, and response text.';
         }
+        if (shouldShowCloseTicketAction()) {
+          return 'The closing response has been sent. Close moves the ticket to Closed while keeping all logs.';
+        }
         if (isApprovedWorkflow()) {
           return 'The response is ready. Done applies the proposed values and logs the response as sent.';
         }
@@ -1677,7 +1735,17 @@ export const approvalDeskHtml = `<!doctype html>
           latestUnconsumedCustomerReply() === null &&
           missing.length === 0 &&
           (supportState === 'diagnosing' || supportState === 'waiting-on-platform-fix') &&
-          latestTimelineItem('diagnosis') === null;
+          !hasDiagnosisForCurrentContext();
+      }
+
+      function hasDiagnosisForCurrentContext() {
+        const diagnosis = latestTimelineItem('diagnosis');
+        if (diagnosis === null) {
+          return false;
+        }
+        const latestReply = latestCustomerReply();
+        return latestReply === null ||
+          String(diagnosis.timestamp ?? '') >= String(latestReply.timestamp ?? '');
       }
 
       function shouldShowFixAction() {
@@ -1688,6 +1756,9 @@ export const approvalDeskHtml = `<!doctype html>
         if (diagnosis === null || latestTimelineItem('fix') !== null) {
           return false;
         }
+        if (!diagnosisAllowsPlatformFix(diagnosis)) {
+          return false;
+        }
         const supportAfterDiagnosis = latestTimelineItem('support-response-sent');
         return isTaskDoneWaitingForReply() &&
           latestUnconsumedCustomerReply() === null &&
@@ -1695,11 +1766,23 @@ export const approvalDeskHtml = `<!doctype html>
           String(supportAfterDiagnosis.timestamp ?? '') >= String(diagnosis.timestamp ?? '');
       }
 
+      function shouldShowCloseTicketAction() {
+        return state.selectedTicket !== null &&
+          state.recommendation !== null &&
+          ticketWorkflowState(state.selectedTicket) !== 'resolved' &&
+          state.recommendation.supportState === 'ready-for-close' &&
+          isTaskDoneWaitingForReply();
+      }
+
+      function diagnosisAllowsPlatformFix(diagnosis) {
+        return diagnosis.confidence === 'confirmed' &&
+          (diagnosis.owner === 'engineering' || diagnosis.owner === 'integration-partner');
+      }
+
       function renderPendingReplyPreview() {
         const latestReply = latestUnconsumedCustomerReply();
         if (latestReply !== null) {
-          return '<strong>New customer reply waiting for evaluation</strong>' +
-            '<span>' + escapeHtml(previewRecommendationDraft(latestReply.body ?? latestReply.summary ?? '')) + '</span>';
+          return '';
         }
         const workflowEvent = latestUnevaluatedWorkflowEvent();
         if (workflowEvent !== null) {
@@ -1707,13 +1790,25 @@ export const approvalDeskHtml = `<!doctype html>
             '<span>' + escapeHtml(previewRecommendationDraft(workflowEvent.summary ?? workflowEvent.kind ?? '')) + '</span>';
         }
         if (isTaskDoneWaitingForReply()) {
-          return '<strong>Waiting for customer reply</strong><span>Add the next customer message here when it arrives.</span>';
+          return '<strong>No automatic customer reply was generated</strong><span>The normal demo flow should move to the next workflow action or receive an automatic reply. Use Testing mode only for edge-case checks.</span>';
         }
         return '<strong>Customer reply</strong><span>Add a reply here whenever the customer sends new information.</span>';
       }
 
+      function renderCustomerReplyFocus() {
+        const latestReply = latestUnconsumedCustomerReply();
+        if (latestReply === null) {
+          return '';
+        }
+        return '<strong>Customer reply to evaluate</strong>' +
+          '<span>' + escapeHtml(latestReply.body ?? latestReply.summary ?? '') + '</span>';
+      }
+
       function shouldShowReplyControls() {
         return state.selectedTicket !== null &&
+          !shouldShowCloseTicketAction() &&
+          !shouldShowDiagnoseAction() &&
+          !shouldShowFixAction() &&
           (isTaskDoneWaitingForReply() || latestUnconsumedCustomerReply() !== null);
       }
 
@@ -1871,6 +1966,7 @@ export const approvalDeskHtml = `<!doctype html>
         els.markSentButton.disabled = !(hasRecommendation && approvedWorkflow && actorPresent && shouldShowMarkSentAction());
         els.diagnoseButton.disabled = !(actorPresent && shouldShowDiagnoseAction());
         els.fixButton.disabled = !(actorPresent && shouldShowFixAction());
+        els.closeTicketButton.disabled = !(actorPresent && shouldShowCloseTicketAction());
         els.createRecommendation.disabled = !canCreateRecommendation();
         els.createUpdatedRecommendation.disabled = !shouldShowCreateUpdatedRecommendation();
         els.createRecommendation.textContent = 'Evaluate';
@@ -2161,7 +2257,8 @@ export const approvalDeskHtml = `<!doctype html>
               actor
             })
           });
-          els.replyComposer.open = true;
+          els.replyComposer.open = false;
+          els.replyTestingMode.open = false;
           setResult(sentData);
           await refreshSelectedTicketQueueAndEvidence();
           await loadMetrics(sentData);
@@ -2215,6 +2312,20 @@ export const approvalDeskHtml = `<!doctype html>
         await refreshSelectedTicketQueueAndEvidence();
       }
 
+      async function closeTicket() {
+        if (state.selectedTicket === null) {
+          return;
+        }
+        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
+          method: 'POST',
+          body: JSON.stringify({
+            actor: els.actor.value.trim() || 'approval-desk'
+          })
+        });
+        setResult(data);
+        await refreshSelectedTicketQueueAndEvidence();
+      }
+
       async function persistDemoCustomerReply(value) {
         if (state.selectedTicket === null) {
           return;
@@ -2250,6 +2361,7 @@ export const approvalDeskHtml = `<!doctype html>
         els.customerReplyBody.value = '';
         els.predictedReply.value = '';
         els.replyComposer.open = false;
+        els.replyTestingMode.open = false;
         await refreshSelectedTicketQueueAndEvidence();
       }
 
@@ -2957,6 +3069,7 @@ export const approvalDeskHtml = `<!doctype html>
           'affected-scope': ['affected scope', 'affected profiles', '12 profiles'],
           'api-response-status': ['api response', 'response status', '400 validation'],
           'audit-source': ['audit source', 'source ip', '198.51.100.24'],
+          'billing-account': ['billing account', 'workspace', 'account name'],
           'bounce-samples': ['bounce samples', 'bounce code', '550 5.1.1'],
           'browser-session-details': ['browser', 'session', 'signed out'],
           'campaign-name': ['campaign name', 'summer flash sale'],
@@ -2974,13 +3087,16 @@ export const approvalDeskHtml = `<!doctype html>
           'expected-field': ['expected field', 'custom material field'],
           'exposure-location': ['log bundle', 'shared connector logs'],
           'failure-timestamp': ['failure timestamp', 'failed at'],
+          'feature-description': ['feature request', 'would like', 'approval workflows'],
           'flow-id': ['flow id', 'browse abandonment'],
+          'invoice-number': ['invoice number', 'invoice id', 'inv-2026'],
           'key-identifier': ['key identifier', 'last four'],
           'key-usage-status': ['key usage', 'used after exposure'],
           'masked-recipient': ['masked recipient', '+1 *** *** 0134'],
           'object-id': ['object id', 'sku-7788', 'order number'],
           'opt-out-timestamp': ['stop reply', 'opt-out timestamp'],
           'platform': ['shopify', 'magento', 'woocommerce', 'ecommerce platform'],
+          'plan-or-promotion': ['plan', 'promotion', 'coupon', 'subscription'],
           'problem-summary': ['campaign editor', 'what happened', 'blank page'],
           'product-reference': ['product url', 'product id', 'cart url'],
           'profile-email': ['profile email', 'customer id', 'customer@example.test'],
@@ -3000,7 +3116,8 @@ export const approvalDeskHtml = `<!doctype html>
           'store-url': ['store url', 'store.example.test'],
           'timestamp-tolerance': ['timestamp tolerance', 'five minutes'],
           'timeline-visibility': ['profile timeline', 'activity timeline'],
-          'unused-coupon-status': ['unused coupon', 'codes remain available']
+          'unused-coupon-status': ['unused coupon', 'codes remain available'],
+          'use-case': ['use case', 'workflow', 'campaign launch review']
         };
         return markersById[id] ?? [id.replaceAll('-', ' ')];
       }
@@ -3014,6 +3131,7 @@ export const approvalDeskHtml = `<!doctype html>
           'affected-scope': 'The affected scope appears to be 12 profiles in the latest export.',
           'api-response-status': 'The API response status is 400 validation_error.',
           'audit-source': 'The audit source shown is IP 198.51.100.24.',
+          'billing-account': 'The billing account is Demo Customer - US workspace.',
           'bounce-samples': 'A sample bounce code is 550 5.1.1 user unknown.',
           'browser-session-details': 'I use Chrome, and the page is still blank after signing out and back in.',
           'campaign-name': 'The campaign name is Summer Flash Sale.',
@@ -3031,13 +3149,16 @@ export const approvalDeskHtml = `<!doctype html>
           'expected-field': 'The expected custom field name is material.',
           'exposure-location': 'The key may have been shared in a connector log bundle attached to the ticket.',
           'failure-timestamp': 'The failure timestamp was 2026-06-10 09:15 UTC.',
+          'feature-description': 'We would like reusable approval workflows for campaign launches.',
           'flow-id': 'The flow name is Browse Abandonment, flow ID flow_12345.',
+          'invoice-number': 'The invoice number is INV-2026-1042.',
           'key-identifier': 'The key identifier ends in 4f8a; I am not sending the secret value.',
           'key-usage-status': 'I cannot see any post-exposure key usage in the audit view.',
           'masked-recipient': 'The masked recipient is +1 *** *** 0134.',
           'object-id': 'The affected object ID is sku-7788.',
           'opt-out-timestamp': 'The STOP reply timestamp was 2026-06-10 18:42 UTC.',
           'platform': platformSentence(context),
+          'plan-or-promotion': 'The affected plan or promotion is the Summer Launch coupon campaign.',
           'problem-summary': 'I was trying to open the campaign editor, but the page stayed blank.',
           'product-reference': 'The product URL is https://store.example.test/products/linen-shirt.',
           'profile-email': 'One affected profile email is customer@example.test.',
@@ -3057,7 +3178,8 @@ export const approvalDeskHtml = `<!doctype html>
           'store-url': 'The affected store URL is https://store.example.test.',
           'timestamp-tolerance': 'The timestamp tolerance configured for verification is five minutes.',
           'timeline-visibility': 'The event is still missing from the profile activity timeline.',
-          'unused-coupon-status': 'Unused coupon codes remain available in the pool.'
+          'unused-coupon-status': 'Unused coupon codes remain available in the pool.',
+          'use-case': 'The use case is letting a marketing manager review and approve campaign launch steps before send time.'
         };
         return samples[id] ?? ('For ' + question + ', the value I found is example detail for this ticket.');
       }
@@ -3121,7 +3243,7 @@ export const approvalDeskHtml = `<!doctype html>
         if (context.searchableText.includes('campaign') || context.searchableText.includes('audience')) {
           return 'This is affecting the campaign audience calculation, and the snapshot has been stuck for more than one hour.';
         }
-        return 'This is affecting multiple stores, and recent events are delayed even though the API accepted them.';
+        return 'This is affecting multiple EU stores. The affected store URL is https://eu-a.example.test. One affected customer ID is cus_8821. The event time was 2026-06-10 08:42 UTC. The request ID is req_1001 and the API response was 202 Accepted. The event is still missing from the profile activity timeline.';
       }
 
       els.actor.addEventListener('input', updateControls);
@@ -3216,6 +3338,9 @@ export const approvalDeskHtml = `<!doctype html>
       });
       els.fixButton.addEventListener('click', function () {
         void recordFix().catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.closeTicketButton.addEventListener('click', function () {
+        void closeTicket().catch(function (error) { setResult({ error: error.message }); });
       });
       els.approveButton.addEventListener('click', function () {
         void completeTask().catch(function (error) { setResult({ error: error.message }); });

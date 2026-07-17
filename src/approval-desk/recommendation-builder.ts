@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   CategorySchema,
   type ClassificationSignal,
+  type EvidenceRequirement,
   type KnowledgeArticle,
   type DraftCustomerResponseStyleInput,
   PrioritySchema,
@@ -33,6 +34,7 @@ import {
   type TicketClassification,
 } from "./classifier.js";
 import { buildConversationContextForTicket } from "./conversation-context.js";
+import { isFinalDiagnosisForCustomer } from "./customer-service-drafting-skill.js";
 import { getKnownCause } from "./known-cause-catalog.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -411,12 +413,15 @@ function buildDraftCustomerResponse(input: {
 }): string {
   const { ticket, knowledgeArticleIds, escalationReasons, evidenceReadiness } =
     input;
-  if (input.fixContext !== undefined) {
-    return buildFixAvailableResponse(ticket, input.fixContext);
+  if (
+    input.replyStage === "status-follow-up" &&
+    input.fixContext !== undefined
+  ) {
+    return buildFixStatusFollowUpResponse(ticket, input.fixContext);
   }
 
-  if (input.diagnosisContext !== undefined) {
-    return buildDiagnosisCompletedResponse(ticket, input.diagnosisContext);
+  if (input.fixContext !== undefined) {
+    return buildFixAvailableResponse(ticket, input.fixContext);
   }
 
   if (input.replyStage === "customer-confirmed") {
@@ -424,11 +429,23 @@ function buildDraftCustomerResponse(input: {
   }
 
   if (input.replyStage === "status-follow-up") {
-    return buildStatusFollowUpResponse(ticket, evidenceReadiness);
+    return buildStatusFollowUpResponse(
+      ticket,
+      evidenceReadiness,
+      input.diagnosisContext,
+    );
   }
 
   if (input.replyStage === "explanation-request") {
-    return buildExplanationRequestResponse(ticket, evidenceReadiness);
+    return buildExplanationRequestResponse(
+      ticket,
+      evidenceReadiness,
+      input.diagnosisContext,
+    );
+  }
+
+  if (input.diagnosisContext !== undefined) {
+    return buildDiagnosisCompletedResponse(ticket, input.diagnosisContext);
   }
 
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
@@ -613,7 +630,7 @@ function buildDiagnosisCompletedResponse(
     return buildPerformanceDiagnosisResponse(ticket, diagnosis);
   }
 
-  if (diagnosis.confidence === "confirmed") {
+  if (isFinalDiagnosisForCustomer(diagnosis)) {
     return [
       `Hi ${ticket.customer.name},`,
       "",
@@ -621,7 +638,7 @@ function buildDiagnosisCompletedResponse(
       "",
       `We have completed the review. ${diagnosis.customerSafeSummary}`,
       "",
-      `We based this on: ${formatInlineList(diagnosis.evidenceUsed)}.`,
+      formatCustomerEvidenceSummary(diagnosis),
       "",
       formatDiagnosisCustomerNextStep(diagnosis),
     ].join("\n");
@@ -649,6 +666,35 @@ function buildPerformanceDiagnosisResponse(
   ticket: Ticket,
   diagnosis: DiagnosisContext,
 ): string {
+  if (
+    isFinalDiagnosisForCustomer(diagnosis) &&
+    diagnosis.owner === "customer"
+  ) {
+    return [
+      `Hi ${ticket.customer.name},`,
+      "",
+      "Thanks for trying those checks.",
+      "",
+      "The editor working in a private window or isolated browser session points to local browser session state rather than a platform-side loading issue.",
+      "",
+      "Please clear site data and cache for Northstar Marketing in your regular browser, then sign in again and reopen the campaign editor. You can also continue in the browser session where the editor loads normally.",
+      "",
+      "If the editor becomes blank again after clearing site data, send us the retry time and browser version so we can reopen the investigation.",
+    ].join("\n");
+  }
+
+  if (isFinalDiagnosisForCustomer(diagnosis)) {
+    return [
+      `Hi ${ticket.customer.name},`,
+      "",
+      "Thanks for completing those checks.",
+      "",
+      "The browser-session checks point to a frontend loading issue in the campaign editor for the affected campaign.",
+      "",
+      "Our engineering team is preparing the mitigation. We will follow up when it is ready for you to verify in the campaign editor.",
+    ].join("\n");
+  }
+
   return [
     `Hi ${ticket.customer.name},`,
     "",
@@ -700,14 +746,21 @@ function buildFixAvailableResponse(ticket: Ticket, fix: FixContext): string {
   ].join("\n");
 }
 
-function formatInlineList(values: readonly string[]): string {
-  if (values.length === 0) {
-    return "the evidence available in the ticket";
-  }
-  if (values.length === 1) {
-    return values[0]!;
-  }
-  return `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
+function buildFixStatusFollowUpResponse(
+  ticket: Ticket,
+  fix: FixContext,
+): string {
+  return [
+    `Hi ${ticket.customer.name},`,
+    "",
+    "Thanks for checking in.",
+    "",
+    `Current status: ${fix.customerSafeSummary}`,
+    "",
+    fix.customerAction,
+    "",
+    fix.verificationRequest,
+  ].join("\n");
 }
 
 function classifyCustomerAudience(ticket: Ticket): CustomerAudience {
@@ -867,7 +920,10 @@ function analyzeCustomerReplyLifecycle(input: {
   });
   const latestReply = ticketReplies[ticketReplies.length - 1]?.body ?? "";
 
-  if (isCustomerConfirmation(latestReply)) {
+  if (
+    isCustomerConfirmation(latestReply) &&
+    previousSupportResponseAllowsClose(input.previousSupportResponse)
+  ) {
     return {
       evidenceReadiness: withLifecycleSupportState(
         {
@@ -878,6 +934,26 @@ function analyzeCustomerReplyLifecycle(input: {
       ),
       replyStage: "customer-confirmed",
       recognizedEvidenceProgress: true,
+    };
+  }
+
+  if (isCustomerStatusFollowUp(latestReply)) {
+    const statusEvidenceReadiness =
+      input.previousSupportResponse !== undefined &&
+      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)
+        ? platformFixEvidenceReadiness(evidenceReadiness)
+        : withLifecycleSupportState(
+            evidenceReadiness,
+            requiresMoreCustomerEvidence(evidenceReadiness)
+              ? hasNewRecognizedEvidence(evidenceBeforeReplies, evidenceReadiness)
+                ? "information-received"
+                : "needs-information"
+              : evidenceReadiness.supportState,
+          );
+    return {
+      evidenceReadiness: statusEvidenceReadiness,
+      replyStage: "status-follow-up",
+      recognizedEvidenceProgress: false,
     };
   }
 
@@ -1033,6 +1109,15 @@ function requiresMoreCustomerEvidence(
   return evidenceReadiness.missingEvidence.length > 0;
 }
 
+function previousSupportResponseAllowsClose(
+  response: PreviousSupportResponse | undefined,
+): boolean {
+  if (response === undefined) {
+    return false;
+  }
+  return supportResponseIndicatesCloseableSolution(response.body);
+}
+
 function isCustomerConfirmation(value: string): boolean {
   const normalized = value.toLowerCase();
   const unresolvedOrNegated =
@@ -1078,8 +1163,30 @@ function supportResponseIndicatesPlatformFix(value: string): boolean {
   );
 }
 
+function supportResponseIndicatesCloseableSolution(value: string): boolean {
+  const normalized = value.toLowerCase();
+  const platformFixSent =
+    /\b(?:fix|mitigation|workaround)\b.{0,60}\b(?:applied|available|ready|implemented|released)\b/i.test(
+      value,
+    ) ||
+    /\bplease\b.{0,25}\b(?:retry|check|verify)\b.{0,80}\b(?:affected|same|workflow|timeline|example|again)\b/i.test(
+      value,
+    );
+  const knownCauseActionSent =
+    /\b(?:known cause|documented|matches|expected compliance|quiet-hour|current signing secret|signing secret rotation|reschedule|clear site data|browser session|private or incognito|retry one delivery)\b/i.test(
+      value,
+    ) &&
+    /\b(?:retry|reschedule|clear|verify|confirm|check|try|continue)\b/i.test(
+      value,
+    );
+  return platformFixSent ||
+    knownCauseActionSent ||
+    (normalized.includes("glad to hear") &&
+      normalized.includes("ready to close"));
+}
+
 function isCustomerStatusFollowUp(value: string): boolean {
-  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s the status|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(
+  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s (?:the )?(?:current )?status|current status(?: of (?:the )?ticket)?|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(
     value,
   );
 }
@@ -1093,26 +1200,73 @@ function isCustomerExplanationRequest(value: string): boolean {
 function buildStatusFollowUpResponse(
   ticket: Ticket,
   evidenceReadiness: EvidenceReadiness,
+  diagnosis?: DiagnosisContext,
 ): string {
+  if (diagnosis !== undefined) {
+    const finalDiagnosis = isFinalDiagnosisForCustomer(diagnosis);
+    return [
+      `Hi ${ticket.customer.name},`,
+      "",
+      "Thanks for checking in.",
+      "",
+      finalDiagnosis
+        ? `Current status: we have confirmed the issue we are working from. ${diagnosis.customerSafeSummary}`
+        : `Current status: we are still narrowing this down from the current working diagnosis. ${diagnosis.customerSafeSummary}`,
+      "",
+      diagnosis.owner === "engineering"
+        ? "Engineering is working through the next step now. There is no confirmed ETA yet, and I do not want to give you a time window that may change."
+        : "There is no confirmed ETA yet, so I do not want to give you a time window that may change.",
+      "",
+      finalDiagnosis
+        ? "There is nothing else we need from you right now unless the impact changes or you notice a new error message."
+        : "We will send the next update as soon as we have enough evidence to confirm the safest next action.",
+    ].join("\n");
+  }
+
   return [
     `Hi ${ticket.customer.name},`,
     "",
-    "Thanks for checking in. I understand that waiting for a fix is frustrating.",
+    "Thanks for checking in.",
     "",
-    evidenceReadiness.supportState === "waiting-on-platform-fix"
-      ? "This is still being handled as a possible platform delay affecting event processing."
-      : "We are still reviewing the latest details for this issue.",
+    formatCustomerSafeStatus(evidenceReadiness),
     "",
-    "We do not have a confirmed ETA yet, so I do not want to give you a time window that may change. The team is continuing the investigation and we will send the next update as soon as we have confirmed impact, mitigation, or a safe workaround.",
-    "",
-    "There is nothing else we need from you right now unless the impact changes or you notice a new error message.",
+    formatCustomerSafeStatusNextStep(evidenceReadiness),
   ].join("\n");
 }
 
 function buildExplanationRequestResponse(
   ticket: Ticket,
   evidenceReadiness: EvidenceReadiness,
+  diagnosis?: DiagnosisContext,
 ): string {
+  if (diagnosis !== undefined) {
+    if (diagnosis.causeType === "platform-delay") {
+      return [
+        `Hi ${ticket.customer.name},`,
+        "",
+        "Thanks for checking in. In plain terms, the examples point to a delay after the events were accepted, before they appeared in the customer profile timelines.",
+        "",
+        diagnosis.confidence === "confirmed"
+          ? "That gives us enough confidence to treat this as a platform-side processing delay rather than asking you to resend the same examples."
+          : "That is our working diagnosis, but we are still confirming the exact impact before treating it as final.",
+        "",
+        "Our engineering team is working on the mitigation path. We will update you when the delayed events are ready for you to verify.",
+      ].join("\n");
+    }
+
+    return [
+      `Hi ${ticket.customer.name},`,
+      "",
+      "Thanks for checking in. Here is the plain-language version of where the investigation stands.",
+      "",
+      isFinalDiagnosisForCustomer(diagnosis)
+        ? diagnosis.customerSafeSummary
+        : `We have narrowed it to this working diagnosis: ${diagnosis.customerSafeSummary}`,
+      "",
+      formatDiagnosisCustomerNextStep(diagnosis),
+    ].join("\n");
+  }
+
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
     return [
       `Hi ${ticket.customer.name},`,
@@ -1176,6 +1330,99 @@ function formatKnowledgeTopic(
     return "performance or loading issue";
   }
   return "support issue";
+}
+
+function formatCustomerSafeStatus(
+  evidenceReadiness: EvidenceReadiness,
+): string {
+  if (evidenceReadiness.supportState === "needs-information") {
+    return "Current status: we are waiting on a few details before we can safely narrow this down.";
+  }
+  if (evidenceReadiness.supportState === "information-received") {
+    return "Current status: we have received useful details and are reviewing them against the ticket context.";
+  }
+  if (evidenceReadiness.supportState === "diagnosing") {
+    return "Current status: we have the details needed for review and are working through the likely cause.";
+  }
+  if (evidenceReadiness.supportState === "known-cause") {
+    const knownCause = getKnownCause(evidenceReadiness.knownCause);
+    return knownCause === undefined
+      ? "Current status: the ticket matches a documented support path, and we are preparing the safest next step."
+      : `Current status: the ticket matches a documented support path. ${knownCause.problemSummary}`;
+  }
+  if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+    return "Current status: this is still being handled as a possible platform delay affecting event processing.";
+  }
+  if (evidenceReadiness.supportState === "waiting-on-customer-action") {
+    return "Current status: the next step is on your side before we can confirm the result.";
+  }
+  if (evidenceReadiness.supportState === "ready-for-close") {
+    return "Current status: this looks resolved from our side and is ready to close.";
+  }
+  if (evidenceReadiness.supportState === "ready-for-approval") {
+    return "Current status: we have prepared the next response and are reviewing it before sending.";
+  }
+  return "Current status: we are still reviewing the latest details for this issue.";
+}
+
+function formatCustomerSafeStatusNextStep(
+  evidenceReadiness: EvidenceReadiness,
+): string {
+  if (evidenceReadiness.supportState === "needs-information") {
+    return evidenceReadiness.missingEvidence.length === 0
+      ? "We will continue as soon as we have enough detail to choose the safest next action."
+      : `The remaining details are: ${formatEvidenceLabels(evidenceReadiness.missingEvidence)}.`;
+  }
+  if (evidenceReadiness.supportState === "information-received") {
+    return evidenceReadiness.missingEvidence.length === 0
+      ? "You do not need to send anything else right now. We will share the next update after the review."
+      : `We still need: ${formatEvidenceLabels(evidenceReadiness.missingEvidence)}.`;
+  }
+  if (evidenceReadiness.supportState === "known-cause") {
+    const knownCause = getKnownCause(evidenceReadiness.knownCause);
+    return knownCause?.nextStep ??
+      "We will use the documented path to prepare the safest next action.";
+  }
+  if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+    return "There is no confirmed ETA yet. We will send the next update as soon as we have confirmed impact, mitigation, or a safe workaround.";
+  }
+  if (evidenceReadiness.supportState === "ready-for-close") {
+    return "Thank you for confirming. No further action is needed from you unless the issue returns.";
+  }
+  return "We will send the next update as soon as there is a clear next action to share.";
+}
+
+function formatEvidenceLabels(
+  evidence: readonly EvidenceRequirement[],
+): string {
+  return evidence
+    .map((requirement) => lowercaseFirst(requirement.label))
+    .join(", ");
+}
+
+function lowercaseFirst(value: string): string {
+  return value.length === 0
+    ? value
+    : `${value[0]!.toLowerCase()}${value.slice(1)}`;
+}
+
+function formatCustomerEvidenceSummary(diagnosis: DiagnosisContext): string {
+  if (diagnosis.causeType === "configuration") {
+    return "The ticket details already show the configuration condition that explains this behavior.";
+  }
+  if (diagnosis.causeType === "integration") {
+    return "The endpoint, delivery, and signing-secret details match this diagnosis.";
+  }
+  if (diagnosis.causeType === "platform-delay") {
+    return "The examples show accepted events that were delayed before appearing in profile timelines.";
+  }
+  if (diagnosis.causeType === "security") {
+    return "The security indicators in the ticket are enough to keep this on the safer review path.";
+  }
+  if (diagnosis.causeType === "customer-data") {
+    return "The account examples point to a data-specific issue rather than a general platform problem.";
+  }
+  return "The details you shared gave us enough context to choose the next safe step.";
 }
 
 function ticketText(ticket: Ticket): string {

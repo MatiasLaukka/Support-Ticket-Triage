@@ -1,0 +1,17 @@
+
+> support-ticket-triage-mcp@1.0.0 demo:showcase
+> node dist/scripts/demo-approval-desk.js
+
+Approval Desk listening at http://127.0.0.1:5177.
+
+Approval Desk demo ready:
+http://127.0.0.1:5177
+Suggested walkthrough:
+1. Select TKT-1001.
+2. Evaluate the ticket.
+3. Review the Customer Response Draft and workflow summary.
+4. Open Show technical evidence only when you want the audit trail.
+5. Mark Done from the floating action bar, or use Edit fields / Reject.
+6. Add a customer reply in the action bar, then evaluate again.
+7. Confirm dashboard metrics, safety blocks, and audit trail.
+Press Ctrl+C to stop the local demo server.

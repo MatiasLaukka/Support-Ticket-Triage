@@ -1,4 +1,4 @@
 interface:
   display_name: "Triage Support Tickets"
   short_description: "Safely triage B2B SaaS support tickets"
-  default_prompt: "Use $triaging-support-tickets to triage this support ticket using the local MCP server and wait for my approval before applying changes."
+  default_prompt: "Use $triaging-support-tickets to operate this support ticket through the local MCP workflow tools. Evaluate the timeline, show me the recommendation, and wait for my approval before marking any response done."

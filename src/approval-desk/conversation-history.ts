@@ -38,6 +38,9 @@ export type ConversationTimelineItem =
       timestamp: string;
       actor: string;
       summary: string;
+      confidence?: string;
+      owner?: string;
+      causeType?: string;
     }
   | {
       kind: "fix";
@@ -164,11 +167,19 @@ function buildTimelineAuditItem(event: AuditEvent): ConversationTimelineItem {
     "customerSafeSummary" in event.after.diagnosis &&
     typeof event.after.diagnosis.customerSafeSummary === "string"
   ) {
+    const diagnosis = event.after.diagnosis as Record<string, unknown>;
     return {
       kind: "diagnosis",
       timestamp: event.timestamp,
       actor: event.actor,
       summary: event.after.diagnosis.customerSafeSummary,
+      ...(typeof diagnosis.confidence === "string"
+        ? { confidence: diagnosis.confidence }
+        : {}),
+      ...(typeof diagnosis.owner === "string" ? { owner: diagnosis.owner } : {}),
+      ...(typeof diagnosis.causeType === "string"
+        ? { causeType: diagnosis.causeType }
+        : {}),
     };
   }
 

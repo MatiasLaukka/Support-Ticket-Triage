@@ -222,9 +222,14 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     });
 
     const requestBody = JSON.parse(requests[0]!.init.body);
-    expect(requestBody.instructions).toContain("Customer service drafting policy");
+    expect(requestBody.instructions).toContain("Customer service drafting skill");
     expect(requestBody.instructions).toContain("Do not invent a diagnosis");
+    expect(requestBody.instructions).toContain(
+      "A likely diagnosis is not a finished diagnosis",
+    );
     expect(requestBody.input).toContain("diagnosisContext");
+    expect(requestBody.input).toContain('"stage": "diagnostic-narrowing"');
+    expect(requestBody.input).toContain('"finalForCustomer": false');
     expect(requestBody.input).toContain("campaign editor blank page");
   });
 

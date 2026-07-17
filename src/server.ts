@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   McpServer,
   ResourceTemplate,
@@ -10,6 +11,7 @@ import {
   AuditEventSchema,
   CategorySchema,
   DuplicateCandidateSchema,
+  DraftCustomerResponseStyleInputSchema,
   IsoTimestampSchema,
   KnowledgeArticleSchema,
   PrioritySchema,
@@ -20,13 +22,31 @@ import {
   TicketStatusSchema,
   TriageRecommendationSchema,
   type Approval,
+  type AuditEvent,
+  type Ticket,
   type TicketId,
+  type TriageRecommendation,
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 import type { KnowledgeRepository } from "./knowledge-repository.js";
 import { calculateQueueMetrics } from "./metrics.js";
 import type { RecommendationRepository } from "./recommendation-repository.js";
 import { findSimilarTickets } from "./similarity.js";
+import {
+  buildApprovalDeskRecommendationInput,
+  buildApprovalDeskRecommendationInputWithDrafting,
+} from "./approval-desk/recommendation-builder.js";
+import {
+  createCustomerResponseDraftProviderFromEnv,
+} from "./approval-desk/draft-response-provider.js";
+import {
+  buildTicketWorkflowReadModel,
+  customerRepliesFromAudits,
+  latestSupportResponseFromAudits,
+  latestSentAtForRecommendation,
+  summarizeRecommendationsForTicket,
+} from "./approval-desk/workflow-read-model.js";
+import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
   RejectRecommendationInput,
@@ -144,6 +164,35 @@ const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> 
     feedback: NonBlankStringSchema,
   })
   .strict();
+const RecommendationIdSchema = z.uuid();
+const AddCustomerReplyInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    body: NonBlankStringSchema.max(4_000),
+    source: NonBlankStringSchema.optional(),
+  })
+  .strict();
+const EvaluateTicketInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema.default("approval-desk"),
+    responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
+  })
+  .strict();
+const MarkResponseDoneInputSchema = ApprovalInputSchema.refine(
+  (approval) => approval.approvedFields.includes("customerResponse"),
+  {
+    message: "mark_response_done requires customerResponse approval.",
+    path: ["approvedFields"],
+  },
+);
+const WorkflowActionInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema.default("approval-desk"),
+  })
+  .strict();
 
 const TicketFilterInputSchema = z
   .object({
@@ -221,6 +270,59 @@ const ApprovalOutputSchema = z
 const RejectionOutputSchema = z
   .object({ auditEvent: AuditEventSchema })
   .strict();
+const AddCustomerReplyOutputSchema = z
+  .object({ auditEvent: AuditEventSchema })
+  .strict();
+const MarkResponseDoneOutputSchema = z
+  .object({
+    ticket: TicketSchema,
+    approvalEvent: AuditEventSchema,
+    sentEvent: AuditEventSchema,
+    automaticReply: AuditEventSchema.optional(),
+  })
+  .strict();
+const WorkflowAuditOutputSchema = z
+  .object({ auditEvent: AuditEventSchema })
+  .strict();
+const CloseTicketOutputSchema = z
+  .object({
+    ticket: TicketSchema,
+    auditEvent: AuditEventSchema,
+  })
+  .strict();
+const WorkflowItemSchema = z.record(z.string(), z.unknown());
+const TicketWorkflowOutputSchema = z
+  .object({
+    ticket: TicketSchema,
+    conversationHistory: z.array(WorkflowItemSchema),
+    conversationTimeline: z.array(WorkflowItemSchema),
+    recommendationHistory: z.array(TriageRecommendationSchema),
+    recommendationSummary: z
+      .object({
+        latestRecommendationId: z.uuid().optional(),
+        latestResolution: TriageRecommendationSchema.shape.resolution.optional(),
+        hasPendingRecommendation: z.boolean(),
+        hasApprovedRecommendation: z.boolean(),
+        workflowState: z.enum([
+          "active",
+          "draft-ready",
+          "waiting",
+          "customer-replied",
+          "resolved",
+        ]),
+        outageRisk: RiskSchema.optional(),
+        securityRisk: RiskSchema.optional(),
+        slaRisk: RiskSchema.optional(),
+        priority: PrioritySchema.optional(),
+        hasSentResponse: z.boolean(),
+        hasCustomerReply: z.boolean(),
+        latestSentAt: IsoTimestampSchema.optional(),
+        latestCustomerReplyAt: IsoTimestampSchema.optional(),
+      })
+      .strict(),
+    latestRecommendation: TriageRecommendationSchema.optional(),
+  })
+  .strict();
 
 export interface TriageServerDependencies {
   tickets: TicketRepository;
@@ -277,6 +379,19 @@ export function createTriageServer(
     },
     async ({ id }) =>
       toolResult(async () => ({ ticket: await deps.tickets.get(id) })),
+  );
+
+  server.registerTool(
+    "get_ticket_workflow",
+    {
+      description:
+        "Read one ticket with conversation timeline, recommendation history, and workflow state.",
+      inputSchema: z.object({ id: TicketIdSchema }).strict(),
+      outputSchema: TicketWorkflowOutputSchema,
+      annotations: ReadOnlyAnnotations,
+    },
+    async ({ id }) =>
+      toolResult(() => getTicketWorkflow(deps, id)),
   );
 
   server.registerTool(
@@ -375,6 +490,69 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "add_customer_reply",
+    {
+      description:
+        "Append a customer reply to the local ticket conversation audit trail.",
+      inputSchema: AddCustomerReplyInputSchema,
+      outputSchema: AddCustomerReplyOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => ({
+        auditEvent: await deps.service.addCustomerReply({
+          ...input,
+          receivedAt: deps.now().toISOString(),
+        }),
+      })),
+  );
+
+  server.registerTool(
+    "evaluate_ticket",
+    {
+      description:
+        "Evaluate the current ticket timeline and store a pending recommendation.",
+      inputSchema: EvaluateTicketInputSchema,
+      outputSchema: SubmitRecommendationOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => ({
+        recommendation: await evaluateTicket(deps, input),
+      })),
+  );
+
+  server.registerTool(
+    "record_diagnosis",
+    {
+      description:
+        "Record a trusted diagnosis event for the latest evaluated ticket context.",
+      inputSchema: WorkflowActionInputSchema,
+      outputSchema: WorkflowAuditOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => ({
+        auditEvent: await recordDiagnosis(deps, input),
+      })),
+  );
+
+  server.registerTool(
+    "mark_fix_available",
+    {
+      description:
+        "Record that a confirmed platform or integration fix is available for customer verification.",
+      inputSchema: WorkflowActionInputSchema,
+      outputSchema: WorkflowAuditOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => ({
+        auditEvent: await markFixAvailable(deps, input),
+      })),
+  );
+
+  server.registerTool(
     "approve_triage_recommendation",
     {
       description:
@@ -390,6 +568,32 @@ export function createTriageServer(
           approvedAt: deps.now().toISOString(),
         }),
       ),
+  );
+
+  server.registerTool(
+    "mark_response_done",
+    {
+      description:
+        "Apply explicitly approved fields and record the approved customer response as sent.",
+      inputSchema: MarkResponseDoneInputSchema,
+      outputSchema: MarkResponseDoneOutputSchema,
+      annotations: FinalizingAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => markResponseDone(deps, input)),
+  );
+
+  server.registerTool(
+    "close_ticket",
+    {
+      description:
+        "Close a ticket after a ready-for-close customer response has been sent.",
+      inputSchema: WorkflowActionInputSchema,
+      outputSchema: CloseTicketOutputSchema,
+      annotations: FinalizingAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => closeTicket(deps, input)),
   );
 
   server.registerTool(
@@ -415,6 +619,451 @@ export function createTriageServer(
   return server;
 }
 
+async function getTicketWorkflow(
+  deps: TriageServerDependencies,
+  ticketId: TicketId,
+): Promise<z.infer<typeof TicketWorkflowOutputSchema>> {
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+    deps.recommendations.list(),
+  ]);
+  return TicketWorkflowOutputSchema.parse(
+    buildTicketWorkflowReadModel({ ticket, audits, recommendations }),
+  );
+}
+
+async function evaluateTicket(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof EvaluateTicketInputSchema>,
+) {
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+  ]);
+  const customerReplies = customerRepliesFromAudits(ticket.id, audits);
+  const previousSupportResponse = latestSupportResponseFromAudits(
+    ticket.id,
+    audits,
+  );
+  const deterministicInput = buildApprovalDeskRecommendationInput({
+    ticket,
+    actor: input.actor,
+    customerReplies,
+    previousSupportResponse,
+  });
+  const knowledgeArticles = await Promise.all(
+    deterministicInput.knowledgeArticleIds.map((articleId) =>
+      deps.knowledge.get(articleId),
+    ),
+  );
+  const recommendationInput = await buildApprovalDeskRecommendationInputWithDrafting({
+    ticket,
+    actor: input.actor,
+    responseStyle: input.responseStyle,
+    knowledgeArticles,
+    customerReplies,
+    previousSupportResponse,
+    draftProvider: createCustomerResponseDraftProviderFromEnv(process.env, {
+      responseStyle: input.responseStyle,
+    }),
+  });
+  return deps.service.submit({
+    ...recommendationInput,
+    submittedAt: deps.now().toISOString(),
+  });
+}
+
+async function markResponseDone(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof MarkResponseDoneInputSchema>,
+): Promise<z.infer<typeof MarkResponseDoneOutputSchema>> {
+  const approval = await deps.service.approve({
+    ...input,
+    approvedAt: deps.now().toISOString(),
+  });
+  const customerResponse = input.editedCustomerResponse;
+  if (customerResponse === undefined) {
+    throw new DomainError(
+      "mark_response_done requires an approved customer response.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const auditsBeforeSent = await deps.audits.list(input.ticketId);
+  const sentEvent = await deps.service.markResponseSent({
+    recommendationId: input.recommendationId,
+    ticketId: input.ticketId,
+    actor: input.actor,
+    sentAt: deps.now().toISOString(),
+    customerResponse,
+  });
+  const recommendation = await deps.recommendations.get(input.recommendationId);
+  const automaticReply = await maybeAddAutomaticCustomerReplyAfterSent({
+    deps,
+    ticketId: input.ticketId,
+    recommendation,
+    auditsBeforeSent,
+    sentAt: sentEvent.timestamp,
+  });
+  return {
+    ticket: approval.ticket,
+    approvalEvent: approval.auditEvent,
+    sentEvent,
+    ...(automaticReply === undefined ? {} : { automaticReply }),
+  };
+}
+
+async function recordDiagnosis(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof WorkflowActionInputSchema>,
+): Promise<AuditEvent> {
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+    deps.recommendations.list(),
+  ]);
+  const latest = summarizeRecommendationsForTicket(
+    ticket,
+    recommendations,
+    audits,
+  ).latest;
+  if (latest === undefined) {
+    throw new DomainError(
+      "A completed evaluation is required before diagnosis.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const knownCauseReady = latest.supportState === "known-cause";
+  if (!knownCauseReady && (latest.missingEvidence?.length ?? 0) > 0) {
+    throw new DomainError(
+      "Diagnosis requires all required evidence to be gathered.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  if (
+    !knownCauseReady &&
+    !["diagnosing", "waiting-on-platform-fix"].includes(latest.supportState ?? "")
+  ) {
+    throw new DomainError(
+      "Diagnosis requires a diagnosis-ready ticket state.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const sentAt = latestSentAtForRecommendation(audits, latest.id);
+  if (sentAt === undefined) {
+    throw new DomainError(
+      "The evaluated response must be marked done before diagnosis.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
+  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
+    throw new DomainError(
+      "Evaluate the latest customer reply before diagnosis.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
+  if (
+    latestDiagnosisAt !== undefined &&
+    (latestReplyAt === undefined || latestDiagnosisAt > latestReplyAt)
+  ) {
+    throw new DomainError(
+      "Diagnosis has already been recorded for the latest context.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  return deps.service.recordDiagnosis({
+    ticketId: input.ticketId,
+    actor: input.actor,
+    diagnosedAt: deps.now().toISOString(),
+    diagnosis: diagnosisContextForTicket(ticket, latest),
+    knowledgeArticleIds:
+      latest.knowledgeArticleIds.length > 0
+        ? latest.knowledgeArticleIds
+        : [latest.knownCause ?? "known-cause"],
+  });
+}
+
+async function markFixAvailable(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof WorkflowActionInputSchema>,
+): Promise<AuditEvent> {
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+    deps.recommendations.list(),
+  ]);
+  const latestDiagnosis = latestDiagnosisAudit(audits);
+  if (latestDiagnosis === undefined) {
+    throw new DomainError(
+      "A completed diagnosis is required before marking a fix available.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const diagnosis = diagnosisFromAudit(latestDiagnosis);
+  if (diagnosis?.confidence !== "confirmed") {
+    throw new DomainError(
+      "A confirmed diagnosis is required before marking a fix available.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  if (!["engineering", "integration-partner"].includes(String(diagnosis.owner))) {
+    throw new DomainError(
+      "This confirmed diagnosis does not require a platform fix.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const latestFixAt = latestAuditTimestamp(audits, "fix-available");
+  if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
+    throw new DomainError(
+      "A fix has already been recorded for the latest diagnosis.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  const latest = summarizeRecommendationsForTicket(
+    ticket,
+    recommendations,
+    audits,
+  ).latest;
+  return deps.service.recordFix({
+    ticketId: input.ticketId,
+    actor: input.actor,
+    fixedAt: deps.now().toISOString(),
+    fix: fixContextForTicket(ticket, latestDiagnosis),
+    knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
+  });
+}
+
+async function closeTicket(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof WorkflowActionInputSchema>,
+): Promise<z.infer<typeof CloseTicketOutputSchema>> {
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+    deps.recommendations.list(),
+  ]);
+  if (ticket.status === "resolved") {
+    throw new DomainError("Ticket is already closed.", "INVALID_APPROVAL_FIELDS");
+  }
+  const latest = summarizeRecommendationsForTicket(
+    ticket,
+    recommendations,
+    audits,
+  ).latest;
+  if (latest?.supportState !== "ready-for-close") {
+    throw new DomainError(
+      "Ticket must have a ready-to-close recommendation before it can be closed.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  if (latestSentAtForRecommendation(audits, latest.id) === undefined) {
+    throw new DomainError(
+      "The ready-to-close response must be marked done before the ticket can be closed.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+
+  const closedAt = deps.now().toISOString();
+  const { ticket: updated, result: auditEvent } =
+    await deps.tickets.updateWithCommit(
+      input.ticketId,
+      ticket.revision,
+      (current) => ({
+        ...current,
+        status: "resolved",
+        updatedAt: closedAt,
+      }),
+      async (updatedTicket, previousTicket) => {
+        const event = AuditEventSchema.parse({
+          id: randomUUID(),
+          timestamp: closedAt,
+          actor: input.actor,
+          action: "ticket-updated",
+          ticketId: input.ticketId,
+          recommendationId: latest.id,
+          before: {
+            status: previousTicket.status,
+            revision: previousTicket.revision,
+          },
+          after: {
+            status: updatedTicket.status,
+            revision: updatedTicket.revision,
+            closedAt,
+          },
+          rationale:
+            "Ticket closed after the customer confirmed resolution and the closing response was sent.",
+          knowledgeArticleIds: latest.knowledgeArticleIds,
+          result: "success",
+        });
+        await deps.audits.append(event);
+        return event;
+      },
+    );
+  return { ticket: updated, auditEvent };
+}
+
+async function maybeAddAutomaticCustomerReplyAfterSent(input: {
+  deps: TriageServerDependencies;
+  ticketId: string;
+  recommendation: TriageRecommendation;
+  auditsBeforeSent: readonly AuditEvent[];
+  sentAt: string;
+}): Promise<AuditEvent | undefined> {
+  const latestReplyAfterRecommendation = latestAuditTimestamp(
+    input.auditsBeforeSent.filter(
+      (event) => event.timestamp > input.recommendation.createdAt,
+    ),
+    "customer-reply-received",
+  );
+  if (latestReplyAfterRecommendation !== undefined) {
+    return undefined;
+  }
+  const ticket = await input.deps.tickets.get(input.ticketId);
+  const body = automaticReplyForTicket({
+    ticket,
+    recommendation: input.recommendation,
+    auditsBeforeSent: input.auditsBeforeSent,
+  });
+  if (body === undefined) {
+    return undefined;
+  }
+  return input.deps.service.addCustomerReply({
+    ticketId: input.ticketId,
+    actor: ticket.requester?.name ?? ticket.customer.name,
+    body,
+    receivedAt: plusMilliseconds(input.sentAt, 1),
+    source: "demo-auto-reply",
+  });
+}
+
+function diagnosisContextForTicket(
+  ticket: Ticket,
+  recommendation: TriageRecommendation,
+) {
+  if (recommendation.supportState === "waiting-on-platform-fix") {
+    return {
+      status: "completed" as const,
+      causeType: "platform-delay" as const,
+      customerSafeSummary:
+        "The evidence points to a platform-side processing delay affecting the customer's expected results.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+      confidence: "confirmed" as const,
+      owner: "engineering" as const,
+      recommendedNextAction:
+        "Apply the platform mitigation and ask the customer to verify the affected example.",
+      doNotSay: ["Do not reveal internal incident operations."],
+    };
+  }
+  if (recommendation.supportState === "known-cause") {
+    return {
+      status: "completed" as const,
+      causeType: recommendation.category === "integration" ? "integration" as const : "configuration" as const,
+      customerSafeSummary:
+        "The ticket matches a known cause from the support knowledge base.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "known cause match"),
+      confidence: "confirmed" as const,
+      owner: recommendation.team === "integrations" ? "integration-partner" as const : "support" as const,
+      recommendedNextAction:
+        "Share the known-cause resolution or workaround with the customer.",
+      doNotSay: ["Do not ask for unrelated diagnostics after a known cause is confirmed."],
+    };
+  }
+  return {
+    status: "completed" as const,
+    causeType: recommendation.category === "security" ? "security" as const : "configuration" as const,
+    customerSafeSummary:
+      "The support team has narrowed the issue from the provided evidence.",
+    evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+    confidence: "likely" as const,
+    owner: "support" as const,
+    recommendedNextAction:
+      "Share the diagnosis with the customer and explain the next safe action.",
+    doNotSay: ["Do not claim a fix until a fix event is recorded."],
+  };
+}
+
+function providedEvidenceLabels(
+  recommendation: TriageRecommendation,
+  fallback: string,
+): string[] {
+  const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
+  return labels.length > 0 ? labels : [fallback];
+}
+
+function fixContextForTicket(ticket: Ticket, diagnosisEvent: AuditEvent) {
+  const diagnosis = diagnosisFromAudit(diagnosisEvent);
+  if (ticket.id === "TKT-1010") {
+    return {
+      status: "available" as const,
+      customerSafeSummary:
+        "The campaign editor loading mitigation has been applied for the affected campaign.",
+      customerAction:
+        "Please reopen the campaign editor and try editing the campaign again.",
+      verificationRequest:
+        "Let us know whether the editor now loads normally or if the blank page still appears.",
+    };
+  }
+  if (diagnosis?.causeType === "platform-delay") {
+    return {
+      status: "available" as const,
+      customerSafeSummary:
+        "The platform-side processing mitigation has been applied.",
+      customerAction:
+        "Please retry the affected workflow using the same example you shared with us.",
+      verificationRequest:
+        "Let us know whether the issue is resolved or if you still see the same behavior.",
+    };
+  }
+  return {
+    status: "available" as const,
+    customerSafeSummary: "A fix or mitigation is now available.",
+    customerAction: "Please retry the affected workflow.",
+    verificationRequest:
+      "Let us know whether the issue is resolved or still visible.",
+  };
+}
+
+function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
+  return audits
+    .map((event, index) => ({ event, index }))
+    .filter(
+      ({ event }) =>
+        event.action === "diagnosis-completed" &&
+        typeof event.after.diagnosis === "object" &&
+        event.after.diagnosis !== null,
+    )
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index,
+    )[0]?.event;
+}
+
+function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {
+  return typeof event.after.diagnosis === "object" && event.after.diagnosis !== null
+    ? event.after.diagnosis as Record<string, unknown>
+    : undefined;
+}
+
+function latestAuditTimestamp(
+  audits: readonly AuditEvent[],
+  action: AuditEvent["action"],
+): string | undefined {
+  return audits
+    .filter((event) => event.action === action)
+    .map((event) =>
+      action === "customer-response-sent" && typeof event.after.sentAt === "string"
+        ? event.after.sentAt
+        : event.timestamp,
+    )
+    .sort((left, right) => right.localeCompare(left))[0];
+}
+
+function plusMilliseconds(timestamp: string, milliseconds: number): string {
+  return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
+}
 function registerPrompts(server: McpServer): void {
   server.registerPrompt(
     "triage_ticket",
@@ -677,3 +1326,4 @@ function logUnexpectedError(error: unknown): void {
     error instanceof Error ? (error.stack ?? error.message) : String(error);
   console.error(`${UNEXPECTED_ERROR_TEXT} ${diagnostic}`);
 }
+

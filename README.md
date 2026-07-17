@@ -165,6 +165,10 @@ override hard safety rules.
 
 - MCP tools can expose local business data and workflow actions to an AI
   assistant without connecting to live customer systems.
+- Codex can operate the modern ticket workflow through MCP tools:
+  `get_ticket_workflow`, `add_customer_reply`, `evaluate_ticket`, and
+  `mark_response_done` mirror the Approval Desk lifecycle while preserving the
+  human approval boundary.
 - Deterministic policy can own routing, escalation, validation, approval, and
   audit guarantees while GPT assists with bounded drafting and advisory
   classification evidence.
@@ -193,6 +197,23 @@ The stdio entry point is `dist/src/index.js`. Its defaults are:
 | `TRIAGE_MINUTES_SAVED` | `8` |
 
 All relative paths are resolved from the process working directory.
+
+## Codex Operator Layer
+
+The MCP server exposes two generations of workflow tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `get_ticket_workflow` | Reads the ticket, conversation timeline, recommendation history, latest recommendation, and workflow state. |
+| `add_customer_reply` | Appends a customer reply to the local audit trail before re-evaluation. |
+| `evaluate_ticket` | Runs the current Approval Desk recommendation builder from the full timeline instead of asking Codex to hand-build recommendation JSON. |
+| `mark_response_done` | Applies only explicitly approved fields and records the approved customer response as sent. |
+| `submit_triage_recommendation` | Legacy lower-level proposal tool for manually assembled recommendations. |
+| `approve_triage_recommendation` / `reject_triage_recommendation` | Legacy explicit finalization tools guarded by strict schemas and audit logging. |
+
+The repository-local Skill at `.agents/skills/triaging-support-tickets` teaches
+Codex to use the operator tools, present evidence and drafts, wait for explicit
+human approval of named fields, and verify the resulting audit trail.
 
 ## Approval Flow
 

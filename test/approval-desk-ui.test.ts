@@ -49,6 +49,8 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("conversationTimeline");
     expect(approvalDeskHtml).toContain("recommendationHistory");
     expect(approvalDeskHtml).toContain("Done");
+    expect(approvalDeskHtml).toContain("202 Accepted");
+    expect(approvalDeskHtml).toContain("profile activity timeline");
   });
 
   it("uses only local API routes", () => {
@@ -592,6 +594,37 @@ describe("approvalDeskHtml", () => {
     expect(app.evidenceRequests()).toBe(2);
   });
 
+  it("shows an automatic customer reply in a chat bubble above the action bar after done", async () => {
+    const app = await startApprovalDeskApp({
+      markSentAutomaticReply:
+        "The endpoint URL is https://hooks.example.test/webhooks/orders, the delivery ID is deliv_7788, raw body handling has not changed since yesterday, the last failed attempt was at 2026-06-10 09:12 UTC, and the endpoint returned HTTP 401 before the retry succeeded.",
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        ticketId: "TKT-1008",
+      },
+    });
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+    await app.approve();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Customer replied");
+    expect(app.el("pendingReplyPreview").innerHTML).not.toContain(
+      "New customer reply waiting for evaluation",
+    );
+    expect(app.el("pendingReplyPreview").innerHTML).not.toContain("endpoint URL");
+    expect(app.el("customerReplyFocus").hidden).toBe(false);
+    expect(app.el("customerReplyFocus").innerHTML).toContain("endpoint URL");
+    expect(app.el("customerReplyFocus").innerHTML).toContain("retry succeeded");
+    expect(approvalDeskHtml).toContain("workflow-action-stack");
+    expect(approvalDeskHtml.indexOf('id="customerReplyFocus"')).toBeLessThan(
+      approvalDeskHtml.indexOf('<section class="recommendation-setup-bar"'),
+    );
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("replyTestingMode").open).toBe(false);
+    expect(app.el("replyComposer").open).toBe(false);
+  });
+
   it("allows updated recommendations after customer replies but blocks unsent approved drafts", async () => {
     const blockedApp = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -804,6 +837,61 @@ describe("approvalDeskHtml", () => {
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Update");
   });
 
+  it("shows Diagnose after a newer customer reply has been evaluated despite an older diagnosis", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        createdAt: "2026-06-10T09:06:30.000Z",
+        supportState: "diagnosing",
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "diagnosis",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "product-support",
+            summary: "The previous reply narrowed the issue.",
+            confidence: "likely",
+            owner: "engineering",
+          },
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "approval-desk",
+            recommendationId: "22222222-2222-4222-8222-222222222222",
+            body: "Please try the browser-session checks.",
+          },
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:06:00.000Z",
+            actor: "Mia Johnson",
+            body: "The editor is still blank in incognito, Edge, and for another admin.",
+          },
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:07:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Thanks, we are checking the new evidence.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+      },
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("fixButton").hidden).toBe(true);
+  });
+
   it("shows Fix only after diagnosis has been recorded and response sent", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -819,6 +907,8 @@ describe("approvalDeskHtml", () => {
             timestamp: "2026-06-10T09:04:00.000Z",
             actor: "product-support",
             summary: "The likely cause has been diagnosed.",
+            confidence: "confirmed",
+            owner: "engineering",
           },
           {
             kind: "support-response-sent",
@@ -849,6 +939,89 @@ describe("approvalDeskHtml", () => {
       path: "/api/tickets/TKT-1001/fix",
       }),
     );
+  });
+
+  it("does not show Fix while the latest diagnosis is only likely", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        supportState: "diagnosing",
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "diagnosis",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "product-support",
+            summary: "The details narrow this to campaign editor loading.",
+            confidence: "likely",
+            owner: "engineering",
+          },
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Please try the browser-session checks next.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+      },
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(true);
+    expect(app.el("fixButton").hidden).toBe(true);
+  });
+
+  it("does not show Fix for a confirmed customer-owned diagnosis", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        supportState: "diagnosing",
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "diagnosis",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "product-support",
+            summary:
+              "The editor works in a private window, so the issue is local browser session state.",
+            confidence: "confirmed",
+            owner: "customer",
+          },
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Please clear site data or continue in the working browser session.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+      },
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(true);
+    expect(app.el("fixButton").hidden).toBe(true);
   });
 
   it("shows Evaluate for a diagnosis update when sent-response status comes from the summary", async () => {
@@ -965,8 +1138,8 @@ describe("approvalDeskHtml", () => {
     expect(app.el("actionBarTitle").textContent).toBe("Response ready");
     expect(app.el("reviewDraftButton").textContent).toBe("Response");
     expect(app.el("approveButton").textContent).toBe("Done");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Step 1: Ticket evaluated");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Step 2: GPT-assisted response");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Next Step");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Full workflow guide");
     expect(app.el("recommendationPanel").innerHTML).not.toContain("<button");
   });
 
@@ -1026,7 +1199,7 @@ describe("approvalDeskHtml", () => {
     });
     await app.selectFirstTicket();
 
-    expect(app.el("pendingReplyPreview").innerHTML).toContain(
+    expect(app.el("customerReplyFocus").innerHTML).toContain(
       "I sent the remaining evidence.",
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
@@ -1037,9 +1210,12 @@ describe("approvalDeskHtml", () => {
     expect(app.el("pendingReplyPreview").innerHTML).not.toContain(
       "I sent the remaining evidence.",
     );
+    expect(app.el("customerReplyFocus").innerHTML).not.toContain(
+      "I sent the remaining evidence.",
+    );
   });
 
-  it("offers predicted customer reply text in the action bar textarea instead of sample buttons", async () => {
+  it("keeps manual customer reply tooling behind testing mode", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
     await app.createRecommendation();
@@ -1049,7 +1225,8 @@ describe("approvalDeskHtml", () => {
     expect(app.el("conversationContextPanel").innerHTML).not.toContain(
       "Insert partial evidence sample",
     );
-    expect(app.el("predictedReply").hidden).toBe(false);
+    expect(app.el("replyTestingMode").open).toBe(false);
+    expect(approvalDeskHtml).toContain("Testing mode");
 
     app.el("predictedReply").value = "partial-evidence";
     app.el("predictedReply").dispatch("change");
@@ -1067,7 +1244,7 @@ describe("approvalDeskHtml", () => {
     });
   });
 
-  it("opens reply composer after done and closes it after adding a reply", async () => {
+  it("does not open manual reply tooling after done when no automatic reply is returned", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
 
@@ -1081,15 +1258,20 @@ describe("approvalDeskHtml", () => {
     await app.approve();
 
     expect(app.el("replyControls").hidden).toBe(false);
-    expect(app.el("replyComposer").open).toBe(true);
+    expect(app.el("customerReplyFocus").hidden).toBe(true);
+    expect(app.el("replyTestingMode").open).toBe(false);
+    expect(app.el("replyComposer").open).toBe(false);
+    expect(app.el("pendingReplyPreview").innerHTML).toContain(
+      "No automatic customer reply was generated",
+    );
 
     app.el("customerReplyBody").value =
       "The campaign editor is still blank after I click Edit.";
     await app.addCustomerReply();
 
     expect(app.el("replyComposer").open).toBe(false);
-    expect(app.el("pendingReplyPreview").innerHTML).toContain(
-      "New customer reply waiting for evaluation",
+    expect(app.el("customerReplyFocus").innerHTML).toContain(
+      "The campaign editor is still blank",
     );
   });
 
@@ -1479,7 +1661,7 @@ describe("approvalDeskHtml", () => {
       "Customer Response Draft",
     );
     expect(app.el("recommendationPanel").innerHTML).toContain(
-      "Workflow steps",
+      "Next Step",
     );
     expect(app.el("recommendationPanel").innerHTML).not.toContain("<button");
     expect(app.el("recommendationPanel").innerHTML).not.toContain(
@@ -1810,6 +1992,7 @@ describe("approvalDeskHtml", () => {
     expect(app.queueFilter("active").textContent).toBe("Active");
     expect(app.queueFilter("draft-ready").textContent).toBe("Draft ready");
     expect(app.queueFilter("customer-replied").textContent).toBe("Customer replied");
+    expect(app.queueFilter("resolved").textContent).toBe("Closed");
 
     app.setQueueFilter("draft-ready");
 
@@ -1832,10 +2015,68 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("ticketList").children[0]!.innerHTML).toContain("Resolved ticket");
     expect(app.el("ticketList").children[0]!.className).toContain("state-resolved");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Closed");
 
     app.setQueueFilter("all");
 
     expect(app.el("ticketList").children).toHaveLength(5);
+  });
+
+  it("shows a close action after a ready-for-close response has been sent", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        supportState: "ready-for-close",
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:25:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Glad to hear that resolved it.",
+          },
+        ],
+        recommendationSummary: {
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          workflowState: "waiting",
+          hasSentResponse: true,
+        },
+      },
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("closeTicketButton").hidden).toBe(false);
+    expect(app.el("closeTicketButton").disabled).toBe(false);
+    expect(app.el("actionBarTitle").textContent).toBe("Ready to close");
+
+    await app.click("closeTicketButton");
+
+    expect(app.requests.some((request) =>
+      request.path === `/api/tickets/${fixtureTicket.id}/close`,
+    )).toBe(true);
+    expect(app.parsedResult()).toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: fixtureTicket.id,
+          status: "resolved",
+          recommendationSummary: {
+            workflowState: "resolved",
+          },
+        }),
+      ],
+    });
+  });
+
+  it("uses customer-friendly predicted reply labels instead of fixture names", () => {
+    expect(approvalDeskHtml).toContain("All requested evidence");
+    expect(approvalDeskHtml).toContain("Fix verification details");
+    expect(approvalDeskHtml).toContain("Customer says it works");
+    expect(approvalDeskHtml).not.toContain(">Complete evidence<");
+    expect(approvalDeskHtml).not.toContain(">Platform-fix context<");
   });
 });
 
@@ -2062,6 +2303,7 @@ async function startApprovalDeskApp(options: {
   failEvidenceAfter?: number;
   failRecommendation?: boolean;
   confirmResult?: boolean;
+  markSentAutomaticReply?: string;
   recommendation?: FixtureRecommendation;
   recommendationDelayTicks?: number;
   tickets?: Array<typeof fixtureTicket & { recommendationSummary?: Record<string, unknown> }>;
@@ -2168,6 +2410,20 @@ async function startApprovalDeskApp(options: {
         auditEvent: { action: "fix-available" },
       }, 201);
     }
+    if (path === `/api/tickets/${selectedFixtureTicket.id}/close`) {
+      selectedFixtureTicket.status = "resolved";
+      const mutableFixtureTicket = selectedFixtureTicket as typeof selectedFixtureTicket & {
+        recommendationSummary?: Record<string, unknown>;
+      };
+      mutableFixtureTicket.recommendationSummary = {
+        ...(mutableFixtureTicket.recommendationSummary ?? {}),
+        workflowState: "resolved",
+      };
+      return jsonResponse({
+        ticket: selectedFixtureTicket,
+        auditEvent: { action: "ticket-updated" },
+      });
+    }
     if (path === `/api/tickets/${selectedFixtureTicket.id}/recommendations`) {
       if (options.recommendationDelayTicks !== undefined) {
         await settle(options.recommendationDelayTicks);
@@ -2205,8 +2461,27 @@ async function startApprovalDeskApp(options: {
         recommendationId: fixtureRecommendation.id,
         body: fixtureRecommendation.draftCustomerResponse,
       });
+      if (options.markSentAutomaticReply !== undefined) {
+        conversationTimeline.push({
+          kind: "customer-reply",
+          timestamp: "2026-06-10T09:05:00.001Z",
+          actor: "Dev Support",
+          body: options.markSentAutomaticReply,
+        });
+      }
       return jsonResponse({
         auditEvent: { action: "customer-response-sent" },
+        ...(options.markSentAutomaticReply === undefined
+          ? {}
+          : {
+              automaticReply: {
+                action: "customer-reply-received",
+                after: {
+                  body: options.markSentAutomaticReply,
+                  source: "demo-auto-reply",
+                },
+              },
+            }),
       });
     }
     throw new Error(`Unexpected request: ${path}`);
@@ -2310,12 +2585,14 @@ function createElements(): Record<string, FakeElement> {
       "backToRecommendation",
       "addCustomerReply",
       "cancelRejectButton",
+      "closeTicketButton",
       "confirmApproval",
       "continueApproval",
       "conversationContextPanel",
       "createRecommendation",
       "createUpdatedRecommendation",
       "customerReplyBody",
+      "customerReplyFocus",
       "decisionChips",
       "decisionControls",
       "decisionSummary",
@@ -2343,6 +2620,7 @@ function createElements(): Record<string, FakeElement> {
       "rejectControls",
       "replyComposer",
       "replyControls",
+      "replyTestingMode",
       "resultPanel",
       "reviewDraftButton",
       "setupControls",
@@ -2362,6 +2640,7 @@ function createElements(): Record<string, FakeElement> {
   elements.approveEditedButton.disabled = true;
   elements.rejectButton.disabled = true;
   elements.replyComposer.open = false;
+  elements.replyTestingMode.open = false;
   elements.fieldChoices.children = [
     "category",
     "priority",
@@ -2382,7 +2661,7 @@ function createElements(): Record<string, FakeElement> {
     ["draft-ready", "Draft ready"],
     ["waiting", "Waiting"],
     ["customer-replied", "Customer replied"],
-    ["resolved", "Resolved"],
+    ["resolved", "Closed"],
     ["all", "All"],
   ].map(
     ([value, label]) => {

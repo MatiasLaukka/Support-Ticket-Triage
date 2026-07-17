@@ -256,6 +256,9 @@ describe("conversation timeline", () => {
         actor: "incident-response",
         summary:
           "Accepted checkout events were delayed before appearing on EU profile timelines.",
+        confidence: "likely",
+        owner: "engineering",
+        causeType: "platform-delay",
       },
       {
         kind: "fix",

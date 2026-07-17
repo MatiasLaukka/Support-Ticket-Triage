@@ -178,6 +178,36 @@ async function createFixture(): Promise<{
     ].join("\n"),
     "utf8",
   );
+  await writeFile(
+    resolve(knowledgeRoot, "api-reference.md"),
+    [
+      "---",
+      "id: api-reference",
+      "title: API Reference",
+      "tags: api, errors",
+      "---",
+      "# API Reference",
+      "",
+      "API 503 responses require checking request IDs, timestamps, and incident impact.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(
+    resolve(knowledgeRoot, "event-tracking-debugging.md"),
+    [
+      "---",
+      "id: event-tracking-debugging",
+      "title: Event Tracking Debugging",
+      "tags: api, events",
+      "---",
+      "# Event Tracking Debugging",
+      "",
+      "Compare event IDs, API response status, request IDs, and timeline visibility.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 
   const tickets = new TicketRepository(resolve(root, "runtime"), seedFile);
   await tickets.initialize();
@@ -349,6 +379,78 @@ describe("createTriageServer action protocol", () => {
       expect(action.inputSchema.additionalProperties).toBe(false);
       expect(action.outputSchema?.type).toBe("object");
     }
+
+    const operatorActions = discovery.tools.filter(({ name }) =>
+      [
+        "add_customer_reply",
+        "evaluate_ticket",
+        "record_diagnosis",
+        "mark_fix_available",
+        "mark_response_done",
+        "close_ticket",
+      ].includes(name),
+    );
+    expect(operatorActions.map(({ name }) => name).sort()).toEqual([
+      "add_customer_reply",
+      "close_ticket",
+      "evaluate_ticket",
+      "mark_fix_available",
+      "mark_response_done",
+      "record_diagnosis",
+    ]);
+    expect(
+      operatorActions.find(({ name }) => name === "add_customer_reply")
+        ?.annotations,
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(
+      operatorActions.find(({ name }) => name === "evaluate_ticket")
+        ?.annotations,
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(
+      operatorActions.find(({ name }) => name === "mark_response_done")
+        ?.annotations,
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(
+      operatorActions.find(({ name }) => name === "record_diagnosis")
+        ?.annotations,
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(
+      operatorActions.find(({ name }) => name === "mark_fix_available")
+        ?.annotations,
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(
+      operatorActions.find(({ name }) => name === "close_ticket")?.annotations,
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
   });
 
   it("submits a proposal with computed escalation without mutating the ticket", async () => {
@@ -592,6 +694,385 @@ describe("createTriageServer action protocol", () => {
       ),
     ).toEqual(event);
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(before);
+  });
+
+  it("adds a customer reply through the operator action and exposes it in workflow state", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+
+    const reply = await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The API response status is 503 and the request ID is req_12345.",
+      source: "manual",
+    });
+
+    expect(reply.isError).not.toBe(true);
+    expectStableStructured(reply);
+    expect(reply.structuredContent).toMatchObject({
+      auditEvent: {
+        action: "customer-reply-received",
+        ticketId: "TKT-1001",
+        actor: "Maya Chen",
+        after: {
+          body: "The API response status is 503 and the request ID is req_12345.",
+          source: "manual",
+        },
+      },
+    });
+
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
+    expect(workflow.structuredContent).toMatchObject({
+      recommendationSummary: {
+        hasCustomerReply: true,
+        latestCustomerReplyAt: now.toISOString(),
+      },
+      conversationTimeline: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "customer-reply",
+          body: "The API response status is 503 and the request ID is req_12345.",
+        }),
+      ]),
+    });
+  });
+
+  it("evaluates the current ticket timeline without caller-built recommendation objects", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body:
+        "The API response status is 503. The request ID is req_12345 and the failure timestamp was 2026-06-10 09:15 UTC.",
+      source: "manual",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+      responseStyle: "concise",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    const recommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+    expect(recommendation).toMatchObject({
+      ticketId: "TKT-1001",
+      sourceRevision: 2,
+      resolution: "pending",
+      draftCustomerResponseStyle: "concise",
+    });
+    expect(recommendation.draftCustomerResponse).toContain("Kind regards");
+    expect(recommendation.classificationSignals?.length ?? 0).toBeGreaterThan(0);
+    expect(await fixture.recommendations.get(recommendation.id)).toEqual(
+      recommendation,
+    );
+  });
+
+  it("marks a reviewed response done by approving named fields and recording sent response", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+
+    const done = await callTool(client, "mark_response_done", {
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      expectedRevision: 2,
+      approvedFields: ["category", "priority", "team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "casey",
+      confirm: true,
+    });
+
+    expect(done.isError, textOf(done)).not.toBe(true);
+    expectStableStructured(done);
+    expect(done.structuredContent).toMatchObject({
+      ticket: {
+        id: "TKT-1001",
+        revision: 3,
+      },
+      approvalEvent: {
+        action: "recommendation-approved",
+        recommendationId: recommendation.id,
+      },
+      sentEvent: {
+        action: "customer-response-sent",
+        recommendationId: recommendation.id,
+        after: {
+          customerResponse: recommendation.draftCustomerResponse,
+        },
+      },
+    });
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
+    expect(workflow.structuredContent).toMatchObject({
+      recommendationSummary: {
+        latestRecommendationId: recommendation.id,
+        latestResolution: "approved",
+        hasSentResponse: true,
+        workflowState: "customer-replied",
+      },
+    });
+    expect(done.structuredContent).toMatchObject({
+      automaticReply: {
+        action: "customer-reply-received",
+      },
+    });
+  });
+
+  it("returns an automatic customer reply when done sends an evidence request", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const recommendation = await fixture.service.submit({
+      ...makeSubmitInput({
+        supportState: "needs-information",
+        missingInformation: ["Request ID"],
+        missingEvidence: [
+          {
+            id: "request-id",
+            label: "Request ID",
+            customerQuestion: "request ID",
+            aliases: ["request id"],
+            source: "knowledge",
+          },
+        ],
+        draftCustomerResponse: "Please send the request ID.",
+        actor: "approval-desk",
+      }),
+      submittedAt: now.toISOString(),
+    });
+
+    const done = await callTool(client, "mark_response_done", {
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      expectedRevision: 2,
+      approvedFields: ["team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "casey",
+      confirm: true,
+    });
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
+
+    expect(done.isError, textOf(done)).not.toBe(true);
+    expect(done.structuredContent).toMatchObject({
+      automaticReply: {
+        action: "customer-reply-received",
+        after: {
+          body: expect.stringContaining("request ID"),
+          source: "demo-auto-reply",
+        },
+      },
+    });
+    expect(workflow.structuredContent).toMatchObject({
+      recommendationSummary: {
+        workflowState: "customer-replied",
+      },
+      conversationTimeline: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "customer-reply",
+          body: expect.stringContaining("request ID"),
+        }),
+      ]),
+    });
+  });
+
+  it("returns natural automatic customer evidence replies through MCP", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const recommendation = await fixture.service.submit({
+      ...makeSubmitInput({
+        supportState: "needs-information",
+        missingInformation: [
+          "Affected store URL",
+          "One affected profile email or customer ID",
+          "event ID or event time",
+          "request ID if available",
+        ],
+        missingEvidence: [
+          {
+            id: "store-url",
+            label: "Store URL",
+            customerQuestion: "Affected store URL",
+            aliases: ["store url"],
+            source: "policy",
+          },
+          {
+            id: "profile-email",
+            label: "Affected profile email or customer ID",
+            customerQuestion: "One affected profile email or customer ID",
+            aliases: ["profile email"],
+            source: "policy",
+          },
+          {
+            id: "event-id",
+            label: "Event ID or event time",
+            customerQuestion: "event ID or event time",
+            aliases: ["event id"],
+            source: "policy",
+          },
+          {
+            id: "request-id",
+            label: "Request ID",
+            customerQuestion: "request ID if available",
+            aliases: ["request id"],
+            source: "policy",
+          },
+        ],
+        draftCustomerResponse:
+          "Please send an affected store, profile, event, and request ID.",
+        actor: "approval-desk",
+      }),
+      submittedAt: now.toISOString(),
+    });
+
+    const done = await callTool(client, "mark_response_done", {
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      expectedRevision: 2,
+      approvedFields: ["category", "priority", "team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "casey",
+      confirm: true,
+    });
+
+    expect(done.isError, textOf(done)).not.toBe(true);
+    expect(done.structuredContent).toBeDefined();
+    const body = (done.structuredContent as any).automaticReply.after.body;
+    expect(body).toContain("https://");
+    expect(body).toContain("customer@example.test");
+    expect(body).not.toMatch(/available for this ticket/i);
+  });
+
+  it("records diagnosis and fix lifecycle events through operator tools", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const recommendation = await fixture.service.submit(
+      {
+        ...makeSubmitInput({
+          supportState: "waiting-on-platform-fix",
+          missingInformation: [],
+          actor: "approval-desk",
+          draftCustomerResponse: "We are checking the platform delay.",
+          knowledgeArticleIds: ["incident-response"],
+        }),
+        submittedAt: now.toISOString(),
+      },
+    );
+    await fixture.service.approve({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      expectedRevision: 2,
+      approvedFields: ["team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "casey",
+      confirm: true,
+      approvedAt: now.toISOString(),
+    });
+    await fixture.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: now.toISOString(),
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+    const fix = await callTool(client, "mark_fix_available", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+
+    expect(diagnosis.isError).not.toBe(true);
+    expect(diagnosis.structuredContent).toMatchObject({
+      auditEvent: {
+        action: "diagnosis-completed",
+        after: {
+          diagnosis: {
+            causeType: "platform-delay",
+            confidence: "confirmed",
+            owner: "engineering",
+          },
+        },
+      },
+    });
+    expect(fix.isError).not.toBe(true);
+    expect(fix.structuredContent).toMatchObject({
+      auditEvent: {
+        action: "fix-available",
+        after: {
+          fix: {
+            status: "available",
+          },
+        },
+      },
+    });
+  });
+
+  it("closes a ticket through the operator tool after a ready-for-close response is sent", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const recommendation = await fixture.service.submit(
+      {
+        ...makeSubmitInput({
+          supportState: "ready-for-close",
+          missingInformation: [],
+          draftCustomerResponse: "Glad to hear this is resolved.",
+          actor: "approval-desk",
+        }),
+        submittedAt: now.toISOString(),
+      },
+    );
+    await fixture.service.approve({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      expectedRevision: 2,
+      approvedFields: ["team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "casey",
+      confirm: true,
+      approvedAt: now.toISOString(),
+    });
+    await fixture.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: now.toISOString(),
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+
+    const closed = await callTool(client, "close_ticket", {
+      ticketId: "TKT-1001",
+      actor: "casey",
+    });
+
+    expect(closed.isError).not.toBe(true);
+    expect(closed.structuredContent).toMatchObject({
+      ticket: {
+        id: "TKT-1001",
+        status: "resolved",
+      },
+      auditEvent: {
+        action: "ticket-updated",
+        after: {
+          status: "resolved",
+        },
+      },
+    });
   });
 
   it("maps DomainError safely and unexpected action failures to generic stderr-diagnosed errors", async () => {

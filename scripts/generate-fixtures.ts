@@ -1098,6 +1098,89 @@ const expectedOutcomes = ExpectedOutcomeSchema.array().parse(
 );
 
 const knowledgeArticles = {
+  "account-access.md": `---
+id: account-access
+title: Account Access
+tags: access, roles, permissions, identity
+---
+# Account access
+
+Account access issues involve role permissions, team membership, login access,
+account ownership, and whether the requester can reach the expected workspace
+or feature. Useful evidence includes the requester email, affected account or
+workspace, role shown in the admin area, last successful access time, and the
+exact access error.
+
+Ask for the requester email, account or workspace name, expected role, visible
+error message, and whether another admin can confirm the role assignment. Check
+role changes, SSO rules, team membership, and account ownership before advising
+permission changes.
+
+Customer-facing phrasing should explain that access and role state are being
+checked. Avoid asking for passwords or authentication secrets.
+`,
+  "api-reference.md": `---
+id: api-reference
+title: API Reference
+tags: api, endpoints, validation, requests
+---
+# API reference
+
+API support issues require the endpoint, request ID, timestamp, response status,
+redacted payload, and expected result. A request can be accepted by the API while
+later processing, validation, or downstream qualification still changes the
+customer-visible result.
+
+Ask for the endpoint path, request ID, event or request timestamp with time
+zone, API response status, and a sample payload with secrets removed. Compare
+the API response with downstream processing before saying a request succeeded
+end to end.
+
+Customer-facing phrasing should ask for request details and explain what will be
+compared. Never ask for API keys, tokens, passwords, or live secrets.
+`,
+  "authentication.md": `---
+id: authentication
+title: Authentication
+tags: login, sso, two-factor, identity
+---
+# Authentication
+
+Authentication issues involve sign-in, SSO, password reset, two-factor prompts,
+session expiry, and identity provider configuration. Useful evidence includes
+the requester email, sign-in method, timestamp, visible error, browser/session
+details, and whether the issue affects one user or multiple users.
+
+Ask for the requester email, sign-in method, timestamp with time zone, exact
+error message, and whether another browser or private window changes the result.
+Check identity provider settings and account access state before recommending
+configuration changes.
+
+Customer-facing phrasing should keep authentication guidance safe and avoid
+asking for passwords, recovery codes, session cookies, or full security logs.
+`,
+  "billing-and-invoices.md": `---
+id: billing-and-invoices
+title: Billing And Invoices
+tags: billing, invoices, payments, subscriptions
+---
+# Billing and invoices
+
+Billing support issues involve invoices, payment status, subscription changes,
+plan limits, coupon application, promotion setup, and account billing ownership.
+Useful evidence includes invoice number, billing account, affected plan or
+promotion, timestamp, visible billing error, and whether a payment or coupon
+change was recently made.
+
+Ask for the invoice number or billing account, affected plan or promotion,
+timestamp with time zone, and a screenshot or exact billing message if one is
+visible. Check billing ownership and promotion configuration before promising a
+credit, refund, or coupon change.
+
+Customer-facing phrasing should explain what billing records are being checked
+and avoid promising account credits or refunds until billing evidence supports
+the action.
+`,
   "campaign-send-failures.md": `---
 id: campaign-send-failures
 title: Campaign Send Failures
@@ -1216,6 +1299,51 @@ Customer-facing phrasing should ask for profile email, trigger event, event
 timestamp, flow filters, consent state, and smart sending details. Avoid saying
 the platform failed to trigger the flow until qualification evidence confirms
 the profile should have entered.
+`,
+  "performance-troubleshooting.md": `---
+id: performance-troubleshooting
+title: Performance Troubleshooting
+tags: performance, loading, browser, investigation
+---
+# Performance troubleshooting
+
+Performance issues usually start with the exact action the user attempted, the
+time of failure, browser or session details, and the affected scope. A blank
+page, slow load, timeout, or repeated loading state can be caused by account
+configuration, browser session state, a campaign or segment that is expensive
+to load, or a platform-side service delay.
+
+Ask the customer for the page or object they were opening, the failure
+timestamp with time zone, browser and session details, and whether the same
+issue affects other users, profiles, campaigns, or accounts. If the customer
+has already provided those details, do not ask for the same evidence again.
+Compare the timing, object scope, browser/session behavior, and recent platform
+activity before recommending a workaround or escalation.
+
+Customer-facing phrasing should explain the suspected area in plain language.
+Do not promise that a performance issue is fixed until the affected object,
+time window, and impact scope have been checked against platform telemetry or
+other trusted evidence.
+`,
+  "product-feedback.md": `---
+id: product-feedback
+title: Product Feedback
+tags: feature-requests, roadmap, feedback, product
+---
+# Product feedback
+
+Product feedback tickets describe requested capabilities, workflow gaps, or
+product improvements rather than a broken workflow. Useful evidence includes a
+clear feature description, the business use case, who would use the capability,
+affected account or audience size, current workaround, and desired outcome.
+
+Ask for the workflow they are trying to improve, who is affected, why the
+current workaround is not enough, and one concrete example. Capture urgency and
+impact, but do not promise roadmap timing, priority, or delivery commitments.
+
+Customer-facing phrasing should acknowledge the request, ask for practical use
+case details when needed, and explain that the feedback will be shared with the
+product team for review.
 `,
   "profile-sync-issues.md": `---
 id: profile-sync-issues
