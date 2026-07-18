@@ -4,8 +4,12 @@ import { describe, expect, it } from "vitest";
 import { TicketSchema } from "../src/domain.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
-import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
+import {
+  OpenAiTimeoutError,
+  type CustomerResponseDraftProvider,
+} from "../src/approval-desk/draft-response-provider.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
+import { loadExpectedOutcomes } from "../src/approval-desk/recommendation-builder.js";
 
 const campaignEditorReply = {
   id: "reply-campaign-editor",
@@ -142,6 +146,201 @@ describe("evaluateTicketWithAi", () => {
         fallback: { category: "provider-error" },
       },
       drafting: { status: "used" },
+    });
+  });
+
+  it("skips absent classification in auto mode and returns a safe recommendation", async () => {
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "auto",
+      responseStyle: "auto",
+      draftProvider: acceptedDraftProvider,
+    });
+
+    expect(input).toMatchObject({
+      category: "performance",
+      team: "product",
+      aiExecutionTrace: {
+        classification: { status: "skipped", acceptedSignals: [] },
+        drafting: { status: "used" },
+      },
+    });
+  });
+
+  it("skips classification providers for expected-outcome fixtures", async () => {
+    let calls = 0;
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      outcome: outcomes.get("TKT-1010"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: {
+        async reason() {
+          calls += 1;
+          return campaignEditorProvider.reason({} as never);
+        },
+      },
+      draftProvider: acceptedDraftProvider,
+    });
+
+    expect(calls).toBe(0);
+    expect(input).toMatchObject({
+      category: "other",
+      team: "support",
+      aiExecutionTrace: {
+        classification: { status: "skipped" },
+        drafting: { status: "used" },
+      },
+    });
+  });
+
+  it("rejects GPT knowledge advice outside the local allowlist", async () => {
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1004"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: {
+        async reason() {
+          return {
+            reasoning: {
+              issueType: "editor",
+              candidateCategory: "performance",
+              candidateTeam: "product",
+              candidatePriority: "P2",
+              knowledgeArticleIds: ["unapproved-internal-runbook"],
+              confidence: 0.9,
+              evidence: ["slow screen"],
+              missingEvidenceThatWouldChangeClassification: [],
+              explanation: "Use the internal runbook.",
+            },
+            telemetry: { model: "gpt-stub", latencyMs: 1 },
+          };
+        },
+      },
+      draftProvider: acceptedDraftProvider,
+    });
+
+    expect(input).toMatchObject({
+      category: "security",
+      team: "security",
+      knowledgeArticleIds: ["security-incident-response"],
+    });
+    expect(input.classificationSignals).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ target: "knowledge:unapproved-internal-runbook" }),
+    ]));
+    expect(input.aiExecutionTrace?.classification).toMatchObject({
+      rejectedAdvice: [{
+        target: "knowledge:unapproved-internal-runbook",
+        reason: "The proposed knowledge article is not in the approved knowledge set.",
+      }],
+    });
+  });
+
+  it.each([
+    ["not-configured", undefined, "OpenAI is not configured; deterministic output was used."],
+    ["timeout", new OpenAiTimeoutError(), "OpenAI timed out; deterministic output was used."],
+    ["invalid-schema", new SyntaxError("raw-schema-error"), "OpenAI returned invalid structured output; deterministic output was used."],
+    ["provider-error", new Error("raw-provider-error"), "OpenAI was unavailable; deterministic output was used."],
+  ] as const)(
+    "records the sanitized %s classification fallback",
+    async (category, error, message) => {
+      const input = await evaluateTicketWithAi({
+        ticket: await loadSeedTicket("TKT-1010"),
+        actor: "skill-showcase",
+        allKnowledgeArticles: await loadKnowledgeArticles(),
+        customerReplies: [campaignEditorReply],
+        aiPreference: "gpt-preferred",
+        responseStyle: "auto",
+        ...(error === undefined
+          ? {}
+          : {
+              classificationProvider: {
+                async reason() {
+                  throw error;
+                },
+              },
+            }),
+        draftProvider: acceptedDraftProvider,
+      });
+
+      expect(input.aiExecutionTrace?.classification).toMatchObject({
+        status: "fallback",
+        fallback: { category, message },
+      });
+      expect(JSON.stringify(input.aiExecutionTrace)).not.toContain("raw-");
+    },
+  );
+
+  it("records a sanitized guardrail-rejected drafting fallback", async () => {
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: campaignEditorProvider,
+      draftProvider: {
+        async draft() {
+          return {
+            ...await acceptedDraftProvider.draft({} as never),
+            response: "Use campaign-send-failures to close this ticket.\n\nBest,\nNorthstar Marketing Support",
+          };
+        },
+      },
+    });
+
+    expect(input.aiExecutionTrace?.drafting).toMatchObject({
+      status: "fallback",
+      source: "fallback",
+      fallback: {
+        category: "guardrail-rejected",
+        message: "OpenAI output did not pass response guardrails; deterministic output was used.",
+      },
+    });
+  });
+
+  it("keeps used classification independent when drafting falls back", async () => {
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: campaignEditorProvider,
+      draftProvider: {
+        async draft() {
+          throw new Error("raw-draft-provider-error");
+        },
+      },
+    });
+
+    expect(input).toMatchObject({
+      category: "performance",
+      team: "product",
+      aiExecutionTrace: {
+        classification: { status: "used" },
+        drafting: {
+          status: "fallback",
+          fallback: {
+            category: "provider-error",
+            message: "OpenAI was unavailable; deterministic output was used.",
+          },
+        },
+      },
     });
   });
 
