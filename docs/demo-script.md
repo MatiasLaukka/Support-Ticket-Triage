@@ -152,10 +152,10 @@ Expected checkpoints:
 - Codex presents evidence, confidence, proposed fields, risks, escalation, and
   an actionable draft customer response before asking for approval.
 - The ticket remains revision 0. No approval or rejection action is called.
-- The expected-outcome fixture names `policy-conflict`, but the current MCP
-  submission schema cannot submit that reason and the service does not infer it
-  from ticket text. The narrative should surface the conflict even when the
-  persisted recommendation does not contain that reason.
+- The deterministic classifier and Skill policy should surface the
+  `policy-conflict` escalation as reviewer-visible evidence. A recommendation
+  that fails to record the policy-conflict escalation should be treated as a
+  recommendation-quality mismatch.
 
 ## 2a. Browser Approval Desk
 
@@ -170,14 +170,22 @@ Expected checkpoints:
 - the terminal prints a local `http://127.0.0.1:5177` Approval Desk URL;
 - the Automation Evidence dashboard shows open tickets, recommendation counts,
   active guardrails, audit events, and estimated minutes saved;
-- selecting `TKT-1001` shows the EU Checkout Started incident ticket;
+- selecting `TKT-1010` shows the vague "Problem / It does not work" ticket;
+- typing a customer reply about the campaign editor staying blank makes the
+  next recommendation reclassify the ticket as performance/product;
+- evidence requirements update from generic problem details to campaign,
+  timestamp, browser/session, and affected-scope details;
+- the draft response acknowledges the campaign editor loading path instead of
+  asking for a screenshot of a blank page;
+- selecting `TKT-1001` remains useful for the EU Checkout Started incident
+  routing path;
 - the Draft style selector can switch between balanced, concise, empathetic,
   technical, and executive-update customer wording before recommendation
   creation;
 - creating a recommendation stores a pending recommendation and does not change
   the ticket revision;
-- the recommendation shows the GPT draft, retrieved context, validator checks,
-  and **Why this draft is safe** panel;
+- the recommendation shows classifier evidence, lifecycle summary, GPT draft,
+  retrieved context, validator checks, and **Why this draft is safe** panel;
 - the draft response asks for customer-usable event timing and profile examples
   rather than exposing internal knowledge article IDs;
 - the browser sends the recommendation source revision with approval, and the

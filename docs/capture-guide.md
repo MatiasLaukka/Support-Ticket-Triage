@@ -25,11 +25,12 @@ Capture these in order:
 
 1. **Automation Evidence dashboard**
    - Shows guardrails, activity, estimated minutes saved, and audit counts.
-2. **TKT-1001 ticket view**
-   - Shows the incident ticket subject and description.
-3. **Recommendation panel**
-   - Shows Draft Customer Response, Recommended Triage, and
-     **Why this draft is safe**.
+2. **Conversation workspace**
+   - Shows `TKT-1010`, the original vague ticket, the manual customer reply
+     box, and the conversation timeline.
+3. **Adaptive recommendation panel**
+   - Shows classifier evidence, lifecycle state, Draft Customer Response,
+     **What changed**, and **Why this draft is safe**.
 4. **Approval controls**
    - Shows named-field approval and editable customer response.
 5. **Post-approval result**
@@ -58,6 +59,7 @@ Recommended filenames:
 
 ```text
 approval-desk-evidence.png
+approval-desk-conversation.png
 approval-desk-recommendation.png
 approval-desk-approval-audit.png
 approval-desk-showcase.gif

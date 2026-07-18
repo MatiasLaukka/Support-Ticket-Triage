@@ -52,11 +52,12 @@ export function buildDemoWalkthrough(url: string): string {
     url,
     "Suggested walkthrough:",
     "1. Select TKT-1001.",
-    "2. Create a recommendation.",
-    "3. Review the GPT draft, retrieved context, and validator checks.",
-    "4. Point out the Why this draft is safe panel before approving.",
-    "5. Approve named fields with an actor and explicit confirmation.",
-    "6. Confirm dashboard metrics, safety blocks, and audit trail.",
+    "2. Evaluate the ticket.",
+    "3. Review the Customer Response Draft and workflow summary.",
+    "4. Open Show technical evidence only when you want the audit trail.",
+    "5. Mark Done from the floating action bar, or use Edit fields / Reject.",
+    "6. Add a customer reply in the action bar, then evaluate again.",
+    "7. Confirm dashboard metrics, safety blocks, and audit trail.",
     "Press Ctrl+C to stop the local demo server.",
   ].join("\n");
 }

@@ -91,12 +91,12 @@ describe("Approval Desk demo runner helpers", () => {
 
     expect(walkthrough).toContain("Approval Desk demo ready:");
     expect(walkthrough).toContain("Select TKT-1001");
-    expect(walkthrough).toContain("Create a recommendation");
+    expect(walkthrough).toContain("Evaluate the ticket");
     expect(walkthrough).toContain(
-      "Review the GPT draft, retrieved context, and validator checks",
+      "Review the Customer Response Draft and workflow summary",
     );
-    expect(walkthrough).toContain("Why this draft is safe");
-    expect(walkthrough).toContain("Approve named fields");
+    expect(walkthrough).toContain("Open Show technical evidence");
+    expect(walkthrough).toContain("Mark Done from the floating action bar");
     expect(walkthrough).toContain("Confirm dashboard metrics");
     expect(walkthrough).toContain("audit trail");
     expect(walkthrough).toContain("Press Ctrl+C to stop the local demo server");

@@ -19,7 +19,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     requiredEvidenceIds: [],
     matches: matchesSmsQuietHours,
     problemSummary:
-      "We reviewed the SMS campaign issue, and the dashboard message indicates quiet-hour protection blocked delivery.",
+      "The dashboard message indicates quiet-hour protection blocked delivery for this SMS campaign.",
     nextStep:
       "This looks like expected compliance behavior for an SMS campaign scheduled during restricted sending hours. Please reschedule the campaign for an eligible sending window or review the account quiet-hour settings before attempting another send.",
     investigationSteps: [

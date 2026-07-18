@@ -1,8 +1,208 @@
 import { describe, expect, it } from "vitest";
-import { classifyTicket } from "../src/approval-desk/classifier.js";
+import {
+  classifyTicket,
+  classifyTicketFromContext,
+} from "../src/approval-desk/classifier.js";
+import { buildConversationContextForTicket } from "../src/approval-desk/conversation-context.js";
 import { TicketSchema, type Ticket } from "../src/domain.js";
 
 describe("classifyTicket", () => {
+  it("reclassifies a vague ticket as product performance after campaign editor blank-page reply", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: ticket.id,
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.",
+        },
+      ],
+    });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.category).toBe("performance");
+    expect(classification.team).toBe("product");
+    expect(classification.knowledgeArticleIds).toEqual(
+      expect.arrayContaining(["performance-troubleshooting"]),
+    );
+    expect(classification.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "conversation-campaign-editor-blank-page-category",
+          target: "category:performance",
+        }),
+      ]),
+    );
+  });
+
+  it("routes blank page replies with browser evidence to product performance", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "performance",
+      team: "product",
+      tags: ["performance"],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      customerReplies: [
+        {
+          id: "reply-complete",
+          ticketId: ticket.id,
+          createdAt: "2026-06-10T09:35:00.000Z",
+          body:
+            "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+        },
+      ],
+    });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.category).toBe("performance");
+    expect(classification.team).toBe("product");
+    expect(classification.priority).toBe("P3");
+    expect(classification.knowledgeArticleIds).toEqual(
+      expect.arrayContaining(["performance-troubleshooting"]),
+    );
+    expect(classification.knowledgeArticleIds).not.toContain(
+      "campaign-send-failures",
+    );
+  });
+
+  it("does not let metadata text trigger generic performance routing in conversation classification", () => {
+    const ticket = makeTicket({
+      subject: "Deliverability dropped after domain change",
+      description:
+        "Open rate dropped sharply and bounce events increased after moving campaign sends to a new branded sending domain.",
+      category: "performance",
+      team: "product",
+      tags: ["deliverability", "bounce", "performance"],
+    });
+    const context = buildConversationContextForTicket({ ticket });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.team).toBe("product");
+    expect(classification.knowledgeArticleIds).toEqual([
+      "email-deliverability",
+    ]);
+    expect(classification.signals).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "product-performance-performance-troubleshooting-team",
+        }),
+      ]),
+    );
+  });
+
+  it("does not let metadata text trigger generic performance routing for catalog delays", () => {
+    const ticket = makeTicket({
+      subject: "Product catalog sync is delayed",
+      description:
+        "New products from Shopify are not available in the campaign product block after six hours.",
+      category: "performance",
+      team: "product",
+      tags: ["shopify", "catalog", "sync", "performance"],
+    });
+    const context = buildConversationContextForTicket({ ticket });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.team).toBe("product");
+    expect(classification.knowledgeArticleIds).toEqual([
+      "shopify-integration-sync",
+      "coupon-catalog-sync",
+    ]);
+    expect(classification.signals).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "product-performance-performance-troubleshooting-team",
+        }),
+      ]),
+    );
+  });
+
+  it("reclassifies a vague ticket as API after Track API timestamp reply", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: ticket.id,
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "The Track API returns a 400 validation error when our event timestamp uses Europe/Helsinki local time.",
+        },
+      ],
+    });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.category).toBe("api");
+    expect(classification.team).toBe("api-platform");
+    expect(classification.knowledgeArticleIds).toEqual(
+      expect.arrayContaining(["event-tracking-debugging"]),
+    );
+  });
+
+  it("keeps deterministic security precedence over conflicting advisory signals", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: ticket.id,
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "A private API key was pasted into shared logs.",
+        },
+      ],
+    });
+
+    const classification = classifyTicketFromContext(context, [
+      {
+        ruleId: "gpt-advisory-performance-category",
+        target: "category:performance",
+        weight: 4,
+        reason: "GPT guessed a performance issue.",
+      },
+      {
+        ruleId: "gpt-advisory-performance-team",
+        target: "team:product",
+        weight: 4,
+        reason: "GPT guessed product routing.",
+      },
+    ]);
+
+    expect(classification.category).toBe("security");
+    expect(classification.team).toBe("security");
+    expect(classification.priority).toBe("P1");
+    expect(classification.requiredEscalations).toContain("security");
+  });
+
   it("uses submitted metadata as weak evidence without letting it dominate", () => {
     const ticket = makeTicket({
       category: "api",
@@ -344,6 +544,51 @@ describe("classifyTicket", () => {
     expect(result.team).toBe("billing");
     expect(result.knowledgeArticleIds).toContain("billing-and-invoices");
     expect(result.knowledgeArticleIds).not.toContain("campaign-send-failures");
+  });
+
+  it.each([
+    {
+      name: "API endpoint issues",
+      subject: "API endpoint returns unexpected response",
+      description:
+        "The endpoint response does not match the order request we sent.",
+      category: "api",
+      team: "api-platform",
+      articles: ["api-reference"],
+    },
+    {
+      name: "account access issues",
+      subject: "Cannot access campaign reports",
+      description:
+        "The user cannot access campaign reports even though their role should allow it.",
+      category: "account-access",
+      team: "identity",
+      articles: ["account-access"],
+    },
+    {
+      name: "authentication issues",
+      subject: "Two-factor authentication blocks sign in",
+      description:
+        "The user cannot sign in after the two-factor authentication prompt.",
+      category: "authentication",
+      team: "identity",
+      articles: ["authentication"],
+    },
+    {
+      name: "product feedback",
+      subject: "Feature request for reusable approval workflows",
+      description:
+        "We would like reusable approval workflows for campaign launches.",
+      category: "feature-request",
+      team: "product",
+      articles: ["product-feedback"],
+    },
+  ])("routes generic $name to the matching knowledge article", ({ subject, description, category, team, articles }) => {
+    const result = classifyTicket(makeTicket({ subject, description }));
+
+    expect(result.category).toBe(category);
+    expect(result.team).toBe(team);
+    expect(result.knowledgeArticleIds).toEqual(articles);
   });
 
   it.each([

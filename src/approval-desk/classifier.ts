@@ -6,6 +6,7 @@ import type {
   Team,
   Ticket,
 } from "../domain.js";
+import type { ConversationContext } from "./conversation-context.js";
 import { detectKnownCause } from "./known-cause-catalog.js";
 
 export interface TicketClassification {
@@ -98,18 +99,46 @@ const TAG_CLASSIFICATIONS: Readonly<Record<string, { category: Category; team: T
 };
 
 export function classifyTicket(ticket: Ticket): TicketClassification {
-  const context = { ticket, content: ticketContent(ticket) };
+  return classifyTicketWithContent({
+    ticket,
+    content: ticketContent(ticket),
+  });
+}
+
+export function classifyTicketFromContext(
+  context: ConversationContext,
+  advisorySignals: readonly ClassificationSignal[] = [],
+): TicketClassification {
+  return classifyTicketWithContent({
+    ticket: context.ticket,
+    content: context.combinedText,
+    advisorySignals,
+  });
+}
+
+function classifyTicketWithContent(input: {
+  ticket: Ticket;
+  content: string;
+  advisorySignals?: readonly ClassificationSignal[];
+}): TicketClassification {
+  const context = { ticket: input.ticket, content: input.content };
   const matches: RuleMatch[] = RULES.flatMap((rule) =>
     rule.when(context) ? [{ rule, signals: rule.emit(context) }] : [],
   );
-  const signals = matches.flatMap(({ signals: matchedSignals }) => matchedSignals);
+  const signals = [
+    ...matches.flatMap(({ signals: matchedSignals }) => matchedSignals),
+    ...(input.advisorySignals ?? []),
+  ];
   const preliminaryCategory = chooseCategory(signals);
   const knownCause = detectKnownCause({
-    ticket: ticketForKnownCause(ticket),
+    ticket: ticketForKnownCause({
+      ...input.ticket,
+      description: input.content,
+    }),
     outcome: {
-      ticketId: ticket.id,
+      ticketId: input.ticket.id,
       category: preliminaryCategory,
-      acceptablePriorities: [choosePriority(signals, [], ticket)],
+      acceptablePriorities: [choosePriority(signals, [], input.ticket)],
       team: chooseTeam(signals, preliminaryCategory, []),
       requiredEscalations: [],
       knowledgeArticleIds: chooseKnowledgeArticles(
@@ -140,7 +169,7 @@ export function classifyTicket(ticket: Ticket): TicketClassification {
   }
 
   return resolveClassification(
-    ticket,
+    input.ticket,
     signals,
     matches,
     knownCause?.knowledgeArticleIds ?? [],
@@ -259,6 +288,77 @@ const RULES: readonly Rule[] = [
   issueRule("authentication", /\b(?:consent state|email consent).*\b(?:not updating|old)\b/, "identity", "P2", ["profile-sync-issues", "sms-compliance"], "Consent state synchronization routes to identity."),
   issueRule("account-access", /\b(?:replied stop|sms opt-out).*\b(?:profile|eligible)\b/, "identity", "P3", ["sms-compliance", "profile-sync-issues"], "SMS opt-out state must synchronize to the profile.", 11),
   issueRule("other", /\bno campaign name, profile, timestamp, error, or screenshot\b/, "support", "P3", [], "Missing diagnostic context keeps the ticket in support triage."),
+  {
+    id: "conversation-campaign-editor-blank-page",
+    knowledgeCategory: "performance",
+    when: ({ content }) =>
+      /\bcampaign editor\b.{0,80}\b(?:blank|not loading|stayed blank|empty page)|\b(?:blank|stayed blank|empty page)\b.{0,80}\bcampaign editor\b/.test(
+        content,
+      ),
+    emit: () => [
+      signal(
+        "conversation-campaign-editor-blank-page-category",
+        "category:performance",
+        10,
+        "Campaign editor blank-page symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-campaign-editor-blank-page-team",
+        "team:product",
+        10,
+        "Campaign editor blank-page symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-campaign-editor-blank-page-priority",
+        "priority:P3",
+        10,
+        "Campaign editor blank-page symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-campaign-editor-blank-page-article",
+        "knowledge:performance-troubleshooting",
+        9,
+        "Campaign editor blank-page symptoms route to product performance diagnosis.",
+      ),
+    ],
+  },
+  {
+    id: "conversation-app-blank-page",
+    knowledgeCategory: "performance",
+    when: ({ content }) =>
+      /\b(?:blank page|page (?:stayed|is|was)(?: still)? blank|screen (?:stayed|is|was)(?: still)? blank|nothing (?:loaded|loads|happened))\b/.test(
+        content,
+      ) &&
+      /\b(?:chrome|firefox|safari|edge|browser|signing out|signed out|session|failure timestamp|campaign name)\b/.test(
+        content,
+      ),
+    emit: () => [
+      signal(
+        "conversation-app-blank-page-category",
+        "category:performance",
+        10,
+        "Blank-page application symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-app-blank-page-team",
+        "team:product",
+        10,
+        "Blank-page application symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-app-blank-page-priority",
+        "priority:P3",
+        10,
+        "Blank-page application symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-app-blank-page-article",
+        "knowledge:performance-troubleshooting",
+        9,
+        "Use performance troubleshooting guidance for blank-page symptoms.",
+      ),
+    ],
+  },
   issueRule("performance", /\bproduct catalog sync.*\b(?:six hours|campaign product block)|\bnew products.*\bcampaign product block\b/, "product", "P3", ["shopify-integration-sync", "coupon-catalog-sync"], "Delayed catalog availability is a product performance issue."),
   issueRule("incident", /\bcampaign audience snapshot.*\b(?:stuck|not finished|calculating)\b/, "incident-response", "P2", ["campaign-send-failures", "segmentation-audience-rules"], "A stuck audience calculation requires incident response."),
   issueRule("account-access", /\bsegment count differs|\bsaved export.*\bprofiles\b/, "support", "P3", ["segmentation-audience-rules"], "Audience count reconciliation is a support-led access investigation."),
@@ -281,7 +381,12 @@ const RULES: readonly Rule[] = [
   productRule("integration", /\b(?:shopify|catalog|connector|integration|sync)\b/, "integrations", "shopify-integration-sync"),
   productRule("integration", /\b(?:webhook|signature|delivery)\b/, "integrations", "webhook-signature-validation"),
   productRule("api", /\b(?:sms|text message|quiet-hours?)\b/, "api-platform", "sms-compliance"),
-  productRule("api", /\b(?:campaign|audience snapshot)\b/, "api-platform", "campaign-send-failures"),
+  productRule(
+    "api",
+    /\b(?:campaign (?:send|sending|delivery|status)|scheduled campaign|send status|audience snapshot)\b/,
+    "api-platform",
+    "campaign-send-failures",
+  ),
   productRule("integration", /\b(?:flow|automation trigger)\b/, "integrations", "flow-trigger-troubleshooting"),
   productRule("billing", /\b(?:billing|invoice|charge|payment|subscription)\b/, "billing", "billing-and-invoices"),
   productRule("account-access", /\b(?:cannot access|access denied|role access)\b/, "identity", "account-access"),
@@ -439,6 +544,17 @@ function chooseKnowledgeArticles(
     articleIds.forEach((articleId) => allMatchedArticleIds.add(articleId));
     if (!hasKnownCauseArticles && match.rule.knowledgeCategory === category) {
       articleIds.forEach((articleId) => allowed.add(articleId));
+    }
+  }
+
+  if (!hasKnownCauseArticles) {
+    for (const signal of signals) {
+      if (
+        signal.ruleId.startsWith("gpt-advisory-") &&
+        signal.target.startsWith("knowledge:")
+      ) {
+        allowed.add(signal.target.slice("knowledge:".length));
+      }
     }
   }
 

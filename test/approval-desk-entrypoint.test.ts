@@ -146,7 +146,8 @@ describe("compiled approval desk entrypoint", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
       expect(body).toContain("<title>Approval Desk</title>");
-      expect(body).toContain("Approve selected fields");
+      expect(body).toContain("Evaluate ticket");
+      expect(body).toContain("Done");
       expect(output.stderr).toBe("");
     } finally {
       await stopProcess(child, close);

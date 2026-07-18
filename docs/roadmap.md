@@ -5,10 +5,11 @@ than feature sprawl.
 
 ## Near-Term Polish
 
-1. Capture screenshots and a short GIF using `docs/capture-guide.md`.
-2. Add those assets under `docs/assets/` and link them from the README.
-3. Add a short "Demo in 60 seconds" section near the top of the README.
-4. Keep `npm run demo:showcase` as the main public entry point.
+1. Keep screenshots current when the Approval Desk UI changes.
+2. Add a short GIF using `docs/capture-guide.md`.
+3. Keep `npm run demo:showcase` as the main public entry point.
+4. Add a short architecture video or walkthrough script only if it stays
+   synthetic and repeatable.
 
 ## More Realistic Support Scenarios
 
@@ -34,15 +35,15 @@ Each new ticket should have:
 
 Next backend slice:
 
-- add known causes for existing tickets such as Track API local-time
-  timestamps, Shopify custom field mapping, SMS STOP sync delay, and webhook
-  delivery latency;
+- expand known-cause coverage for repeated merchant issues that are not yet
+  modeled, keeping each cause backed by synthetic documentation and tests;
 - improve evidence extraction for explicit negative evidence such as "not
   changed", timestamps and time zones, platform/store/account facts from ticket
   text plus replies, and duplicate evidence asks across overlapping knowledge
   articles;
-- add local customer-reply fixtures keyed by ticket ID, covering first contact,
-  partial information, complete information, and resolved confirmation.
+- add local conversation fixtures keyed by ticket ID, covering first contact,
+  partial information, complete information, platform-fix context, and resolved
+  confirmation.
 
 ## Response Quality Improvements
 
@@ -55,9 +56,14 @@ should target quality without weakening governance:
 - add a validator warning when the draft asks for irrelevant information;
 - add a "known cause vs needs diagnosis" label to the safety panel;
 - add examples of good and bad customer replies in `docs/demo-results.md`.
-- keep GPT assist as the drafting layer: deterministic lifecycle and evidence
-  state decide what the response must accomplish, while GPT polishes the
-  customer-facing wording from trusted context.
+- improve `search_knowledge` recall so operator lookups surface the same
+  knowledge articles that classifier rule mappings cite;
+- normalize customer-facing evidence labels so list items read naturally, for
+  example `Event ID or event time` instead of lowercase sentence fragments;
+- keep GPT assist bounded: deterministic lifecycle and evidence state decide
+  what the response must accomplish, while GPT can polish customer-facing
+  wording and provide auditable advisory classification signals for ambiguous
+  conversation context.
 
 ## Production-Like Extensions
 

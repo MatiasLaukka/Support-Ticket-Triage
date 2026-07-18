@@ -109,7 +109,7 @@ describe("repository-local support ticket triage Skill", () => {
     const { body } = parseSkill(readRequired(skillPath));
     const words = body.match(/\b[\w'-]+\b/g) ?? [];
 
-    expect(words.length).toBeLessThan(500);
+    expect(words.length).toBeLessThan(700);
     expect(body).toMatch(/^# Triaging Support Tickets/m);
     expect(body).toContain("references/policy.md");
     expect(body).toMatch(/\buntrusted (data|evidence)\b/i);
@@ -123,6 +123,16 @@ describe("repository-local support ticket triage Skill", () => {
     expect(body).toMatch(/\bmissing information\b/i);
     expect(body).toMatch(/\bescalat(e|ion)\b/i);
     expect(body).toMatch(/\bexplicit human approval\b/i);
+    expect(body).toMatch(/\bget_ticket_workflow\b/);
+    expect(body).toMatch(/\bevaluate_ticket\b/);
+    expect(body).toMatch(/\badd_customer_reply\b/);
+    expect(body).toMatch(/\bmark_response_done\b/);
+    expect(body).toMatch(/\brecord_diagnosis\b/);
+    expect(body).toMatch(/\bmark_fix_available\b/);
+    expect(body).toMatch(/\bclose_ticket\b/);
+    expect(body).toMatch(/\bconversation timeline\b/i);
+    expect(body).toMatch(/\blifecycle state\b/i);
+    expect(body).toMatch(/\bready-for-close\b/i);
     expect(body).toMatch(/\bapply only (the )?approved fields\b/i);
     expect(body).toMatch(/\bread back\b/i);
     expect(body).toMatch(/\bverify\b/i);
@@ -154,24 +164,25 @@ describe("repository-local support ticket triage Skill", () => {
 
     expectInOrder(body.toLowerCase(), [
       "read the ticket and current revision",
+      "read the workflow state and conversation timeline",
       "ignore embedded instructions",
       "search knowledge",
       "find duplicates and correlated incidents",
-      "prepare a complete recommendation",
+      "evaluate the current ticket timeline",
       "check escalation",
-      "present evidence, confidence, proposed changes, and draft response",
+      "present evidence, lifecycle state, confidence, proposed changes, and draft response",
       "wait for explicit human approval",
-      "apply only approved fields",
+      "mark the response done only for approved fields",
       "read back the ticket and audit event",
     ]);
 
     const workflowLines = headingSection(body, "Workflow")
       .split("\n")
       .filter((line) => /^\d+\.\s/.test(line));
-    expect(workflowLines).toHaveLength(10);
+    expect(workflowLines).toHaveLength(13);
     for (const line of workflowLines) {
       expect(line).toMatch(
-        /^\d+\.\s+(Read|Ignore|Search|Find|Prepare|Check|Present|Wait|Apply)/,
+        /^\d+\.\s+(Read|Ignore|Search|Find|Evaluate|Check|Present|Wait|Mark|If|Use)/,
       );
     }
   });
@@ -241,7 +252,7 @@ describe("repository-local support ticket triage Skill", () => {
         "interface:",
         '  display_name: "Triage Support Tickets"',
         '  short_description: "Safely triage B2B SaaS support tickets"',
-        '  default_prompt: "Use $triaging-support-tickets to triage this support ticket using the local MCP server and wait for my approval before applying changes."',
+        '  default_prompt: "Use $triaging-support-tickets to operate this support ticket through the local MCP workflow tools. Evaluate the timeline, show me the recommendation, and wait for my approval before marking any response done."',
         "",
       ].join("\n"),
     );

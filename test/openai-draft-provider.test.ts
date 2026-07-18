@@ -164,6 +164,75 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     );
   });
 
+  it("includes customer-service drafting policy and trusted diagnosis context", async () => {
+    const requests: Array<{ url: string; init: any }> = [];
+    const provider = new OpenAiCustomerResponseDraftProvider({
+      apiKey: "sk-test-secret",
+      model: "gpt-5.6-luna",
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              output: [
+                {
+                  content: [
+                    {
+                      type: "output_text",
+                      text: JSON.stringify({
+                        draftCustomerResponse:
+                          "We found the likely campaign editor loading cause.",
+                        missingInfoSuggestions: ["No customer evidence needed."],
+                        investigationSteps: ["Apply mitigation."],
+                        tone: "balanced",
+                        recommendedTone: "balanced",
+                        toneReason: "Diagnosis update.",
+                        audience: "merchant-admin",
+                      }),
+                    },
+                  ],
+                },
+              ],
+            }),
+        };
+      },
+    });
+
+    await provider.draft({
+      ticket,
+      outcome,
+      knowledgeArticles: [article],
+      deterministicDraft: "Fallback draft.",
+      responseStyle: "auto",
+      actor: "approval-desk",
+      companyName: "Northstar Marketing Support",
+      diagnosisContext: {
+        status: "completed",
+        causeType: "performance",
+        customerSafeSummary:
+          "The campaign editor blank page is likely caused by a frontend loading issue.",
+        evidenceUsed: ["campaign name", "browser/session details"],
+        confidence: "likely",
+        owner: "engineering",
+        recommendedNextAction: "Apply mitigation and ask the customer to retry.",
+        doNotSay: ["Do not claim the issue is fixed yet."],
+      },
+    });
+
+    const requestBody = JSON.parse(requests[0]!.init.body);
+    expect(requestBody.instructions).toContain("Customer service drafting skill");
+    expect(requestBody.instructions).toContain("Do not invent a diagnosis");
+    expect(requestBody.instructions).toContain(
+      "A likely diagnosis is not a finished diagnosis",
+    );
+    expect(requestBody.input).toContain("diagnosisContext");
+    expect(requestBody.input).toContain('"stage": "diagnostic-narrowing"');
+    expect(requestBody.input).toContain('"finalForCustomer": false');
+    expect(requestBody.input).toContain("campaign editor blank page");
+  });
+
   it("adds the reviewer and company sign-off to provider drafts", async () => {
     const requests: Array<{ url: string; init: any }> = [];
     const provider = new OpenAiCustomerResponseDraftProvider({
@@ -268,6 +337,38 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     ).rejects.toThrow(
       "OpenAI drafting request failed with 429 (insufficient_quota): You exceeded your current quota for [redacted-api-key], please check your plan and billing details.",
     );
+  });
+
+  it("times out slow OpenAI drafting requests", async () => {
+    const provider = new OpenAiCustomerResponseDraftProvider({
+      apiKey: "sk-test-secret",
+      model: "gpt-5.6-luna",
+      timeoutMs: 10,
+      fetch: async () => new Promise(() => undefined),
+    } as any);
+
+    const result = await Promise.race([
+      provider
+        .draft({
+          ticket,
+          outcome,
+          knowledgeArticles: [],
+          deterministicDraft: "Fallback draft.",
+          responseStyle: "balanced",
+          actor: "approval-desk",
+          companyName: "Northstar Marketing Support",
+        })
+        .then(
+          () => "resolved",
+          (error: unknown) =>
+            error instanceof Error ? error.message : String(error),
+        ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("test timed out waiting for provider"), 50),
+      ),
+    ]);
+
+    expect(result).toBe("OpenAI drafting request timed out after 10 ms.");
   });
 });
 

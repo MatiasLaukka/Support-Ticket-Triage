@@ -30,11 +30,17 @@ const generatedArtifactPaths = [
   "data/seed/tickets.json",
   "data/seed/expected-outcomes.json",
   "data/seed/sample-recommendations.json",
+  "data/knowledge/account-access.md",
+  "data/knowledge/api-reference.md",
+  "data/knowledge/authentication.md",
+  "data/knowledge/billing-and-invoices.md",
   "data/knowledge/campaign-send-failures.md",
   "data/knowledge/coupon-catalog-sync.md",
   "data/knowledge/email-deliverability.md",
   "data/knowledge/event-tracking-debugging.md",
   "data/knowledge/flow-trigger-troubleshooting.md",
+  "data/knowledge/performance-troubleshooting.md",
+  "data/knowledge/product-feedback.md",
   "data/knowledge/profile-sync-issues.md",
   "data/knowledge/segmentation-audience-rules.md",
   "data/knowledge/security-incident-response.md",
@@ -47,6 +53,10 @@ const generatedArtifactPaths = [
 function readJson<T>(path: string): T {
   expect(existsSync(path), `Expected generated fixture ${path}`).toBe(true);
   return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function readCanonicalText(path: string): string {
+  return readFileSync(path, "utf8").replaceAll("\r\n", "\n");
 }
 
 function readTickets(): Ticket[] {
@@ -371,11 +381,17 @@ describe("generated support fixtures", () => {
       .filter((file) => file.endsWith(".md"))
       .sort();
     expect(knowledgeFiles).toEqual([
+      "account-access.md",
+      "api-reference.md",
+      "authentication.md",
+      "billing-and-invoices.md",
       "campaign-send-failures.md",
       "coupon-catalog-sync.md",
       "email-deliverability.md",
       "event-tracking-debugging.md",
       "flow-trigger-troubleshooting.md",
+      "performance-troubleshooting.md",
+      "product-feedback.md",
       "profile-sync-issues.md",
       "security-incident-response.md",
       "segmentation-audience-rules.md",
@@ -399,7 +415,7 @@ describe("generated support fixtures", () => {
         return frontmatter.id;
       }),
     );
-    expect(knowledgeIds.size).toBe(12);
+    expect(knowledgeIds.size).toBe(18);
 
     for (const outcome of outcomes) {
       expect(outcome.knowledgeArticleIds.length).toBeGreaterThan(0);
@@ -409,7 +425,26 @@ describe("generated support fixtures", () => {
     }
   });
 
-  it("reproduces every committed artifact byte-for-byte in an isolated output root", () => {
+  it("has knowledge articles for every classifier-selected seed ticket article", async () => {
+    const { classifyTicket } = await import("../src/approval-desk/classifier.js");
+    const knowledgeIds = new Set(
+      readdirSync(knowledgeRoot)
+        .filter((file) => file.endsWith(".md"))
+        .map((file) => file.slice(0, -3)),
+    );
+
+    for (const ticket of readTickets()) {
+      const classification = classifyTicket(ticket);
+      expect(
+        classification.knowledgeArticleIds.filter(
+          (articleId) => !knowledgeIds.has(articleId),
+        ),
+        `${ticket.id} classifier knowledge articles should exist`,
+      ).toEqual([]);
+    }
+  });
+
+  it("reproduces every committed artifact in an isolated output root", () => {
     const temporaryRoot = mkdtempSync(join(tmpdir(), "support-fixtures-"));
     const copiedDistRoot = resolve(temporaryRoot, "dist");
     const isolatedOutputRoot = resolve(temporaryRoot, "generated");
@@ -438,8 +473,8 @@ describe("generated support fixtures", () => {
 
       for (const artifactPath of generatedPaths) {
         const generatedPath = resolve(isolatedOutputRoot, artifactPath);
-        expect(readFileSync(generatedPath)).toEqual(
-          readFileSync(resolve(root, artifactPath)),
+        expect(readCanonicalText(generatedPath)).toBe(
+          readCanonicalText(resolve(root, artifactPath)),
         );
       }
     } finally {

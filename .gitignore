@@ -4,3 +4,5 @@ dist/
 coverage/
 data/runtime/*
 !data/runtime/.gitkeep
+.approval-desk*.log
+.superpowers/sdd/

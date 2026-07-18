@@ -844,6 +844,108 @@ describe("TriageService", () => {
     expect(harness.audit.events.at(-1)).toEqual(auditEvent);
   });
 
+  it("marks an approved customer response as sent without updating the ticket", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ draftCustomerResponse: "Hi, we are investigating the API errors." }));
+    await harness.service.approve(
+      makeApproval({
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: "Hi, the reviewed API response is approved.",
+      }),
+    );
+    const before = await harness.tickets.get("TKT-1001");
+
+    const sentEvent = await harness.service.markResponseSent({
+      recommendationId,
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      sentAt: "2026-06-10T09:10:00.000Z",
+      customerResponse: "Hi, the reviewed API response is approved.",
+    });
+
+    expect(sentEvent).toMatchObject({
+      action: "customer-response-sent",
+      recommendationId,
+      ticketId: "TKT-1001",
+      after: {
+        sentAt: "2026-06-10T09:10:00.000Z",
+        customerResponse: "Hi, the reviewed API response is approved.",
+      },
+    });
+    expect(harness.audit.events.at(-1)).toEqual(sentEvent);
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+  });
+
+  it("appends a customer reply without updating ticket fields", async () => {
+    const harness = makeHarness();
+    const before = await harness.tickets.get("TKT-1001");
+
+    const replyEvent = await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "API accepted the retry after a delay.",
+      receivedAt: "2026-06-10T09:15:00.000Z",
+      source: "demo-scenario",
+    });
+
+    expect(replyEvent).toMatchObject({
+      action: "customer-reply-received",
+      actor: "Maya Chen",
+      after: {
+        body: expect.stringContaining("API accepted"),
+        source: "demo-scenario",
+      },
+    });
+    expect(harness.audit.events.at(-1)).toEqual(replyEvent);
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+  });
+
+  it("supersedes a pending recommendation and records an audit event", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+
+    const supersededEvent = await harness.service.supersedeRecommendation({
+      recommendationId,
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      supersededAt: "2026-06-10T09:20:00.000Z",
+      reason: "A more current recommendation is required.",
+    });
+
+    expect(supersededEvent).toMatchObject({
+      action: "recommendation-superseded",
+      before: { resolution: "pending" },
+      after: { resolution: "superseded" },
+    });
+    expect(harness.audit.events.at(-1)).toEqual(supersededEvent);
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "superseded",
+    });
+  });
+
+  it("rolls pending recommendation back when supersession audit fails", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    harness.audit.failNext = true;
+
+    await expect(
+      harness.service.supersedeRecommendation({
+        recommendationId,
+        ticketId: "TKT-1001",
+        actor: "Maya Chen",
+        supersededAt: "2026-06-10T09:20:00.000Z",
+        reason: "A more current recommendation is required.",
+      }),
+    ).rejects.toMatchObject({
+      message: "Supersession audit failed; recommendation was compensated.",
+    });
+
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "pending",
+    });
+    expect(harness.audit.events).toHaveLength(1);
+  });
+
   it("rolls approved recommendation back when cancellation audit fails", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));
