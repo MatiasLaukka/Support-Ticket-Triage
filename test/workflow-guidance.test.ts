@@ -164,6 +164,40 @@ function confirmedEngineeringDiagnosisWorkflow(): WorkflowInput {
   };
 }
 
+function diagnosisRecordedWorkflow(): WorkflowInput {
+  const input = diagnosisReadyWorkflow();
+  return {
+    ...input,
+    audits: [
+      audit("recommendation-submitted", "2026-06-10T09:00:00.000Z", {
+        recommendationId,
+      }),
+      ...input.audits,
+      diagnosisAudit({
+        timestamp: "2026-06-10T09:02:00.000Z",
+        confidence: "likely",
+        owner: "support",
+      }),
+    ],
+  };
+}
+
+function verificationWorkflow(): WorkflowInput {
+  const input = confirmedEngineeringDiagnosisWorkflow();
+  return {
+    ...input,
+    audits: [
+      audit("recommendation-submitted", "2026-06-10T09:00:00.000Z", {
+        recommendationId,
+      }),
+      ...input.audits,
+      audit("fix-available", "2026-06-10T09:03:00.000Z", {
+        after: { fix: { status: "available" } },
+      }),
+    ],
+  };
+}
+
 function fixResponsePendingWorkflow(): WorkflowInput {
   const input = confirmedEngineeringDiagnosisWorkflow();
   return {
@@ -297,6 +331,22 @@ describe("buildOperatorGuidance", () => {
       approval: { required: false, fields: [] },
     },
     {
+      name: "verification",
+      input: verificationWorkflow(),
+      stage: "verification",
+      nextAction: "evaluate-ticket",
+      unlocksTool: "evaluate_ticket",
+      approval: { required: false, fields: [] },
+    },
+    {
+      name: "diagnosis-recorded",
+      input: diagnosisRecordedWorkflow(),
+      stage: "diagnosis-recorded",
+      nextAction: "evaluate-ticket",
+      unlocksTool: "evaluate_ticket",
+      approval: { required: false, fields: [] },
+    },
+    {
       name: "diagnosis-ready",
       input: diagnosisReadyWorkflow(),
       stage: "diagnosis-ready",
@@ -349,6 +399,100 @@ describe("buildOperatorGuidance", () => {
     expect(guidance.nextAction).toBe("review-recommendation");
     expect(guidance.unlocksTool).toBe("mark_response_done");
     expect(guidance.approval.required).toBe(true);
+  });
+
+  it.each([
+    ["diagnosis-recorded", diagnosisRecordedWorkflow()],
+    ["verification", verificationWorkflow()],
+  ] as const)("returns safe backend-owned %s transition copy", (stage, input) => {
+    const guidance = buildOperatorGuidance(input);
+    expect(guidance.stage).toBe(stage);
+    expect(guidance.changed).not.toBe("");
+    expect(guidance.reason).not.toBe("");
+    expect(guidance.customerNextStep).not.toBe("");
+    expect(guidance.nextAction).toBe("evaluate-ticket");
+    expect(guidance.approval).toEqual({ required: false, fields: [] });
+    expect(guidance.unlocksTool).toBe("evaluate_ticket");
+    expect(guidance.blockers).toEqual([]);
+  });
+
+  it("orders equal-time diagnosis transitions by audit index", () => {
+    const input = diagnosisRecordedWorkflow();
+    const submitted = audit(
+      "recommendation-submitted",
+      "2026-06-10T09:02:00.000Z",
+      { recommendationId },
+    );
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "likely",
+      owner: "support",
+    });
+    input.recommendations = [
+      recommendation({ createdAt: "2026-06-10T09:02:00.000Z" }),
+    ];
+    input.audits = [sentAudit("2026-06-10T09:01:00.000Z"), submitted, diagnosis];
+    expect(buildOperatorGuidance(input).stage).toBe("diagnosis-recorded");
+
+    input.audits = [sentAudit("2026-06-10T09:01:00.000Z"), diagnosis, submitted];
+    expect(buildOperatorGuidance(input).stage).toBe("waiting-customer");
+  });
+
+  it("orders equal-time fix transitions by audit index", () => {
+    const input = verificationWorkflow();
+    const submitted = audit(
+      "recommendation-submitted",
+      "2026-06-10T09:03:00.000Z",
+      { recommendationId },
+    );
+    const fix = audit("fix-available", "2026-06-10T09:03:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+    input.recommendations = [
+      recommendation({ createdAt: "2026-06-10T09:03:00.000Z" }),
+    ];
+    input.audits = [
+      sentAudit("2026-06-10T09:01:00.000Z"),
+      diagnosisAudit({
+        timestamp: "2026-06-10T09:02:00.000Z",
+        confidence: "confirmed",
+        owner: "engineering",
+      }),
+      submitted,
+      fix,
+    ];
+    expect(buildOperatorGuidance(input).stage).toBe("verification");
+
+    input.audits = [
+      sentAudit("2026-06-10T09:01:00.000Z"),
+      diagnosisAudit({
+        timestamp: "2026-06-10T09:02:00.000Z",
+        confidence: "confirmed",
+        owner: "engineering",
+      }),
+      fix,
+      submitted,
+    ];
+    expect(buildOperatorGuidance(input).stage).toBe("waiting-customer");
+  });
+
+  it.each([
+    ["diagnosis-recorded", diagnosisRecordedWorkflow()],
+    ["verification", verificationWorkflow()],
+  ] as const)("stops the %s transition after a newer recommendation", (_stage, input) => {
+    const newer = recommendation({
+      id: "10000000-0000-4000-8000-000000000099",
+      createdAt: "2026-06-10T09:04:00.000Z",
+    });
+    input.recommendations = [newer];
+    input.audits = [
+      ...input.audits,
+      audit("recommendation-submitted", newer.createdAt, {
+        recommendationId: newer.id,
+      }),
+    ];
+
+    expect(buildOperatorGuidance(input).stage).toBe("active");
   });
 
   it("names exact fields awaiting approval", () => {
@@ -556,7 +700,7 @@ describe("buildOperatorGuidance", () => {
         after: { fix: { status: "available" } },
       }),
     ];
-    expect(buildOperatorGuidance(fixEqual).stage).toBe("fix-ready");
+    expect(buildOperatorGuidance(fixEqual).stage).toBe("verification");
   });
 
   it("uses first-match precedence for resolved and ready-to-close tickets", () => {

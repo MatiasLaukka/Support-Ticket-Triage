@@ -535,6 +535,58 @@ describe("createTriageServer read protocol", () => {
       },
     });
 
+    const diagnosisRecordedFixture = await createFixture();
+    await diagnosisRecordedFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000006",
+        timestamp: "2026-06-10T09:06:00.000Z",
+        actor: "product-support",
+        action: "diagnosis-completed",
+        ticketId: "TKT-1001",
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "likely",
+            owner: "support",
+          },
+        },
+        rationale: "Recorded a support-owned diagnosis.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    const beforeDiagnosisRead = {
+      ticket: await diagnosisRecordedFixture.tickets.get("TKT-1001"),
+      audits: await diagnosisRecordedFixture.audits.list("TKT-1001"),
+      recommendations: await diagnosisRecordedFixture.recommendations.list(),
+    };
+    const diagnosisRecorded = await callTool(
+      await connect(diagnosisRecordedFixture),
+      {
+        name: "get_ticket_workflow",
+        arguments: { id: "TKT-1001" },
+      },
+    );
+    expect(diagnosisRecorded.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "diagnosis-recorded",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+        customerNextStep: expect.any(String),
+      },
+    });
+    await expect(
+      diagnosisRecordedFixture.tickets.get("TKT-1001"),
+    ).resolves.toEqual(beforeDiagnosisRead.ticket);
+    await expect(
+      diagnosisRecordedFixture.audits.list("TKT-1001"),
+    ).resolves.toEqual(beforeDiagnosisRead.audits);
+    await expect(
+      diagnosisRecordedFixture.recommendations.list(),
+    ).resolves.toEqual(beforeDiagnosisRead.recommendations);
+
     const fixFixture = await createFixture();
     await fixFixture.audits.append(
       AuditEventSchema.parse({
@@ -570,6 +622,19 @@ describe("createTriageServer read protocol", () => {
         result: "success",
       }),
     );
+    const verification = await callTool(await connect(fixFixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(verification.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "verification",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+        customerNextStep: expect.any(String),
+      },
+    });
     const approved = await fixFixture.recommendations.get(
       "d61bba15-41f4-495b-a794-93696343cc9d",
     );

@@ -230,8 +230,14 @@ export function buildOperatorGuidance(input: {
     });
   }
 
+  const latestFix = latestFixAudit(input.audits);
+  const hasNewerFix = isAuditNewerThanRecommendation(
+    latestFix,
+    latest,
+    input.audits,
+  );
   const fixingBlockers = fixBlockers({ audits: input.audits });
-  if (fixingBlockers.length === 0) {
+  if (fixingBlockers.length === 0 && !hasNewerFix) {
     return OperatorGuidanceSchema.parse({
       stage: "fix-ready",
       changed: "A confirmed platform-owned diagnosis was recorded.",
@@ -240,6 +246,43 @@ export function buildOperatorGuidance(input: {
       approval: noApproval,
       unlocksTool: "mark_fix_available",
       blockers: [],
+    });
+  }
+
+  if (hasNewerFix) {
+    return OperatorGuidanceSchema.parse({
+      stage: "verification",
+      changed: "A fix was recorded after the latest evaluation.",
+      nextAction: "evaluate-ticket",
+      reason:
+        "The recorded fix must be evaluated before preparing customer verification.",
+      approval: noApproval,
+      unlocksTool: "evaluate_ticket",
+      blockers: [],
+      customerNextStep:
+        "No customer action is required until support sends the reviewed verification request.",
+    });
+  }
+
+  const latestDiagnosis = latestDiagnosisAudit(input.audits);
+  if (
+    isAuditNewerThanRecommendation(
+      latestDiagnosis,
+      latest,
+      input.audits,
+    )
+  ) {
+    return OperatorGuidanceSchema.parse({
+      stage: "diagnosis-recorded",
+      changed: "A diagnosis was recorded after the latest evaluation.",
+      nextAction: "evaluate-ticket",
+      reason:
+        "The recorded diagnosis must be evaluated before preparing the next customer response.",
+      approval: noApproval,
+      unlocksTool: "evaluate_ticket",
+      blockers: [],
+      customerNextStep:
+        "No customer action is required until support sends the reviewed diagnostic update.",
     });
   }
 
@@ -370,8 +413,99 @@ function latestDiagnosisAudit(
     .sort(
       (left, right) =>
         right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
+        right.index - left.index ||
+        right.event.id.localeCompare(left.event.id),
     )[0]?.event;
+}
+
+function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
+  return audits
+    .map((event, index) => ({ event, index }))
+    .filter(
+      ({ event }) =>
+        event.action === "fix-available" &&
+        typeof event.after.fix === "object" &&
+        event.after.fix !== null,
+    )
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index ||
+        right.event.id.localeCompare(left.event.id),
+    )[0]?.event;
+}
+
+function isAuditNewerThanRecommendation(
+  event: AuditEvent | undefined,
+  recommendation: TriageRecommendation | undefined,
+  audits: readonly AuditEvent[],
+): boolean {
+  if (event === undefined) {
+    return false;
+  }
+  if (recommendation === undefined) {
+    return true;
+  }
+  return compareWorkflowPosition(
+    auditPosition(event, audits),
+    recommendationPosition(recommendation, audits),
+  ) > 0;
+}
+
+interface WorkflowPosition {
+  timestamp: string;
+  auditIndex: number;
+  id: string;
+}
+
+function auditPosition(
+  event: AuditEvent,
+  audits: readonly AuditEvent[],
+): WorkflowPosition {
+  return {
+    timestamp: event.timestamp,
+    auditIndex: audits.indexOf(event),
+    id: event.id,
+  };
+}
+
+function recommendationPosition(
+  recommendation: TriageRecommendation,
+  audits: readonly AuditEvent[],
+): WorkflowPosition {
+  const submission = audits
+    .map((event, index) => ({ event, index }))
+    .filter(
+      ({ event }) =>
+        event.action === "recommendation-submitted" &&
+        event.recommendationId === recommendation.id,
+    )
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index ||
+        right.event.id.localeCompare(left.event.id),
+    )[0];
+  return submission === undefined
+    ? {
+        timestamp: recommendation.createdAt,
+        auditIndex: -1,
+        id: recommendation.id,
+      }
+    : {
+        timestamp: submission.event.timestamp,
+        auditIndex: submission.index,
+        id: submission.event.id,
+      };
+}
+
+function compareWorkflowPosition(
+  left: WorkflowPosition,
+  right: WorkflowPosition,
+): number {
+  return left.timestamp.localeCompare(right.timestamp) ||
+    left.auditIndex - right.auditIndex ||
+    left.id.localeCompare(right.id);
 }
 
 function diagnosisFromAudit(

@@ -1397,6 +1397,46 @@ describe("createTriageServer action protocol", () => {
     },
   );
 
+  it("guides evaluation after recording a support-owned diagnosis", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture);
+    await approveAndSend(fixture, recommendation);
+    const client = await connect(fixture);
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+    expect(diagnosis.isError).not.toBe(true);
+    const afterDiagnosis = {
+      ticket: await fixture.tickets.get("TKT-1001"),
+      audits: await fixture.audits.list("TKT-1001"),
+      recommendations: await fixture.recommendations.list(),
+    };
+
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
+
+    expect(workflow.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "diagnosis-recorded",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+      },
+    });
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
+      afterDiagnosis.ticket,
+    );
+    await expect(fixture.audits.list("TKT-1001")).resolves.toEqual(
+      afterDiagnosis.audits,
+    );
+    await expect(fixture.recommendations.list()).resolves.toEqual(
+      afterDiagnosis.recommendations,
+    );
+  });
+
   it("records diagnosis and fix lifecycle events through operator tools", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
@@ -1438,6 +1478,9 @@ describe("createTriageServer action protocol", () => {
       ticketId: "TKT-1001",
       actor: "product-support",
     });
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
 
     expect(diagnosis.isError).not.toBe(true);
     expect(diagnosis.structuredContent).toMatchObject({
@@ -1461,6 +1504,14 @@ describe("createTriageServer action protocol", () => {
             status: "available",
           },
         },
+      },
+    });
+    expect(workflow.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "verification",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
       },
     });
   });
