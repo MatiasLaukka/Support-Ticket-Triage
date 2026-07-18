@@ -402,11 +402,11 @@ export async function draftCustomerResponseWithFallback(input: {
       };
     }
 
-    const providerConfigured = input.provider !== undefined;
+    const openAiCandidate = candidate.source === "openai";
     return fallbackDraft({
       draftInput: input.draftInput,
-      reason: `${providerConfigured ? "Provider" : "Deterministic"} draft rejected: ${validation.blockingMessages.join(" ")}`,
-      fallback: providerConfigured
+      reason: `${openAiCandidate ? "Provider" : "Deterministic"} draft rejected: ${validation.blockingMessages.join(" ")}`,
+      fallback: openAiCandidate
         ? {
             category: "guardrail-rejected",
             message: "OpenAI output did not pass response guardrails; deterministic output was used.",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCustomerResponseDraftProviderFromEnv,
+  DeterministicCustomerResponseDraftProvider,
   draftCustomerResponseWithFallback,
   OpenAiTimeoutError,
   OpenAiCustomerResponseDraftProvider,
@@ -442,9 +443,18 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     }));
   });
 
-  it("does not attribute a rejected deterministic draft to OpenAI when no provider exists", async () => {
-    const result = await draftCustomerResponseWithFallback({
+  it.each([
+    {
+      scenario: "no provider exists",
       provider: undefined,
+    },
+    {
+      scenario: "a supplied local provider returns a deterministic candidate",
+      provider: new DeterministicCustomerResponseDraftProvider(),
+    },
+  ])("does not attribute a rejected deterministic draft to OpenAI when $scenario", async ({ provider }) => {
+    const result = await draftCustomerResponseWithFallback({
+      provider,
       draftInput: {
         ticket,
         outcome,
