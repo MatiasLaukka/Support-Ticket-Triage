@@ -1298,13 +1298,10 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
   });
   const multipleUsers = affirmativeMultiUserReproduction(value);
   const chunkLoadError = /\bchunkloaderror\b/i;
-  const isolationSubject = String.raw`(?:${privateWindowExpression.source}|${alternateBrowser.source}|another admin|other admin|additional admin)`;
-  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
-  const successfulResult = String.raw`(?:works?|loads?|loaded|working|is\s+working|not\s+blank)`;
-  const successfulIsolation = new RegExp(
-    String.raw`\b${editorSubject}\b[^.!?\n]{0,40}\b${successfulResult}\b[^.!?\n]{0,64}\b${isolationSubject}\b|\b${isolationSubject}\b[^.!?\n]{0,64}\b${editorSubject}\b[^.!?\n]{0,40}\b${successfulResult}\b`,
-    "i",
-  );
+  const successfulIsolation = hasSuccessfulEditorIsolation(value, {
+    privateWindowExpression,
+    alternateBrowser,
+  });
   const negatedChunkLoadError =
     /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
 
@@ -1313,8 +1310,33 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
     anotherBrowser &&
     multipleUsers &&
     chunkLoadError.test(value) &&
-    !successfulIsolation.test(value) &&
+    !successfulIsolation &&
     !negatedChunkLoadError.test(value);
+}
+
+function hasSuccessfulEditorIsolation(
+  value: string,
+  input: { privateWindowExpression: RegExp; alternateBrowser: RegExp },
+): boolean {
+  const isolationSubject = new RegExp(
+    String.raw`\b(?:${input.privateWindowExpression.source}|${input.alternateBrowser.source}|another admin|other admin|additional admin)\b`,
+    "i",
+  );
+  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
+  const successfulResult = String.raw`(?:works?|working|is\s+working|(?:loads?|loaded)\s+(?:normally|successfully)|is\s+not\s+blank)`;
+  const editorSuccess = new RegExp(
+    String.raw`\b${editorSubject}\b[^.!?;:\n]{0,40}\b${successfulResult}\b|\b${successfulResult}\b[^.!?;:\n]{0,40}\b${editorSubject}\b`,
+    "i",
+  );
+  const contradictoryFailure =
+    /\b(?:blank|not loading|won't load|does not load|doesn't load|stayed blank|remained blank|fails? to load|failure)\b/i;
+
+  return sentenceClauses(value).some(
+    (clause) =>
+      isolationSubject.test(clause) &&
+      editorSuccess.test(clause) &&
+      !contradictoryFailure.test(clause),
+  );
 }
 
 function affirmativeReproduction(
@@ -1348,21 +1370,23 @@ function affirmativeMultiUserReproduction(value: string): boolean {
   if (negatedAdminAttempt.test(value)) return false;
 
   const allUsersFailure =
-    /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b.{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b.{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b.{0,32}\b(?:all|both)\s+of\s+us\b/i;
-  const adminAttempt = new RegExp(
-    String.raw`\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:tried|tested|used|opened|checked|reproduced)\b|\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result))\b|\b(?:blank|not loading|fails? to load|same (?:issue|result))\b[^.!?\n]{0,48}\b(?:${adminSubject})\b`,
+    /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b[^.!?;:\n]{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b[^.!?;:\n]{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b[^.!?;:\n]{0,32}\b(?:all|both)\s+of\s+us\b/i;
+  const completedAdminAttempt = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:tried|tested|used|opened|checked|reproduced)\b`,
     "i",
   );
-  return evidenceClauses(value).some(
-    (clause) => allUsersFailure.test(clause) || adminAttempt.test(clause),
+  const explicitAdminResult = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:reported|saw|found|got)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
+    "i",
   );
+  return allUsersFailure.test(value) ||
+    completedAdminAttempt.test(value) ||
+    explicitAdminResult.test(value);
 }
 
-function evidenceClauses(value: string): string[] {
+function sentenceClauses(value: string): string[] {
   return value
-    .split(
-      /[.!?;:\n]+|,\s*(?:but|and)\s+|\s+but\s+|\s+and\s+(?=(?:I|we|the requester)\b)/i,
-    )
+    .split(/[.!?;:\n]+/)
     .map((clause) => clause.trim())
     .filter((clause) => clause !== "");
 }
