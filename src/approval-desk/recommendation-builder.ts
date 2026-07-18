@@ -1425,13 +1425,13 @@ function hasDirectAdminFailure(value: string): boolean {
     String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:reported|saw|found|got|experienced)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
     "i",
   );
-  return evidenceClauses(value).some(
-    (clause) =>
-      !negatedAdminAttempt.test(clause) &&
-      (reproducedFailure.test(clause) ||
-        testedAndObservedFailure.test(clause) ||
-        explicitAdminResult.test(clause)),
-  );
+  return evidenceClauses(value).some((clause) => {
+    const failureClause = withoutNegatedBlankResults(clause);
+    return !negatedAdminAttempt.test(failureClause) &&
+      (reproducedFailure.test(failureClause) ||
+        testedAndObservedFailure.test(failureClause) ||
+        explicitAdminResult.test(failureClause));
+  });
 }
 
 function evidenceClauses(value: string): string[] {
