@@ -5,6 +5,8 @@ import {
   type ClassificationSignal,
   type EvidenceRequirement,
   type KnowledgeArticle,
+  type AiExecutionTrace,
+  type AiPreference,
   type DraftCustomerResponseStyleInput,
   PrioritySchema,
   RequiredEscalationSchema,
@@ -246,6 +248,8 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   advisoryClassificationSignals?: readonly ClassificationSignal[];
   diagnosisContext?: DiagnosisContext;
   fixContext?: FixContext;
+  aiPreference?: AiPreference;
+  classificationTrace?: AiExecutionTrace["classification"];
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const providerOutcome = input.outcome ?? {
@@ -293,6 +297,21 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     },
   });
 
+  const draftingTrace: AiExecutionTrace["drafting"] = {
+    status: draft.source === "openai"
+      ? "used"
+      : draft.source === "fallback"
+        ? "fallback"
+        : "skipped",
+    source: draft.source,
+    ...(draft.telemetry ?? {}),
+    ...(draft.fallback === undefined ? {} : { fallback: draft.fallback }),
+    requestedStyle: input.responseStyle ?? "auto",
+    recommendedStyle: draft.assist.recommendedTone,
+    selectedStyle: draft.assist.selectedTone,
+    checks: draft.candidateChecks,
+  };
+
   return {
     ...base,
     draftCustomerResponse: draft.response,
@@ -300,6 +319,15 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     draftCustomerResponseStyle: draft.assist.selectedTone,
     draftCustomerResponseChecks: draft.checks,
     gptAssist: draft.assist,
+    ...(input.classificationTrace === undefined
+      ? {}
+      : {
+          aiExecutionTrace: {
+            preference: input.aiPreference ?? "auto",
+            classification: input.classificationTrace,
+            drafting: draftingTrace,
+          },
+        }),
   };
 }
 
