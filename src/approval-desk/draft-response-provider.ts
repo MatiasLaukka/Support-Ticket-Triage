@@ -430,19 +430,41 @@ function fallbackDraft(input: {
     "fallback",
     [],
   );
-  const validation = validateCustomerResponseDraft({
-    response: ensureDraftSignOff(
-      input.draftInput.deterministicDraft,
-      input.draftInput,
-    ),
+  const responseStyle = resolvedResponseStyle(input.draftInput, fallbackAssist);
+  let response = ensureDraftSignOff(
+    input.draftInput.deterministicDraft,
+    input.draftInput,
+  );
+  const quality = validateDraftQuality({
+    response,
+    style: responseStyle,
+    evidenceReadiness: input.draftInput.evidenceReadiness,
+    diagnosisContext: input.draftInput.diagnosisContext,
+    fixContext: input.draftInput.fixContext,
+  });
+  let validation = validateCustomerResponseDraft({
+    response,
     assist: fallbackAssist,
-    responseStyle: resolvedResponseStyle(input.draftInput, fallbackAssist),
+    responseStyle,
     knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
     evidenceReadiness: input.draftInput.evidenceReadiness,
     conversationContext: input.draftInput.conversationContext,
     diagnosisContext: input.draftInput.diagnosisContext,
     fixContext: input.draftInput.fixContext,
   });
+  if (quality.blockingMessages.length > 0) {
+    response = boundedSafetyFallbackResponse();
+    validation = validateCustomerResponseDraft({
+      response,
+      assist: fallbackAssist,
+      responseStyle,
+      knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
+      evidenceReadiness: input.draftInput.evidenceReadiness,
+      conversationContext: input.draftInput.conversationContext,
+      diagnosisContext: input.draftInput.diagnosisContext,
+      fixContext: input.draftInput.fixContext,
+    });
+  }
   const checks: DraftCustomerResponseCheck[] = [
     {
       id: "fallback-used",
@@ -456,10 +478,7 @@ function fallbackDraft(input: {
   ];
   return {
     source: "fallback",
-    response: ensureDraftSignOff(
-      input.draftInput.deterministicDraft,
-      input.draftInput,
-    ),
+    response,
     checks,
     assist: {
       ...fallbackAssist,
@@ -468,6 +487,10 @@ function fallbackDraft(input: {
     fallback: input.fallback,
     candidateChecks: input.candidateChecks ?? [],
   };
+}
+
+function boundedSafetyFallbackResponse(): string {
+  return `Thank you for your patience. Our support team is reviewing the issue and will provide the next update as soon as possible.\n\n${formatDraftSignOff({})}`;
 }
 
 export class UnavailableOpenAiError extends Error {

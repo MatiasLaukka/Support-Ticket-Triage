@@ -99,7 +99,14 @@ function extractInformationRequests(response: string): string[] {
     pattern.lastIndex = 0;
     for (const match of response.matchAll(pattern)) {
       const request = match[1]?.trim();
-      if (request !== undefined && isCustomerInformationRequest(request, match[0])) {
+      const context = response.slice(
+        Math.max(0, (match.index ?? 0) - 32),
+        (match.index ?? 0) + match[0].length,
+      );
+      if (
+        request !== undefined &&
+        isCustomerInformationRequest(request, match[0], context)
+      ) {
         requests.push(request);
       }
     }
@@ -107,8 +114,22 @@ function extractInformationRequests(response: string): string[] {
   return requests;
 }
 
-function isCustomerInformationRequest(request: string, phrase: string): boolean {
-  if (/^to\s+(?:investigate|review|check|look into|compare|work on)\b/i.test(request)) {
+function isCustomerInformationRequest(
+  request: string,
+  phrase: string,
+  context: string,
+): boolean {
+  const supportOwnedAction =
+    "(?:confirm|verify|test|investigate|review|check|look into|compare|work on)";
+  if (new RegExp(`^to\\s+${supportOwnedAction}\\b`, "i").test(request)) {
+    return false;
+  }
+  if (
+    new RegExp(
+      `\\b(?:we|i|our team)\\s+(?:need|will|can|should)\\s+to\\s+${supportOwnedAction}\\b`,
+      "i",
+    ).test(context)
+  ) {
     return false;
   }
   return !/\b(?:we|i|our team)\s+(?:will|can|should)\s+confirm whether\b/i.test(

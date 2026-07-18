@@ -6,6 +6,7 @@ import {
   OpenAiCustomerResponseDraftProvider,
   UnavailableOpenAiError,
 } from "../src/approval-desk/draft-response-provider.js";
+import { validateDraftQuality } from "../src/approval-desk/draft-quality-guardrails.js";
 import type { ExpectedOutcome, KnowledgeArticle, Ticket } from "../src/domain.js";
 
 describe("OpenAiCustomerResponseDraftProvider", () => {
@@ -439,6 +440,46 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       id: "style-word-limit",
       status: "fail",
     }));
+  });
+
+  it.each([
+    ["an over-limit response", Array.from({ length: 141 }, () => "word").join(" "), "concise"],
+    ["a sensitive request", "Please share your billing account number.", "balanced"],
+  ] as const)("replaces an invalid deterministic fallback containing %s", async (_case, deterministicDraft, responseStyle) => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: { draft: async () => { throw new Error("provider unavailable"); } },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft,
+        responseStyle,
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result.source).toBe("fallback");
+    expect(result.response).not.toContain(deterministicDraft);
+    expect(validateDraftQuality({ response: result.response, style: responseStyle }).blockingMessages).toEqual([]);
+  });
+
+  it("preserves a valid deterministic fallback exactly", async () => {
+    const deterministicDraft = "We are reviewing the issue and will provide an update.\n\nKind regards,\nSupport Team\nNorthstar Marketing Support";
+    const result = await draftCustomerResponseWithFallback({
+      provider: { draft: async () => { throw new Error("provider unavailable"); } },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft,
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result.response).toBe(deterministicDraft);
   });
 });
 
