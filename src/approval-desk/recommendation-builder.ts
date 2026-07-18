@@ -997,12 +997,17 @@ function analyzeCustomerReplyLifecycle(input: {
     };
   }
 
-  if (
-    hasPlatformFixContext(replyText) ||
-    hasCampaignEditorPlatformFixContext(replyText)
-  ) {
+  if (hasPlatformFixContext(replyText)) {
     return {
       evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
+      replyStage: "all-evidence",
+      recognizedEvidenceProgress: true,
+    };
+  }
+
+  if (hasCampaignEditorPlatformFixContext(replyText)) {
+    return {
+      evidenceReadiness: campaignEditorFixEvidenceReadiness(evidenceReadiness),
       replyStage: "all-evidence",
       recognizedEvidenceProgress: true,
     };
@@ -1200,14 +1205,73 @@ function hasPlatformFixContext(value: string): boolean {
     /\b(?:api accepted|accepted by the api|platform|incident|processing)\b/i.test(value);
 }
 
+function campaignEditorFixEvidenceReadiness(
+  evidenceReadiness: EvidenceReadiness,
+): EvidenceReadiness {
+  const requiredEvidence: EvidenceRequirement[] = [
+    {
+      id: "campaign-editor-failure",
+      label: "Campaign editor loading failure",
+      customerQuestion: "campaign editor loading result",
+      aliases: ["blank campaign editor", "campaign editor not loading"],
+      source: "policy",
+    },
+    {
+      id: "private-window-reproduction",
+      label: "Private-window reproduction",
+      customerQuestion: "private or incognito window result",
+      aliases: ["private window", "incognito window"],
+      source: "policy",
+    },
+    {
+      id: "alternate-browser-reproduction",
+      label: "Alternate-browser reproduction",
+      customerQuestion: "alternate browser result",
+      aliases: ["different browser", "Microsoft Edge"],
+      source: "policy",
+    },
+    {
+      id: "multi-user-reproduction",
+      label: "Multiple-admin reproduction",
+      customerQuestion: "another admin or affected-user result",
+      aliases: ["another admin", "all users"],
+      source: "policy",
+    },
+    {
+      id: "chunk-load-error",
+      label: "Frontend ChunkLoadError",
+      customerQuestion: "browser console ChunkLoadError",
+      aliases: ["ChunkLoadError", "frontend bundle loading error"],
+      source: "policy",
+    },
+  ];
+
+  return {
+    ...evidenceReadiness,
+    supportState: "waiting-on-platform-fix",
+    knownCause: null,
+    requiredEvidence,
+    providedEvidence: requiredEvidence,
+    missingEvidence: [],
+    nextInvestigationSteps: [
+      "Correlate the campaign editor ChunkLoadError with the frontend bundle and affected campaign.",
+      "Confirm browser-session, cross-browser, and multiple-admin reproduction before engineering mitigation.",
+    ],
+  };
+}
+
 function hasCampaignEditorPlatformFixContext(value: string): boolean {
   const campaignEditorFailure =
     /\b(?:campaign(?:\s+|-)?editor|editor)\b.{0,80}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b|\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b.{0,80}\b(?:campaign(?:\s+|-)?editor|editor)\b/i;
-  const privateWindow = /\b(?:private|incognito)\b/i;
-  const anotherBrowser =
-    /\b(?:another browser|different browser|microsoft edge|edge|firefox|safari)\b/i;
-  const multipleUsers =
-    /\b(?:another|other|additional)\s+admins?\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|both)\s+of\s+us\b/i;
+  const privateWindow = affirmativeReproduction(value, {
+    subject: /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?)/i,
+    result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
+  });
+  const anotherBrowser = affirmativeReproduction(value, {
+    subject: /(?:another browser|different browser|microsoft edge|edge|firefox|safari)/i,
+    result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
+  });
+  const multipleUsers = affirmativeMultiUserReproduction(value);
   const chunkLoadError = /\bchunkloaderror\b/i;
   const successfulIsolation =
     /\b(?:works?|loads?|opens?|loaded|opened|working|not blank)\b.{0,64}\b(?:private|incognito|another browser|different browser|microsoft edge|edge|firefox|safari|another admin|other admin|additional admin)\b|\b(?:private|incognito|another browser|different browser|microsoft edge|edge|firefox|safari|another admin|other admin|additional admin)\b.{0,64}\b(?:works?|loads?|loaded|opened|is working|not blank)\b/i;
@@ -1215,12 +1279,50 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
     /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
 
   return campaignEditorFailure.test(value) &&
-    privateWindow.test(value) &&
-    anotherBrowser.test(value) &&
-    multipleUsers.test(value) &&
+    privateWindow &&
+    anotherBrowser &&
+    multipleUsers &&
     chunkLoadError.test(value) &&
     !successfulIsolation.test(value) &&
     !negatedChunkLoadError.test(value);
+}
+
+function affirmativeReproduction(
+  value: string,
+  input: { subject: RegExp; result: RegExp },
+): boolean {
+  const subject = input.subject.source;
+  const result = input.result.source;
+  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|without)`;
+  const attempt = String.raw`(?:try|tried|test|tested|use|used|open|opened|check|checked|reproduce|reproduced)`;
+  const negatedAttempt = new RegExp(
+    String.raw`\b${negation}\b.{0,32}\b(?:${attempt})?\b.{0,24}\b(?:${subject})\b|\b(?:${subject})\b.{0,32}\b${negation}\b.{0,20}\b(?:${attempt})?\b`,
+    "i",
+  );
+  if (negatedAttempt.test(value)) return false;
+
+  return new RegExp(
+    String.raw`\b(?:${attempt}|${result})\b.{0,64}\b(?:${subject})\b|\b(?:${subject})\b.{0,64}\b(?:${attempt}|${result})\b`,
+    "i",
+  ).test(value);
+}
+
+function affirmativeMultiUserReproduction(value: string): boolean {
+  const adminSubject = String.raw`(?:another|other|additional)\s+admins?`;
+  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|have\s+not|has\s+not|had\s+not|did\s+not)`;
+  const negatedAdminAttempt = new RegExp(
+    String.raw`\b(?:${adminSubject})\b.{0,32}\b${negation}\b.{0,20}\b(?:try|tried|test|tested|open|opened|check|checked)?\b|\b${negation}\b.{0,32}\b(?:try|tried|test|tested|open|opened|check|checked)?\b.{0,24}\b(?:${adminSubject})\b`,
+    "i",
+  );
+  if (negatedAdminAttempt.test(value)) return false;
+
+  const allUsersFailure =
+    /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b.{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b.{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b.{0,32}\b(?:all|both)\s+of\s+us\b/i;
+  const adminAttempt = new RegExp(
+    String.raw`\b(?:ask|asked|try|tried|test|tested|open|opened|check|checked|reproduce|reproduced)\b.{0,48}\b(?:${adminSubject})\b|\b(?:${adminSubject})\b.{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result)|reproduced)\b`,
+    "i",
+  );
+  return allUsersFailure.test(value) || adminAttempt.test(value);
 }
 
 function supportResponseIndicatesPlatformFix(value: string): boolean {

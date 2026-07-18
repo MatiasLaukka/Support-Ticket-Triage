@@ -1060,10 +1060,11 @@ describe("Approval Desk recommendation builder", () => {
     );
     const ticket = await loadSeedTicket("TKT-1010");
 
-    const input = buildApprovalDeskRecommendationInput({
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
       ticket,
       outcome: outcomes.get("TKT-1010")!,
       actor: "approval-desk",
+      knowledgeArticles: [],
       customerReplies: [
         {
           id: "reply-campaign-editor-platform-evidence",
@@ -1080,6 +1081,24 @@ describe("Approval Desk recommendation builder", () => {
       "frontend loading issue",
     );
     expect(input.draftCustomerResponse).not.toContain("event processing");
+    expect(input.nextInvestigationSteps).toEqual([
+      expect.stringMatching(/frontend|ChunkLoadError/i),
+      expect.stringMatching(/browser|session|admin/i),
+    ]);
+    expect(input.gptAssist?.investigationSteps).toEqual(
+      input.nextInvestigationSteps,
+    );
+    const customerSafeContext = JSON.stringify({
+      draftCustomerResponse: input.draftCustomerResponse,
+      nextInvestigationSteps: input.nextInvestigationSteps,
+      gptAssist: input.gptAssist,
+      requiredEvidence: input.requiredEvidence?.map(({ id }) => id),
+      providedEvidence: input.providedEvidence?.map(({ id }) => id),
+      missingEvidence: input.missingEvidence?.map(({ id }) => id),
+    });
+    expect(customerSafeContext).not.toMatch(
+      /event processing|event timing|event.ingestion|ingestion delay|profile (?:activity )?timeline|platform processing/i,
+    );
   });
 
   it("accepts explicit all-user impact as the multi-user evidence dimension", async () => {
@@ -1184,6 +1203,58 @@ describe("Approval Desk recommendation builder", () => {
         customerReplies: [
           {
             id: "reply-negated-campaign-editor-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it.each([
+    {
+      evidenceGap: "all isolation checks are explicitly unattempted",
+      body:
+        "We have not tested private mode or Microsoft Edge yet. Another admin has not tried it. The campaign editor is still blank for all users. The console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "private describes the campaign instead of an isolation attempt",
+      body:
+        "The private campaign editor is still blank for all users and the console shows ChunkLoadError. Another admin reproduced it, but we did not use Microsoft Edge or another browser.",
+    },
+    {
+      evidenceGap: "private-window testing is negated",
+      body:
+        "We have not tried a private or incognito window. Microsoft Edge and another admin show the same blank campaign editor with ChunkLoadError.",
+    },
+    {
+      evidenceGap: "alternate-browser testing is negated",
+      body:
+        "The campaign editor is blank in a private window for another admin and shows ChunkLoadError, but we have not tried Edge or a different browser.",
+    },
+    {
+      evidenceGap: "another-admin testing is negated",
+      body:
+        "The campaign editor is still blank for me in a private window and Microsoft Edge with ChunkLoadError. Another admin has not tried it yet.",
+    },
+  ])(
+    "does not promote when $evidenceGap",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-adversarial-campaign-editor-evidence",
             ticketId: "TKT-1010",
             createdAt: "2026-06-10T09:50:00.000Z",
             body,
