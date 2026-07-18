@@ -1149,6 +1149,30 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.supportState).toBe("waiting-on-platform-fix");
   });
 
+  it("keeps valid completed reproduction when edge case is unrelated browser wording", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-valid-with-unrelated-edge-case",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I tried a private window and Microsoft Edge, and another admin reproduced the same blank campaign editor with ChunkLoadError. We need a mitigation that works for this edge case.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
   it.each([
     {
       turn: "status follow-up",
@@ -1352,6 +1376,21 @@ describe("Approval Desk recommendation builder", () => {
       evidenceGap: "another-admin testing is only instructed",
       body:
         "The campaign editor is blank in a private window and Microsoft Edge with ChunkLoadError. Please ask another admin to try it.",
+    },
+    {
+      evidenceGap: "private and browser checks are merely possible",
+      body:
+        "We can try a private window and Microsoft Edge tomorrow. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "private and browser checks are going to happen later",
+      body:
+        "We are going to try a private window and Microsoft Edge tomorrow. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "private and browser checks are only instructed by support",
+      body:
+        "Support asked us to try a private window and Microsoft Edge. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
     },
   ])(
     "does not promote when $evidenceGap",

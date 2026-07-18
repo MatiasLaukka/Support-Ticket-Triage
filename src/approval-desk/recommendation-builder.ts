@@ -1282,6 +1282,8 @@ function campaignEditorFixEvidenceReadiness(
 }
 
 function hasCampaignEditorPlatformFixContext(value: string): boolean {
+  const alternateBrowser =
+    /(?:another browser|different browser|microsoft edge|edge browser|firefox|safari)/i;
   const campaignEditorFailure =
     /\b(?:campaign(?:\s+|-)?editor|editor)\b.{0,80}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b|\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b.{0,80}\b(?:campaign(?:\s+|-)?editor|editor)\b/i;
   const privateWindow = affirmativeReproduction(value, {
@@ -1289,13 +1291,16 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
     result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
   });
   const anotherBrowser = affirmativeReproduction(value, {
-    subject: /(?:another browser|different browser|microsoft edge|edge browser|firefox|safari)/i,
+    subject: alternateBrowser,
     result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
   });
   const multipleUsers = affirmativeMultiUserReproduction(value);
   const chunkLoadError = /\bchunkloaderror\b/i;
-  const successfulIsolation =
-    /\b(?:works?|loads?|opens?|loaded|opened|working|not blank)\b.{0,64}\b(?:private|incognito|another browser|different browser|microsoft edge|edge|firefox|safari|another admin|other admin|additional admin)\b|\b(?:private|incognito|another browser|different browser|microsoft edge|edge|firefox|safari|another admin|other admin|additional admin)\b.{0,64}\b(?:works?|loads?|loaded|opened|is working|not blank)\b/i;
+  const isolationSubject = String.raw`(?:private|incognito|${alternateBrowser.source}|another admin|other admin|additional admin)`;
+  const successfulIsolation = new RegExp(
+    String.raw`\b(?:works?|loads?|opens?|loaded|opened|working|not blank)\b.{0,64}\b${isolationSubject}\b|\b${isolationSubject}\b.{0,64}\b(?:works?|loads?|loaded|opened|is working|not blank)\b`,
+    "i",
+  );
   const negatedChunkLoadError =
     /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
 
@@ -1316,19 +1321,15 @@ function affirmativeReproduction(
   const result = input.result.source;
   const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|without)`;
   const attempt = String.raw`(?:try|tried|test|tested|use|used|open|opened|check|checked|reproduce|reproduced)`;
+  const completedAttempt = String.raw`(?:tried|tested|used|opened|checked|reproduced)`;
   const negatedAttempt = new RegExp(
     String.raw`\b${negation}\b.{0,32}\b(?:${attempt})?\b.{0,24}\b(?:${subject})\b|\b(?:${subject})\b.{0,32}\b${negation}\b.{0,20}\b(?:${attempt})?\b`,
     "i",
   );
   if (negatedAttempt.test(value)) return false;
-  const incompleteAttempt = new RegExp(
-    String.raw`\b(?:will|would|should|could|may|might|plan(?:s|ned)?\s+to|please)\b.{0,24}\b(?:${attempt})\b.{0,24}\b(?:${subject})\b|\b(?:${subject})\b.{0,32}\b(?:will|would|should|could|may|might)\b.{0,20}\b(?:${attempt})\b`,
-    "i",
-  );
-  if (incompleteAttempt.test(value)) return false;
 
   return new RegExp(
-    String.raw`\b(?:${attempt}|${result})\b.{0,64}\b(?:${subject})\b|\b(?:${subject})\b.{0,64}\b(?:${attempt}|${result})\b`,
+    String.raw`\b(?:${completedAttempt})\b.{0,64}\b(?:${subject})\b|\b(?:${subject})\b.{0,64}\b(?:${completedAttempt})\b|\b(?:${result})\b[^.!?\n]{0,64}\b(?:${subject})\b|\b(?:${subject})\b[^.!?\n]{0,64}\b(?:${result})\b`,
     "i",
   ).test(value);
 }
@@ -1341,16 +1342,11 @@ function affirmativeMultiUserReproduction(value: string): boolean {
     "i",
   );
   if (negatedAdminAttempt.test(value)) return false;
-  const incompleteAdminAttempt = new RegExp(
-    String.raw`\b(?:will|would|should|could|may|might|plan(?:s|ned)?\s+to|please)\b.{0,24}\b(?:ask|try|test|open|check)\b.{0,24}\b(?:${adminSubject})\b|\b(?:${adminSubject})\b.{0,32}\b(?:will|would|should|could|may|might)\b.{0,20}\b(?:try|test|open|check)\b`,
-    "i",
-  );
-  if (incompleteAdminAttempt.test(value)) return false;
 
   const allUsersFailure =
     /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b.{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b.{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b.{0,32}\b(?:all|both)\s+of\s+us\b/i;
   const adminAttempt = new RegExp(
-    String.raw`\b(?:ask|asked|try|tried|test|tested|open|opened|check|checked|reproduce|reproduced)\b.{0,48}\b(?:${adminSubject})\b|\b(?:${adminSubject})\b.{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result)|reproduced)\b`,
+    String.raw`\b(?:asked|tried|tested|opened|checked|reproduced)\b.{0,48}\b(?:${adminSubject})\b|\b(?:${adminSubject})\b.{0,48}\b(?:tried|tested|opened|checked|reproduced)\b|\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result))\b|\b(?:blank|not loading|fails? to load|same (?:issue|result))\b[^.!?\n]{0,48}\b(?:${adminSubject})\b`,
     "i",
   );
   return allUsersFailure.test(value) || adminAttempt.test(value);
