@@ -1381,6 +1381,104 @@ describe("Approval Desk recommendation builder", () => {
 
   it.each([
     {
+      result: "is not blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "was not blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "isn't blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "wasn't blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "is not blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+    {
+      result: "was not blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+    {
+      result: "isn't blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+    {
+      result: "wasn't blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+  ])(
+    "treats '$result' as explicit editor success with $evidenceVariant evidence",
+    async ({ result, resultSuffix, multiUserEvidence }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-negated-blank-success",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body:
+              `I tested a private window and Microsoft Edge. The campaign editor ${result} in either the private window or Microsoft Edge${resultSuffix}. ${multiUserEvidence} The console showed ChunkLoadError.`,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it("still promotes a true was-blank result with complete evidence", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-affirmative-was-blank",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I tested a private window and Microsoft Edge. The campaign editor was blank in both the private window and Microsoft Edge for all users. The console showed ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it.each([
+    {
       turn: "status follow-up",
       body: "Any update on when this will be fixed?",
     },

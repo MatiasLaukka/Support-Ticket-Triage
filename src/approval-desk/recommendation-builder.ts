@@ -1282,6 +1282,7 @@ function campaignEditorFixEvidenceReadiness(
 }
 
 function hasCampaignEditorPlatformFixContext(value: string): boolean {
+  const failureEvidenceValue = withoutNegatedBlankResults(value);
   const privateWindowExpression =
     /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?)/i;
   const alternateBrowser =
@@ -1297,7 +1298,7 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
   const negatedChunkLoadError =
     /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
 
-  return campaignEditorFailure.test(value) &&
+  return campaignEditorFailure.test(failureEvidenceValue) &&
     privateWindow.completedAttempt &&
     anotherBrowser.completedAttempt &&
     (privateWindow.explicitFailure || allUsersFailure) &&
@@ -1365,16 +1366,23 @@ function hasExplicitEditorFailure(value: string): boolean {
   return new RegExp(
     String.raw`\b${editorSubject}\b[^.!?;:\n]{0,48}\b${failure}\b|\b${failure}\b[^.!?;:\n]{0,48}\b${editorSubject}\b`,
     "i",
-  ).test(value);
+  ).test(withoutNegatedBlankResults(value));
 }
 
 function hasExplicitEditorSuccess(value: string): boolean {
   const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
-  const success = String.raw`(?:works?|working|is\s+working|(?:loads?|loaded)\s+(?:normally|successfully)|is\s+not\s+blank)`;
+  const success = String.raw`(?:works?|working|is\s+working|(?:loads?|loaded)\s+(?:normally|successfully)|(?:(?:is|was)\s+not|isn['’]?t|wasn['’]?t)\s+blank)`;
   return new RegExp(
     String.raw`\b${editorSubject}\b[^.!?;:\n]{0,48}\b${success}\b|\b${success}\b[^.!?;:\n]{0,48}\b${editorSubject}\b`,
     "i",
   ).test(value);
+}
+
+function withoutNegatedBlankResults(value: string): string {
+  return value.replace(
+    /\b(?:(?:is|was)\s+not|isn['’]?t|wasn['’]?t)\s+blank\b/gi,
+    "is available",
+  );
 }
 
 function hasDirectAllUserFailure(value: string): boolean {
@@ -1390,8 +1398,11 @@ function hasDirectAllUserFailure(value: string): boolean {
   );
 
   return evidenceClauses(value).some(
-    (clause) =>
-      resultOwnedByAudience.test(clause) || audienceReportsResult.test(clause),
+    (clause) => {
+      const failureClause = withoutNegatedBlankResults(clause);
+      return resultOwnedByAudience.test(failureClause) ||
+        audienceReportsResult.test(failureClause);
+    },
   );
 }
 
