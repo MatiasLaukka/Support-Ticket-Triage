@@ -163,8 +163,24 @@ const SanitizedAiMessageSchema = NonBlankStringSchema
   .max(240)
   .refine(
     (message) =>
-      !/sk-[A-Za-z0-9_-]+|(?:[A-Za-z]:\\|\/home\/|\/Users\/)|authorization|bearer\s+/i.test(message),
+      !/^\s*[{\[]|sk-[A-Za-z0-9_-]+|\b(?:api[-_]?key|access[-_]?token|secret|token)\s*[=:]\s*\S+|authorization|bearer\s+|(?:[A-Za-z]:[\\/]|(?:^|[\s"'`(])(?:~[\\/]|\.{1,2}[\\/]|[\\/]{2}[^\\/\s]+[\\/]|\/(?:home|users|var|etc|tmp)\/))|traceback|stack\s*trace|\bat\s+.+\(.+:\d+:\d+\)|\b(?:system|developer|user)\s+(?:prompt|message|instructions?)\s*:|\b(?:openai|anthropic|provider)\s+(?:error|response|payload)(?:\s+(?:response|payload|body))?\s*:/i.test(message),
     "AI trace messages must not contain credentials or machine paths.",
+  );
+
+const AiModelSchema = z
+  .string()
+  .max(120)
+  .regex(
+    /^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/,
+    "AI model identifiers must contain only identifier characters.",
+  );
+
+const AiTraceTargetSchema = z
+  .string()
+  .max(120)
+  .regex(
+    /^[a-z][a-z0-9-]*(?::[A-Za-z][A-Za-z0-9-]*)+$/,
+    "AI trace targets must be colon-delimited identifiers.",
   );
 
 export const AiUsageSchema = z.object({
@@ -178,7 +194,7 @@ export const AiUsageSchema = z.object({
 
 export const AiGuardrailCheckSchema = z.object({
   id: SlugSchema,
-  label: NonBlankStringSchema,
+  label: SanitizedAiMessageSchema,
   status: z.enum(["pass", "warn", "fail"]),
   message: SanitizedAiMessageSchema,
 }).strict();
@@ -189,13 +205,20 @@ const AiFallbackSchema = z.object({
 }).strict();
 
 const AiClassificationCandidateSchema = z.object({
-  issueType: NonBlankStringSchema,
+  issueType: SlugSchema,
   category: CategorySchema.optional(),
   team: TeamSchema.optional(),
   priority: PrioritySchema.optional(),
   knowledgeArticleIds: z.array(SlugSchema),
   confidence: z.number().min(0).max(1),
   explanation: SanitizedAiMessageSchema,
+}).strict();
+
+const AiClassificationSignalSchema = z.object({
+  ruleId: SlugSchema,
+  target: AiTraceTargetSchema,
+  weight: z.number(),
+  reason: SanitizedAiMessageSchema,
 }).strict();
 
 const AiFinalClassificationSchema = z.object({
@@ -211,14 +234,14 @@ export const AiExecutionTraceSchema = z.object({
   preference: AiPreferenceSchema,
   classification: z.object({
     status: z.enum(["skipped", "used", "fallback"]),
-    model: NonBlankStringSchema.optional(),
+    model: AiModelSchema.optional(),
     latencyMs: z.number().int().nonnegative().optional(),
     usage: AiUsageSchema.optional(),
     fallback: AiFallbackSchema.optional(),
     candidate: AiClassificationCandidateSchema.optional(),
-    acceptedSignals: z.array(ClassificationSignalSchema),
+    acceptedSignals: z.array(AiClassificationSignalSchema),
     rejectedAdvice: z.array(z.object({
-      target: NonBlankStringSchema,
+      target: AiTraceTargetSchema,
       reason: SanitizedAiMessageSchema,
     }).strict()),
     deterministicOverrides: z.array(SanitizedAiMessageSchema),
@@ -227,7 +250,7 @@ export const AiExecutionTraceSchema = z.object({
   drafting: z.object({
     status: z.enum(["skipped", "used", "fallback"]),
     source: DraftCustomerResponseSourceSchema,
-    model: NonBlankStringSchema.optional(),
+    model: AiModelSchema.optional(),
     latencyMs: z.number().int().nonnegative().optional(),
     usage: AiUsageSchema.optional(),
     fallback: AiFallbackSchema.optional(),

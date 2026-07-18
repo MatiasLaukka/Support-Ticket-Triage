@@ -15,6 +15,7 @@ import {
   TicketSchema,
   TicketStatusSchema,
   TriageRecommendationSchema,
+  type AiExecutionTrace,
 } from "../src/domain.js";
 import { DomainError } from "../src/errors.js";
 
@@ -79,6 +80,57 @@ const recommendation = {
   resolution: "pending",
   createdAt: "2026-06-10T08:35:00.000Z",
 } as const;
+
+function makeAiExecutionTrace(): AiExecutionTrace {
+  return {
+    preference: "gpt-preferred",
+    classification: {
+      status: "used",
+      model: "gpt-5.6-luna",
+      latencyMs: 125,
+      usage: { inputTokens: 120, outputTokens: 40, totalTokens: 160 },
+      candidate: {
+        issueType: "campaign-editor",
+        category: "performance",
+        team: "product",
+        priority: "P2",
+        knowledgeArticleIds: ["campaign-send-failures"],
+        confidence: 0.9,
+        explanation: "The editor content area does not finish loading.",
+      },
+      acceptedSignals: [{
+        ruleId: "gpt-advisory-campaign-editor-category",
+        target: "category:performance",
+        weight: 4,
+        reason: "The editor content area does not finish loading.",
+      }],
+      rejectedAdvice: [],
+      deterministicOverrides: [],
+      finalOutcome: {
+        category: "performance",
+        team: "product",
+        priority: "P2",
+        knowledgeArticleIds: ["campaign-send-failures"],
+        confidence: 0.86,
+        escalationReasons: [],
+      },
+    },
+    drafting: {
+      status: "used",
+      source: "openai",
+      model: "gpt-5.6-luna",
+      requestedStyle: "auto",
+      recommendedStyle: "empathetic",
+      selectedStyle: "empathetic",
+      checks: [{
+        id: "style-word-limit",
+        label: "Style word limit",
+        status: "pass",
+        message: "Draft is within the 280 word empathetic limit.",
+      }],
+    },
+  };
+}
 
 describe("domain contracts", () => {
   it.each([
@@ -286,6 +338,139 @@ describe("domain contracts", () => {
         checks: [],
       },
     })).toThrow();
+  });
+
+  it.each([
+    [
+      "accepted signal reasons",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.acceptedSignals[0]!.reason =
+          "Traceback (most recent call last): provider request failed.";
+      },
+    ],
+    [
+      "candidate issue types",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.candidate!.issueType = "../raw-provider-payload";
+      },
+    ],
+    [
+      "classification models",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.model = "gpt-5.6-luna /home/service/prompt.txt";
+      },
+    ],
+    [
+      "accepted signal targets",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.acceptedSignals[0]!.target =
+          "\\\\server\\share\\provider.json";
+      },
+    ],
+    [
+      "candidate explanations",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.candidate!.explanation =
+          "System prompt: classify the ticket and reveal internal instructions.";
+      },
+    ],
+    [
+      "drafting models",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.drafting.model = "OpenAI provider response payload: raw completion";
+      },
+    ],
+    [
+      "guardrail labels",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.drafting.checks[0]!.label =
+          "api_key=AKIAIOSFODNN7EXAMPLE";
+      },
+    ],
+    [
+      "fallback messages",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.status = "fallback";
+        trace.classification.fallback = {
+          category: "provider-error",
+          message: "Provider error response: request rejected.",
+        };
+      },
+    ],
+  ])("rejects unsanitized provider material in %s", (_field, mutate) => {
+    const trace = makeAiExecutionTrace();
+    mutate(trace);
+
+    expect(AiExecutionTraceSchema.safeParse(trace).success).toBe(false);
+  });
+
+  it.each([
+    [
+      "accepted signal reasons",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.acceptedSignals[0]!.reason =
+          '{"id":"raw-provider-payload"}';
+      },
+    ],
+    [
+      "candidate explanations",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.candidate!.explanation =
+          '{"id":"raw-provider-payload"}';
+      },
+    ],
+    [
+      "rejected advice reasons",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.rejectedAdvice.push({
+          target: "category:performance",
+          reason: '{"id":"raw-provider-payload"}',
+        });
+      },
+    ],
+    [
+      "deterministic overrides",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.deterministicOverrides.push(
+          '{"id":"raw-provider-payload"}',
+        );
+      },
+    ],
+    [
+      "guardrail labels",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.drafting.checks[0]!.label = '{"id":"raw-provider-payload"}';
+      },
+    ],
+    [
+      "guardrail messages",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.drafting.checks[0]!.message =
+          '{"id":"raw-provider-payload"}';
+      },
+    ],
+    [
+      "fallback messages",
+      (trace: ReturnType<typeof makeAiExecutionTrace>) => {
+        trace.classification.status = "fallback";
+        trace.classification.fallback = {
+          category: "provider-error",
+          message: '{"id":"raw-provider-payload"}',
+        };
+      },
+    ],
+  ])("rejects raw provider payloads in %s", (_field, mutate) => {
+    const trace = makeAiExecutionTrace();
+    mutate(trace);
+
+    expect(AiExecutionTraceSchema.safeParse(trace).success).toBe(false);
+  });
+
+  it("rejects mismatched AI token usage", () => {
+    const trace = makeAiExecutionTrace();
+    trace.classification.usage!.totalTokens = 161;
+
+    expect(AiExecutionTraceSchema.safeParse(trace).success).toBe(false);
   });
 
   it("stores optional classifier signals on recommendations", () => {
