@@ -1210,6 +1210,36 @@ describe("Approval Desk recommendation builder", () => {
       body:
         "The private campaign editor is blank in Microsoft Edge for all users and shows ChunkLoadError, but nobody has tried a private or incognito window.",
     },
+    {
+      boundary: "opened editor that explicitly stayed blank",
+      promotes: true,
+      body:
+        "In a private window, the campaign editor opened but stayed blank; I tested Microsoft Edge and it was also blank for all users. Another admin reproduced the same issue. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before a requester retest",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow; I tested again myself. The campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin check before a requester-only failure",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will check tomorrow; the campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before comma but requester evidence",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow, but I tested again myself and the campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "explicit completed admin clause",
+      promotes: true,
+      body:
+        "I tested a private window and Microsoft Edge and the campaign editor stayed blank. Another admin tried the campaign and saw the same blank editor. Console showed ChunkLoadError.",
+    },
   ])(
     "separates $boundary",
     async ({ body, promotes }) => {

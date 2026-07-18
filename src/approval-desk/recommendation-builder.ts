@@ -1300,7 +1300,7 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
   const chunkLoadError = /\bchunkloaderror\b/i;
   const isolationSubject = String.raw`(?:${privateWindowExpression.source}|${alternateBrowser.source}|another admin|other admin|additional admin)`;
   const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
-  const successfulResult = String.raw`(?:works?|loads?|opens?|loaded|opened|working|is\s+working|not\s+blank)`;
+  const successfulResult = String.raw`(?:works?|loads?|loaded|working|is\s+working|not\s+blank)`;
   const successfulIsolation = new RegExp(
     String.raw`\b${editorSubject}\b[^.!?\n]{0,40}\b${successfulResult}\b[^.!?\n]{0,64}\b${isolationSubject}\b|\b${isolationSubject}\b[^.!?\n]{0,64}\b${editorSubject}\b[^.!?\n]{0,40}\b${successfulResult}\b`,
     "i",
@@ -1353,7 +1353,18 @@ function affirmativeMultiUserReproduction(value: string): boolean {
     String.raw`\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:tried|tested|used|opened|checked|reproduced)\b|\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result))\b|\b(?:blank|not loading|fails? to load|same (?:issue|result))\b[^.!?\n]{0,48}\b(?:${adminSubject})\b`,
     "i",
   );
-  return allUsersFailure.test(value) || adminAttempt.test(value);
+  return evidenceClauses(value).some(
+    (clause) => allUsersFailure.test(clause) || adminAttempt.test(clause),
+  );
+}
+
+function evidenceClauses(value: string): string[] {
+  return value
+    .split(
+      /[.!?;:\n]+|,\s*(?:but|and)\s+|\s+but\s+|\s+and\s+(?=(?:I|we|the requester)\b)/i,
+    )
+    .map((clause) => clause.trim())
+    .filter((clause) => clause !== "");
 }
 
 function supportResponseIndicatesPlatformFix(value: string): boolean {
