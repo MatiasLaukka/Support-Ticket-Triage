@@ -272,6 +272,7 @@ async function connect(
   providers: Partial<{
     classificationReasoningProvider: ClassificationReasoningProvider;
     draftProvider: CustomerResponseDraftProvider;
+    env: NodeJS.ProcessEnv;
   }> = {},
 ): Promise<Client> {
   const server = createTriageServer({
@@ -281,6 +282,7 @@ async function connect(
     audits: fixture.audits,
     service: fixture.service,
     now: () => now,
+    env: {},
     ...providers,
   });
   const client = new Client({ name: "server-actions-test", version: "1.0.0" });
@@ -873,6 +875,47 @@ describe("createTriageServer action protocol", () => {
         },
       },
     });
+  });
+
+  it("isolates default gpt-preferred evaluation from ambient API credentials", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const fetch = vi.fn(async () => {
+      throw new Error("Ambient fetch must not be called.");
+    });
+    process.env.OPENAI_API_KEY = "ambient-test-key";
+    vi.stubGlobal("fetch", fetch);
+
+    try {
+      const evaluated = await callTool(await connect(await createFixture()), "evaluate_ticket", {
+        ticketId: "TKT-1001",
+        actor: "skill-showcase",
+        aiPreference: "gpt-preferred",
+      });
+
+      expect(evaluated.isError).not.toBe(true);
+      expect(evaluated.structuredContent).toMatchObject({
+        recommendation: {
+          aiExecutionTrace: {
+            classification: {
+              status: "fallback",
+              fallback: { category: "not-configured" },
+            },
+            drafting: {
+              status: "fallback",
+              fallback: { category: "not-configured" },
+            },
+          },
+        },
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
   });
 
   it("rejects unsupported aiPreference through the evaluate_ticket schema", async () => {

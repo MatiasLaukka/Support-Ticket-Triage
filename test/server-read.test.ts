@@ -217,6 +217,7 @@ async function connect(
     service: fixture.service,
     now: () => now,
     minutesPerAcceptedRecommendation: 12,
+    env: {},
   });
   const client = new Client({ name: "server-read-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
