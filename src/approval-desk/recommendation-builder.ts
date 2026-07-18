@@ -639,6 +639,18 @@ function buildPlatformFixResponse(
   evidenceReadiness: EvidenceReadiness,
   replyStage: CustomerReplyStage,
 ): string {
+  if (hasCampaignEditorPlatformFixContext(ticket.description)) {
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      replyStage,
+      problemSummary:
+        "We are investigating this as a possible platform-side frontend loading issue affecting the campaign editor.",
+      nextStep:
+        "Frontend engineering is reviewing the ChunkLoadError reproduced across private-window, cross-browser, and multiple-admin checks. We will share the next update after confirming mitigation.",
+    });
+  }
+
   return buildStructuredDiagnosticResponse({
     ticket,
     evidenceReadiness,
@@ -985,7 +997,10 @@ function analyzeCustomerReplyLifecycle(input: {
     };
   }
 
-  if (hasPlatformFixContext(replyText)) {
+  if (
+    hasPlatformFixContext(replyText) ||
+    hasCampaignEditorPlatformFixContext(replyText)
+  ) {
     return {
       evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "all-evidence",
@@ -1183,6 +1198,29 @@ function hasPlatformFixContext(value: string): boolean {
   return /\b(?:all|multiple|many)\b.{0,40}\b(?:stores|accounts|profiles|customers)\b/i.test(value) &&
     /\b(?:delayed|delay|missing|not showing|not processing)\b/i.test(value) &&
     /\b(?:api accepted|accepted by the api|platform|incident|processing)\b/i.test(value);
+}
+
+function hasCampaignEditorPlatformFixContext(value: string): boolean {
+  const campaignEditorFailure =
+    /\b(?:campaign(?:\s+|-)?editor|editor)\b.{0,80}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b|\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b.{0,80}\b(?:campaign(?:\s+|-)?editor|editor)\b/i;
+  const privateWindow = /\b(?:private|incognito)\b/i;
+  const anotherBrowser =
+    /\b(?:another browser|different browser|microsoft edge|edge|firefox|safari)\b/i;
+  const multipleUsers =
+    /\b(?:another|other|additional)\s+admins?\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|both)\s+of\s+us\b/i;
+  const chunkLoadError = /\bchunkloaderror\b/i;
+  const successfulIsolation =
+    /\b(?:works?|loads?|opens?|loaded|opened|working|not blank)\b.{0,64}\b(?:private|incognito|another browser|different browser|microsoft edge|edge|firefox|safari|another admin|other admin|additional admin)\b|\b(?:private|incognito|another browser|different browser|microsoft edge|edge|firefox|safari|another admin|other admin|additional admin)\b.{0,64}\b(?:works?|loads?|loaded|opened|is working|not blank)\b/i;
+  const negatedChunkLoadError =
+    /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
+
+  return campaignEditorFailure.test(value) &&
+    privateWindow.test(value) &&
+    anotherBrowser.test(value) &&
+    multipleUsers.test(value) &&
+    chunkLoadError.test(value) &&
+    !successfulIsolation.test(value) &&
+    !negatedChunkLoadError.test(value);
 }
 
 function supportResponseIndicatesPlatformFix(value: string): boolean {

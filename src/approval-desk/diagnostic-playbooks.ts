@@ -7,7 +7,12 @@ export function diagnoseFromPlaybook(input: {
   customerReplyText: string;
 }): DiagnosisContext | undefined {
   if (input.recommendation.supportState === "waiting-on-platform-fix") {
-    return diagnoseEventProcessingDelay(input.customerReplyText);
+    const eventProcessingDiagnosis = diagnoseEventProcessingDelay(
+      input.customerReplyText,
+    );
+    if (eventProcessingDiagnosis !== undefined) {
+      return eventProcessingDiagnosis;
+    }
   }
   if (
     input.ticket.id === "TKT-1010" ||

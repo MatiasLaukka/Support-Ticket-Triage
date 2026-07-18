@@ -1054,6 +1054,147 @@ describe("Approval Desk recommendation builder", () => {
     },
   );
 
+  it("promotes complete cross-browser campaign-editor failure evidence to the platform-fix diagnosis path", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-campaign-editor-platform-evidence",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain(
+      "frontend loading issue",
+    );
+    expect(input.draftCustomerResponse).not.toContain("event processing");
+  });
+
+  it("accepts explicit all-user impact as the multi-user evidence dimension", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-all-user-campaign-editor-evidence",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "The campaign editor is still blank in a private window and Microsoft Edge for all users. The browser console shows ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it.each([
+    {
+      missing: "campaign-editor failure",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same page. It is still blank for all of us. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "private-window reproduction",
+      body:
+        "I tried Microsoft Edge and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "another-browser reproduction",
+      body:
+        "I tried a private window and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "another-admin or multi-user reproduction",
+      body:
+        "I tried a private window and Microsoft Edge. The campaign editor is still blank for me. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "ChunkLoadError",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console has no error message.",
+    },
+  ])(
+    "keeps campaign-editor evidence diagnosing without $missing",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-incomplete-campaign-editor-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it.each([
+    {
+      negation: "browser isolation succeeds",
+      body:
+        "The campaign editor was blank and the console showed ChunkLoadError. It now works in a private window and Microsoft Edge for another admin.",
+    },
+    {
+      negation: "ChunkLoadError is explicitly absent",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us, but the console shows no ChunkLoadError.",
+    },
+  ])(
+    "keeps negated campaign-editor platform evidence diagnosing when $negation",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-negated-campaign-editor-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
   it("uses reply-enriched known-cause evidence when choosing the deterministic draft style", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
