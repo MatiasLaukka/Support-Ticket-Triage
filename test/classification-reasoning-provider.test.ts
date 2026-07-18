@@ -92,7 +92,48 @@ describe("OpenAiClassificationReasoningProvider", () => {
       usage: { inputTokens: 120, outputTokens: 40, totalTokens: 160 },
     });
     const firstRequest = fetch.mock.calls[0]![1] as { body: string };
-    expect(JSON.parse(firstRequest.body)).toMatchObject({ store: false });
+    const request = JSON.parse(firstRequest.body);
+    const schema = request.text.format.schema;
+    expect(request).toMatchObject({ store: false });
+    expect(schema.required).toEqual(expect.arrayContaining(Object.keys(schema.properties)));
+    expect(schema.properties.candidateCategory).toEqual({ type: ["string", "null"] });
+    expect(schema.properties.candidateTeam).toEqual({ type: ["string", "null"] });
+    expect(schema.properties.candidatePriority).toEqual({ type: ["string", "null"] });
+  });
+
+  it("converts null candidate fields to optional reasoning fields", async () => {
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          output: [{ content: [{
+            type: "output_text",
+            text: JSON.stringify({
+              issueType: "campaign-editor",
+              candidateCategory: null,
+              candidateTeam: null,
+              candidatePriority: null,
+              knowledgeArticleIds: ["campaign-send-failures"],
+              confidence: 0.9,
+              evidence: ["content area never finishes loading"],
+              missingEvidenceThatWouldChangeClassification: ["browser comparison"],
+              explanation: "The reply describes editor loading failure.",
+            }),
+          }] }],
+        }),
+      }),
+    });
+
+    const execution = await provider.reason(providerInput());
+
+    expect(execution.reasoning).toMatchObject({
+      issueType: "campaign-editor",
+      candidateCategory: undefined,
+      candidateTeam: undefined,
+      candidatePriority: undefined,
+    });
   });
 
   it("uses no provider in deterministic mode and reports unavailable GPT preference", () => {

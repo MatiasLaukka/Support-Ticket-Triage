@@ -16,11 +16,15 @@ const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_TIMEOUT_MS = 20_000;
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
+function nullableOptional<T>(schema: z.ZodType<T>) {
+  return schema.nullable().transform((value) => value ?? undefined).optional();
+}
+
 const ReasoningSchema = z.object({
   issueType: z.string().trim().min(1),
-  candidateCategory: CategorySchema.optional(),
-  candidateTeam: TeamSchema.optional(),
-  candidatePriority: PrioritySchema.optional(),
+  candidateCategory: nullableOptional(CategorySchema),
+  candidateTeam: nullableOptional(TeamSchema),
+  candidatePriority: nullableOptional(PrioritySchema),
   knowledgeArticleIds: z.array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)),
   confidence: z.number().min(0).max(1),
   evidence: z.array(z.string().trim().min(1)),
@@ -190,9 +194,9 @@ const reasoningJsonSchema = {
   additionalProperties: false,
   properties: {
     issueType: { type: "string" },
-    candidateCategory: { type: "string" },
-    candidateTeam: { type: "string" },
-    candidatePriority: { type: "string" },
+    candidateCategory: { type: ["string", "null"] },
+    candidateTeam: { type: ["string", "null"] },
+    candidatePriority: { type: ["string", "null"] },
     knowledgeArticleIds: { type: "array", items: { type: "string" } },
     confidence: { type: "number" },
     evidence: { type: "array", items: { type: "string" } },
@@ -201,6 +205,9 @@ const reasoningJsonSchema = {
   },
   required: [
     "issueType",
+    "candidateCategory",
+    "candidateTeam",
+    "candidatePriority",
     "knowledgeArticleIds",
     "confidence",
     "evidence",
