@@ -3,6 +3,7 @@ import {
   OpenAiClassificationReasoningProvider,
   createClassificationReasoningProviderFromEnv,
 } from "../src/approval-desk/classification-reasoning-provider.js";
+import { classifyAiFailure } from "../src/approval-desk/draft-response-provider.js";
 import { classifyTicketFromContext } from "../src/approval-desk/classifier.js";
 import { buildConversationContextForTicket } from "../src/approval-desk/conversation-context.js";
 import { TicketSchema } from "../src/domain.js";
@@ -141,5 +142,34 @@ describe("OpenAiClassificationReasoningProvider", () => {
       .toBeUndefined();
     expect(createClassificationReasoningProviderFromEnv({}, { preferOpenAi: true }))
       .toMatchObject({ unavailableReason: "OpenAI is not configured." });
+  });
+
+  it("maps unavailable classification provider errors to not-configured", async () => {
+    const provider = createClassificationReasoningProviderFromEnv(
+      {},
+      { preferOpenAi: true },
+    );
+
+    const error = await provider!.reason(providerInput()).catch((caught) => caught);
+
+    expect(classifyAiFailure(error)).toEqual({
+      category: "not-configured",
+      message: "OpenAI is not configured; deterministic output was used.",
+    });
+  });
+
+  it("maps classification timeouts to timeout", async () => {
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      timeoutMs: 10,
+      fetch: async () => new Promise(() => undefined),
+    });
+
+    const error = await provider.reason(providerInput()).catch((caught) => caught);
+
+    expect(classifyAiFailure(error)).toEqual({
+      category: "timeout",
+      message: "OpenAI timed out; deterministic output was used.",
+    });
   });
 });

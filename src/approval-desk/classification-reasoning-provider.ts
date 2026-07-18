@@ -11,6 +11,10 @@ import type {
   GptClassificationReasoning,
   GptClassificationReasoningInput,
 } from "./draft-response-provider.js";
+import {
+  OpenAiTimeoutError,
+  UnavailableOpenAiError,
+} from "./draft-response-provider.js";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -53,7 +57,7 @@ export class UnavailableClassificationReasoningProvider
   readonly unavailableReason = "OpenAI is not configured.";
 
   async reason(): Promise<never> {
-    throw new Error(this.unavailableReason);
+    throw new UnavailableOpenAiError();
   }
 }
 
@@ -138,7 +142,7 @@ async function requestReasoning(input: {
     new Promise<never>((_, reject) => {
       timeout = setTimeout(() => {
         abortController.abort();
-        reject(new Error("OpenAI classification request timed out."));
+        reject(new OpenAiTimeoutError());
       }, input.timeoutMs);
     }),
   ]).finally(() => {
