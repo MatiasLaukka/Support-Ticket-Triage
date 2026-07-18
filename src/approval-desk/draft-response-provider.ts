@@ -402,13 +402,19 @@ export async function draftCustomerResponseWithFallback(input: {
       };
     }
 
+    const providerConfigured = input.provider !== undefined;
     return fallbackDraft({
       draftInput: input.draftInput,
-      reason: `Provider draft rejected: ${validation.blockingMessages.join(" ")}`,
-      fallback: {
-        category: "guardrail-rejected",
-        message: "OpenAI output did not pass response guardrails; deterministic output was used.",
-      },
+      reason: `${providerConfigured ? "Provider" : "Deterministic"} draft rejected: ${validation.blockingMessages.join(" ")}`,
+      fallback: providerConfigured
+        ? {
+            category: "guardrail-rejected",
+            message: "OpenAI output did not pass response guardrails; deterministic output was used.",
+          }
+        : {
+            category: "not-configured",
+            message: "OpenAI is not configured; deterministic output was used.",
+          },
       candidateChecks: validation.candidateChecks,
     });
   } catch (error) {

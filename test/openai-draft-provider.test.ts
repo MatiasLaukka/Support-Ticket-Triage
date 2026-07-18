@@ -442,6 +442,38 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     }));
   });
 
+  it("does not attribute a rejected deterministic draft to OpenAI when no provider exists", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: undefined,
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft:
+          "Glad to hear that resolved it. I will leave the ticket ready to close from our side.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+        conversationContext: {
+          turnType: "customer-confirmed",
+          hasCustomerReply: true,
+          recognizedEvidenceProgress: false,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: "fallback",
+      fallback: {
+        category: "not-configured",
+        message: "OpenAI is not configured; deterministic output was used.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /OpenAI output|provider draft|provider output/i,
+    );
+  });
+
   it.each([
     ["an over-limit response", Array.from({ length: 141 }, () => "word").join(" "), "concise"],
     ["a sensitive request", "Please share your billing account number.", "balanced"],
