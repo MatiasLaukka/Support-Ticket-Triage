@@ -14,6 +14,8 @@ import {
   type Approval,
   type Ticket,
 } from "../src/domain.js";
+import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { createTriageServer } from "../src/server.js";
@@ -30,6 +32,46 @@ const connections: Array<{ client: Client; server: McpServer }> = [];
 type SubmitToolInput = Omit<SubmitRecommendationInput, "submittedAt">;
 type ApprovalToolInput = Omit<Approval, "approvedAt">;
 type RejectToolInput = Omit<RejectRecommendationInput, "rejectedAt">;
+
+const acceptedDraftProvider: CustomerResponseDraftProvider = {
+  async draft() {
+    return {
+      source: "openai",
+      response:
+        "Thank you for the details. We are checking why the campaign editor is not loading and will share the next step as soon as possible.",
+      assist: {
+        source: "openai",
+        missingInfoSuggestions: ["Share a screenshot of the loading state."],
+        investigationSteps: ["Review the campaign editor loading path."],
+        tone: "empathetic",
+        recommendedTone: "empathetic",
+        selectedTone: "empathetic",
+        toneReason: "The customer reports an interrupted campaign workflow.",
+        audience: "merchant-admin",
+        checks: [],
+      },
+    };
+  },
+};
+
+const campaignEditorClassificationProvider: ClassificationReasoningProvider = {
+  async reason() {
+    return {
+      reasoning: {
+        issueType: "campaign-editor",
+        candidateCategory: "performance",
+        candidateTeam: "product",
+        candidatePriority: "P2",
+        knowledgeArticleIds: [],
+        confidence: 0.9,
+        evidence: ["editor never finishes loading"],
+        missingEvidenceThatWouldChangeClassification: [],
+        explanation: "The reply describes a campaign editor loading failure.",
+      },
+      telemetry: { model: "gpt-stub", latencyMs: 1 },
+    };
+  },
+};
 
 const triageTicketText = (ticketId: string): string =>
   [
@@ -227,6 +269,10 @@ async function createFixture(): Promise<{
 
 async function connect(
   fixture: Awaited<ReturnType<typeof createFixture>>,
+  providers: Partial<{
+    classificationReasoningProvider: ClassificationReasoningProvider;
+    draftProvider: CustomerResponseDraftProvider;
+  }> = {},
 ): Promise<Client> {
   const server = createTriageServer({
     tickets: fixture.tickets,
@@ -235,6 +281,7 @@ async function connect(
     audits: fixture.audits,
     service: fixture.service,
     now: () => now,
+    ...providers,
   });
   const client = new Client({ name: "server-actions-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
@@ -770,6 +817,72 @@ describe("createTriageServer action protocol", () => {
     expect(await fixture.recommendations.get(recommendation.id)).toEqual(
       recommendation,
     );
+  });
+
+  it("runs both optional GPT stages through evaluate_ticket", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture, {
+      classificationReasoningProvider: campaignEditorClassificationProvider,
+      draftProvider: acceptedDraftProvider,
+    });
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The campaign editor content area never finishes loading.",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "skill-showcase",
+      responseStyle: "auto",
+      aiPreference: "gpt-preferred",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    expect(evaluated.structuredContent).toMatchObject({
+      recommendation: {
+        aiExecutionTrace: {
+          preference: "gpt-preferred",
+          classification: { status: "used" },
+          drafting: { status: "used", source: "openai" },
+        },
+      },
+    });
+  });
+
+  it("completes gpt-preferred evaluation without configured providers", async () => {
+    const client = await connect(await createFixture());
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "skill-showcase",
+      aiPreference: "gpt-preferred",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    expect(evaluated.structuredContent).toMatchObject({
+      recommendation: {
+        aiExecutionTrace: {
+          classification: {
+            status: "fallback",
+            fallback: { category: "not-configured" },
+          },
+          drafting: {
+            status: "fallback",
+            fallback: { category: "not-configured" },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects unsupported aiPreference through the evaluate_ticket schema", async () => {
+    const evaluated = await callTool(await connect(await createFixture()), "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      aiPreference: "required",
+    });
+
+    expect(evaluated.isError).toBe(true);
+    expect(textOf(evaluated)).toContain("Input validation error");
   });
 
   it("marks a reviewed response done by approving named fields and recording sent response", async () => {

@@ -493,6 +493,10 @@ describe("createTriageServer read protocol", () => {
         name: "get_audit_events",
         arguments: { limit: 51 },
       },
+      {
+        name: "evaluate_ticket",
+        arguments: { ticketId: "TKT-1001", aiPreference: "required" },
+      },
     ]) {
       const result = await callTool(client, request);
       expect(result.isError).toBe(true);

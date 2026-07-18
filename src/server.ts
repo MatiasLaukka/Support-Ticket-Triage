@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { AuditRepository } from "./audit-repository.js";
 import {
   ApprovalSchema,
+  AiPreferenceSchema,
   AuditEventSchema,
   CategorySchema,
   DuplicateCandidateSchema,
@@ -33,12 +34,14 @@ import { calculateQueueMetrics } from "./metrics.js";
 import type { RecommendationRepository } from "./recommendation-repository.js";
 import { findSimilarTickets } from "./similarity.js";
 import {
-  buildApprovalDeskRecommendationInput,
-  buildApprovalDeskRecommendationInputWithDrafting,
-} from "./approval-desk/recommendation-builder.js";
-import {
   createCustomerResponseDraftProviderFromEnv,
+  type CustomerResponseDraftProvider,
 } from "./approval-desk/draft-response-provider.js";
+import {
+  createClassificationReasoningProviderFromEnv,
+  type ClassificationReasoningProvider,
+} from "./approval-desk/classification-reasoning-provider.js";
+import { evaluateTicketWithAi } from "./approval-desk/ai-evaluation.js";
 import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
@@ -49,6 +52,8 @@ import {
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
+  DiagnosisContext,
+  FixContext,
   RejectRecommendationInput,
   SubmitRecommendationInput,
   TriageService,
@@ -178,6 +183,7 @@ const EvaluateTicketInputSchema = z
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema.default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
+    aiPreference: AiPreferenceSchema.default("auto"),
   })
   .strict();
 const MarkResponseDoneInputSchema = ApprovalInputSchema.refine(
@@ -332,6 +338,9 @@ export interface TriageServerDependencies {
   service: TriageService;
   now: () => Date;
   minutesPerAcceptedRecommendation?: number;
+  classificationReasoningProvider?: ClassificationReasoningProvider;
+  draftProvider?: CustomerResponseDraftProvider;
+  env?: NodeJS.ProcessEnv;
 }
 
 export function createTriageServer(
@@ -646,27 +655,28 @@ async function evaluateTicket(
     ticket.id,
     audits,
   );
-  const deterministicInput = buildApprovalDeskRecommendationInput({
+  const recommendationInput = await evaluateTicketWithAi({
     ticket,
     actor: input.actor,
+    allKnowledgeArticles: await deps.knowledge.list(),
     customerReplies,
     previousSupportResponse,
-  });
-  const knowledgeArticles = await Promise.all(
-    deterministicInput.knowledgeArticleIds.map((articleId) =>
-      deps.knowledge.get(articleId),
-    ),
-  );
-  const recommendationInput = await buildApprovalDeskRecommendationInputWithDrafting({
-    ticket,
-    actor: input.actor,
+    diagnosisContext: latestDiagnosisContext(audits),
+    fixContext: latestFixContext(audits),
+    aiPreference: input.aiPreference,
     responseStyle: input.responseStyle,
-    knowledgeArticles,
-    customerReplies,
-    previousSupportResponse,
-    draftProvider: createCustomerResponseDraftProviderFromEnv(process.env, {
-      responseStyle: input.responseStyle,
-    }),
+    classificationProvider:
+      deps.classificationReasoningProvider ??
+      createClassificationReasoningProviderFromEnv(deps.env ?? process.env, {
+        preferOpenAi: input.aiPreference === "gpt-preferred" ||
+          (deps.env ?? process.env).APPROVAL_DRAFT_PROVIDER === "openai",
+      }),
+    draftProvider:
+      deps.draftProvider ??
+      createCustomerResponseDraftProviderFromEnv(deps.env ?? process.env, {
+        responseStyle: input.responseStyle,
+        preferOpenAi: input.aiPreference === "gpt-preferred",
+      }),
   });
   return deps.service.submit({
     ...recommendationInput,
@@ -1039,6 +1049,147 @@ function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undef
         right.event.timestamp.localeCompare(left.event.timestamp) ||
         right.index - left.index,
     )[0]?.event;
+}
+
+function latestDiagnosisContext(
+  audits: readonly AuditEvent[],
+): DiagnosisContext | undefined {
+  const event = latestDiagnosisAudit(audits);
+  if (
+    event === undefined ||
+    isSupersededByCustomerReply(audits, event, {
+      preserveForQuestionReplies: true,
+    })
+  ) {
+    return undefined;
+  }
+  return parseDiagnosisContext(event.after.diagnosis);
+}
+
+function latestFixContext(audits: readonly AuditEvent[]): FixContext | undefined {
+  const event = latestFixAudit(audits);
+  if (
+    event === undefined ||
+    isSupersededByCustomerReply(audits, event, {
+      preserveForQuestionReplies: true,
+    })
+  ) {
+    return undefined;
+  }
+  return parseFixContext(event.after.fix);
+}
+
+function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
+  return audits
+    .map((event, index) => ({ event, index }))
+    .filter(
+      ({ event }) =>
+        event.action === "fix-available" &&
+        typeof event.after.fix === "object" &&
+        event.after.fix !== null,
+    )
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index,
+    )[0]?.event;
+}
+
+function isSupersededByCustomerReply(
+  audits: readonly AuditEvent[],
+  event: AuditEvent,
+  options: { preserveForQuestionReplies?: boolean } = {},
+): boolean {
+  const eventIndex = audits.indexOf(event);
+  return audits.some((candidate, index) => {
+    if (candidate.action !== "customer-reply-received") {
+      return false;
+    }
+    const isNewer =
+      candidate.timestamp > event.timestamp ||
+      (candidate.timestamp === event.timestamp && index > eventIndex);
+    if (!isNewer) {
+      return false;
+    }
+    if (
+      options.preserveForQuestionReplies === true &&
+      customerReplyCanUseExistingDiagnosis(candidate)
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function customerReplyCanUseExistingDiagnosis(event: AuditEvent): boolean {
+  const body = typeof event.after.body === "string" ? event.after.body : "";
+  return isCustomerStatusFollowUp(body) || isCustomerExplanationRequest(body);
+}
+
+function isCustomerStatusFollowUp(value: string): boolean {
+  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s (?:the )?(?:current )?status|current status(?: of (?:the )?ticket)?|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(
+    value,
+  );
+}
+
+function isCustomerExplanationRequest(value: string): boolean {
+  return /\b(?:what'?s|what is|whats)\s+(?:the\s+)?(?:problem|issue|wrong|happening|going on|cause)|\bwhy\s+(?:is|are|did|does|do)\b.{0,80}\b(?:happening|broken|failing|delayed|missing|not working|not showing)|\bwhat happened\b|\bwhat caused\b|\broot cause\b/i.test(
+    value,
+  );
+}
+
+function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const context = value as Partial<DiagnosisContext>;
+  if (
+    context.status !== "completed" ||
+    typeof context.causeType !== "string" ||
+    typeof context.customerSafeSummary !== "string" ||
+    !Array.isArray(context.evidenceUsed) ||
+    typeof context.confidence !== "string" ||
+    typeof context.owner !== "string" ||
+    typeof context.recommendedNextAction !== "string" ||
+    !Array.isArray(context.doNotSay)
+  ) {
+    return undefined;
+  }
+  return {
+    status: "completed",
+    causeType: context.causeType as DiagnosisContext["causeType"],
+    customerSafeSummary: context.customerSafeSummary,
+    evidenceUsed: context.evidenceUsed.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    confidence: context.confidence as DiagnosisContext["confidence"],
+    owner: context.owner as DiagnosisContext["owner"],
+    recommendedNextAction: context.recommendedNextAction,
+    doNotSay: context.doNotSay.filter(
+      (item): item is string => typeof item === "string",
+    ),
+  };
+}
+
+function parseFixContext(value: unknown): FixContext | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const context = value as Partial<FixContext>;
+  if (
+    context.status !== "available" ||
+    typeof context.customerSafeSummary !== "string" ||
+    typeof context.customerAction !== "string" ||
+    typeof context.verificationRequest !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    status: "available",
+    customerSafeSummary: context.customerSafeSummary,
+    customerAction: context.customerAction,
+    verificationRequest: context.verificationRequest,
+  };
 }
 
 function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {
