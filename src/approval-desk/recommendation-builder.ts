@@ -1288,107 +1288,181 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
     /(?:another browser|different browser|microsoft edge|edge browser|firefox|safari)/i;
   const campaignEditorFailure =
     /\b(?:campaign(?:\s+|-)?editor|editor)\b.{0,80}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b|\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b.{0,80}\b(?:campaign(?:\s+|-)?editor|editor)\b/i;
-  const privateWindow = affirmativeReproduction(value, {
-    subject: privateWindowExpression,
-    result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
-  });
-  const anotherBrowser = affirmativeReproduction(value, {
-    subject: alternateBrowser,
-    result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
-  });
-  const multipleUsers = affirmativeMultiUserReproduction(value);
+  const privateWindow = isolationEvidenceFacts(value, privateWindowExpression);
+  const anotherBrowser = isolationEvidenceFacts(value, alternateBrowser);
+  const allUsersFailure = hasDirectAllUserFailure(value);
+  const directAdminFailure = hasDirectAdminFailure(value);
+  const sharedMultiUserFailure = allUsersFailure || directAdminFailure;
   const chunkLoadError = /\bchunkloaderror\b/i;
-  const successfulIsolation = hasSuccessfulEditorIsolation(value, {
-    privateWindowExpression,
-    alternateBrowser,
-  });
   const negatedChunkLoadError =
     /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
 
   return campaignEditorFailure.test(value) &&
-    privateWindow &&
-    anotherBrowser &&
-    multipleUsers &&
+    privateWindow.completedAttempt &&
+    anotherBrowser.completedAttempt &&
+    (privateWindow.explicitFailure || allUsersFailure) &&
+    (anotherBrowser.explicitFailure || allUsersFailure) &&
+    sharedMultiUserFailure &&
     chunkLoadError.test(value) &&
-    !successfulIsolation &&
+    !privateWindow.explicitSuccess &&
+    !anotherBrowser.explicitSuccess &&
     !negatedChunkLoadError.test(value);
 }
 
-function hasSuccessfulEditorIsolation(
-  value: string,
-  input: { privateWindowExpression: RegExp; alternateBrowser: RegExp },
-): boolean {
-  const isolationSubject = new RegExp(
-    String.raw`\b(?:${input.privateWindowExpression.source}|${input.alternateBrowser.source}|another admin|other admin|additional admin)\b`,
-    "i",
-  );
-  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
-  const successfulResult = String.raw`(?:works?|working|is\s+working|(?:loads?|loaded)\s+(?:normally|successfully)|is\s+not\s+blank)`;
-  const editorSuccess = new RegExp(
-    String.raw`\b${editorSubject}\b[^.!?;:\n]{0,40}\b${successfulResult}\b|\b${successfulResult}\b[^.!?;:\n]{0,40}\b${editorSubject}\b`,
-    "i",
-  );
-  const contradictoryFailure =
-    /\b(?:blank|not loading|won't load|does not load|doesn't load|stayed blank|remained blank|fails? to load|failure)\b/i;
-
-  return sentenceClauses(value).some(
-    (clause) =>
-      isolationSubject.test(clause) &&
-      editorSuccess.test(clause) &&
-      !contradictoryFailure.test(clause),
-  );
+interface IsolationEvidenceFacts {
+  completedAttempt: boolean;
+  explicitFailure: boolean;
+  explicitSuccess: boolean;
 }
 
-function affirmativeReproduction(
+function isolationEvidenceFacts(
   value: string,
-  input: { subject: RegExp; result: RegExp },
-): boolean {
-  const subject = input.subject.source;
-  const result = input.result.source;
-  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|nobody(?:\s+has)?|without)`;
-  const attempt = String.raw`(?:try|tried|test|tested|use|used|open|opened|check|checked|reproduce|reproduced)`;
-  const completedAttempt = String.raw`(?:tried|tested|used|opened|checked|reproduced)`;
-  const negatedAttempt = new RegExp(
-    String.raw`\b${negation}\b.{0,32}\b(?:${attempt})?\b.{0,24}\b(?:${subject})\b|\b(?:${subject})\b.{0,32}\b${negation}\b.{0,20}\b(?:${attempt})?\b`,
+  subjectExpression: RegExp,
+): IsolationEvidenceFacts {
+  const subject = new RegExp(
+    String.raw`\b(?:${subjectExpression.source})\b`,
     "i",
   );
-  if (negatedAttempt.test(value)) return false;
+  const completedAttempt = new RegExp(
+    String.raw`\b(?:tried|tested|used|opened|checked|reproduced)\b[^.!?;:\n]{0,64}\b(?:${subjectExpression.source})\b|\b(?:${subjectExpression.source})\b[^.!?;:\n]{0,64}\b(?:tried|tested|used|opened|checked|reproduced)\b`,
+    "i",
+  );
+  const facts: IsolationEvidenceFacts = {
+    completedAttempt: false,
+    explicitFailure: false,
+    explicitSuccess: false,
+  };
 
+  for (const clause of evidenceClauses(value)) {
+    if (!subject.test(clause)) continue;
+    const explicitFailure = hasExplicitEditorFailure(clause);
+    const explicitSuccess = hasExplicitEditorSuccess(clause);
+    facts.completedAttempt ||=
+      (!hasNegatedIsolationAttempt(clause, subjectExpression) &&
+        (completedAttempt.test(clause) || explicitFailure || explicitSuccess));
+    facts.explicitFailure ||= explicitFailure;
+    facts.explicitSuccess ||= explicitSuccess;
+  }
+
+  return facts;
+}
+
+function hasNegatedIsolationAttempt(
+  value: string,
+  subjectExpression: RegExp,
+): boolean {
+  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|nobody(?:\s+has)?|without)`;
+  const attempt = String.raw`(?:try|tried|test|tested|use|used|open|opened|check|checked|reproduce|reproduced)`;
   return new RegExp(
-    String.raw`\b(?:${completedAttempt})\b.{0,64}\b(?:${subject})\b|\b(?:${subject})\b.{0,64}\b(?:${completedAttempt})\b|\b(?:${result})\b[^.!?\n]{0,64}\b(?:${subject})\b|\b(?:${subject})\b[^.!?\n]{0,64}\b(?:${result})\b`,
+    String.raw`\b${negation}\b[^.!?;:\n]{0,40}\b${attempt}\b[^.!?;:\n]{0,40}\b(?:${subjectExpression.source})\b|\b(?:${subjectExpression.source})\b[^.!?;:\n]{0,40}\b${negation}\b[^.!?;:\n]{0,24}\b${attempt}\b`,
     "i",
   ).test(value);
 }
 
-function affirmativeMultiUserReproduction(value: string): boolean {
+function hasExplicitEditorFailure(value: string): boolean {
+  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
+  const failure = String.raw`(?:(?:is|was|stays?|stayed|remains?|remained)\s+(?:still\s+|also\s+)?blank|blank|not loading|won't load|does not load|doesn't load|fails? to load)`;
+  return new RegExp(
+    String.raw`\b${editorSubject}\b[^.!?;:\n]{0,48}\b${failure}\b|\b${failure}\b[^.!?;:\n]{0,48}\b${editorSubject}\b`,
+    "i",
+  ).test(value);
+}
+
+function hasExplicitEditorSuccess(value: string): boolean {
+  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
+  const success = String.raw`(?:works?|working|is\s+working|(?:loads?|loaded)\s+(?:normally|successfully)|is\s+not\s+blank)`;
+  return new RegExp(
+    String.raw`\b${editorSubject}\b[^.!?;:\n]{0,48}\b${success}\b|\b${success}\b[^.!?;:\n]{0,48}\b${editorSubject}\b`,
+    "i",
+  ).test(value);
+}
+
+function hasDirectAllUserFailure(value: string): boolean {
+  const failure = String.raw`(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))`;
+  const audience = String.raw`(?:(?:all|multiple|several|both)\s+(?:admins?|users?)|(?:all|both)\s+of\s+us)`;
+  const resultOwnedByAudience = new RegExp(
+    String.raw`\b${failure}\b[^.!?;:\n]{0,80}\b(?:for|across)\s+${audience}\b`,
+    "i",
+  );
+  const audienceReportsResult = new RegExp(
+    String.raw`\b${audience}\b\s+(?:also\s+)?(?:see|saw|report|reported|experience|experienced|encounter|encountered|get|got|have|had)\b[^.!?;:\n]{0,40}\b${failure}\b`,
+    "i",
+  );
+
+  return evidenceClauses(value).some(
+    (clause) =>
+      resultOwnedByAudience.test(clause) || audienceReportsResult.test(clause),
+  );
+}
+
+function hasDirectAdminFailure(value: string): boolean {
   const adminSubject = String.raw`(?:another|other|additional)\s+admins?`;
   const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|have\s+not|has\s+not|had\s+not|did\s+not)`;
   const negatedAdminAttempt = new RegExp(
     String.raw`\b(?:${adminSubject})\b.{0,32}\b${negation}\b.{0,20}\b(?:try|tried|test|tested|open|opened|check|checked)?\b|\b${negation}\b.{0,32}\b(?:try|tried|test|tested|open|opened|check|checked)?\b.{0,24}\b(?:${adminSubject})\b`,
     "i",
   );
-  if (negatedAdminAttempt.test(value)) return false;
-
-  const allUsersFailure =
-    /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b[^.!?;:\n]{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b[^.!?;:\n]{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b[^.!?;:\n]{0,32}\b(?:all|both)\s+of\s+us\b/i;
-  const completedAdminAttempt = new RegExp(
-    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:tried|tested|used|opened|checked|reproduced)\b`,
+  const reproducedFailure = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?reproduced\b`,
+    "i",
+  );
+  const testedAndObservedFailure = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:tried|tested|used|opened|checked)\b[^.!?;:\n]{0,48}\b(?:saw|found|reported|got|experienced)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
     "i",
   );
   const explicitAdminResult = new RegExp(
-    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:reported|saw|found|got)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:reported|saw|found|got|experienced)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
     "i",
   );
-  return allUsersFailure.test(value) ||
-    completedAdminAttempt.test(value) ||
-    explicitAdminResult.test(value);
+  return evidenceClauses(value).some(
+    (clause) =>
+      !negatedAdminAttempt.test(clause) &&
+      (reproducedFailure.test(clause) ||
+        testedAndObservedFailure.test(clause) ||
+        explicitAdminResult.test(clause)),
+  );
 }
 
-function sentenceClauses(value: string): string[] {
-  return value
-    .split(/[.!?;:\n]+/)
-    .map((clause) => clause.trim())
-    .filter((clause) => clause !== "");
+function evidenceClauses(value: string): string[] {
+  const editorSubject = /\b(?:campaign(?:\s+|-)?editor|editor|page|it|this)\b/i;
+  const isolationSubject =
+    /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?|another browser|different browser|microsoft edge|edge browser|firefox|safari)/gi;
+  const resultFragment =
+    /\b(?:works?|working|loads?|loaded|blank|not loading|won't load|does not load|doesn't load|fails? to load)\b/i;
+  const clauses: string[] = [];
+
+  for (const sentence of value.split(/[.!?;:\n]+/)) {
+    let carriesEditorSubject = false;
+    let carriedIsolationSubjects: string[] = [];
+    const fragments = sentence.split(
+      /,?\s+(?:but|while|whereas|yet)\s+|,?\s+and\s+(?=(?:then\s+)?(?:I|we|all\s+(?:users?|admins?)|another\s+admin)\b)/i,
+    );
+    for (const rawFragment of fragments) {
+      let fragment = rawFragment.trim();
+      if (fragment === "") continue;
+      const hasEditorSubject = editorSubject.test(fragment);
+      const explicitIsolationSubjects = [
+        ...fragment.matchAll(isolationSubject),
+      ].map((match) => match[0]);
+      if (!hasEditorSubject && carriesEditorSubject && resultFragment.test(fragment)) {
+        fragment = `campaign editor ${fragment}`;
+      }
+      if (
+        explicitIsolationSubjects.length === 0 &&
+        carriedIsolationSubjects.length > 0 &&
+        resultFragment.test(fragment)
+      ) {
+        fragment = `${carriedIsolationSubjects.join(" and ")} ${fragment}`;
+      }
+      carriesEditorSubject ||= hasEditorSubject;
+      if (explicitIsolationSubjects.length > 0) {
+        carriedIsolationSubjects = explicitIsolationSubjects;
+      }
+      clauses.push(fragment);
+    }
+  }
+
+  return clauses;
 }
 
 function supportResponseIndicatesPlatformFix(value: string): boolean {
