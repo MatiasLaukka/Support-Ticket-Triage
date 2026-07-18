@@ -402,6 +402,44 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(result.fallback?.message).not.toContain("C:\\private");
     expect(result.candidateChecks).toEqual([]);
   });
+
+  it("falls back from an over-limit concise draft and retains the failed candidate check", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: {
+        draft: async () => ({
+          source: "openai",
+          response: Array.from({ length: 141 }, () => "word").join(" "),
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["Share the affected browser."],
+            investigationSteps: ["Compare browser behavior."],
+            tone: "concise",
+            recommendedTone: "concise",
+            selectedTone: "concise",
+            toneReason: "A short update is appropriate.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft: "Deterministic fallback draft.",
+        responseStyle: "concise",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result.source).toBe("fallback");
+    expect(result.response).toContain("Deterministic fallback draft.");
+    expect(result.candidateChecks).toContainEqual(expect.objectContaining({
+      id: "style-word-limit",
+      status: "fail",
+    }));
+  });
 });
 
 const ticket: Ticket = {

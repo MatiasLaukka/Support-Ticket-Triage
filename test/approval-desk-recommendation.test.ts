@@ -1414,6 +1414,49 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("uses the deterministic draft when an OpenAI concise response exceeds its style limit", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      responseStyle: "concise",
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response: Array.from({ length: 141 }, () => "word").join(" "),
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["Share the ecommerce platform."],
+            investigationSteps: ["Compare the storefront event with the flow setup."],
+            tone: "concise",
+            recommendedTone: "concise",
+            selectedTone: "concise",
+            toneReason: "A short update is appropriate.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "We are checking why Viewed Product events",
+    );
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "style-word-limit",
+        status: "pass",
+      }),
+    );
+  });
+
   it("falls back to the deterministic response when an AI draft exposes internal details", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

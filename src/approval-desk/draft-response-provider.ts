@@ -27,6 +27,7 @@ import {
   buildCustomerServiceDraftingInstructions,
   buildCustomerServiceSkillContext,
 } from "./customer-service-drafting-skill.js";
+import { validateDraftQuality } from "./draft-quality-guardrails.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 const DEFAULT_OPENAI_DRAFT_TIMEOUT_MS = 20_000;
@@ -380,9 +381,12 @@ export async function draftCustomerResponseWithFallback(input: {
     const validation = validateCustomerResponseDraft({
       response,
       assist: candidate.assist,
+      responseStyle: resolvedResponseStyle(input.draftInput, candidate.assist),
       knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
       evidenceReadiness: input.draftInput.evidenceReadiness,
       conversationContext: input.draftInput.conversationContext,
+      diagnosisContext: input.draftInput.diagnosisContext,
+      fixContext: input.draftInput.fixContext,
     });
     if (validation.blockingMessages.length === 0) {
       return {
@@ -394,7 +398,7 @@ export async function draftCustomerResponseWithFallback(input: {
           checks: validation.checks,
         },
         ...(candidate.telemetry === undefined ? {} : { telemetry: candidate.telemetry }),
-        candidateChecks: [],
+        candidateChecks: validation.candidateChecks,
       };
     }
 
@@ -403,8 +407,9 @@ export async function draftCustomerResponseWithFallback(input: {
       reason: `Provider draft rejected: ${validation.blockingMessages.join(" ")}`,
       fallback: {
         category: "guardrail-rejected",
-        message: "OpenAI draft did not pass review checks; deterministic output was used.",
+        message: "OpenAI output did not pass response guardrails; deterministic output was used.",
       },
+      candidateChecks: validation.candidateChecks,
     });
   } catch (error) {
     return fallbackDraft({
@@ -418,6 +423,7 @@ function fallbackDraft(input: {
   draftInput: CustomerResponseDraftInput;
   reason?: string;
   fallback: { category: AiFallbackCategory; message: string };
+  candidateChecks?: AiGuardrailCheck[];
 }): ValidatedCustomerResponseDraft {
   const fallbackAssist = buildDeterministicGptAssist(
     input.draftInput,
@@ -430,9 +436,12 @@ function fallbackDraft(input: {
       input.draftInput,
     ),
     assist: fallbackAssist,
+    responseStyle: resolvedResponseStyle(input.draftInput, fallbackAssist),
     knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
     evidenceReadiness: input.draftInput.evidenceReadiness,
     conversationContext: input.draftInput.conversationContext,
+    diagnosisContext: input.draftInput.diagnosisContext,
+    fixContext: input.draftInput.fixContext,
   });
   const checks: DraftCustomerResponseCheck[] = [
     {
@@ -457,7 +466,7 @@ function fallbackDraft(input: {
       checks,
     },
     fallback: input.fallback,
-    candidateChecks: [],
+    candidateChecks: input.candidateChecks ?? [],
   };
 }
 
@@ -492,10 +501,17 @@ export function classifyAiFailure(error: unknown): {
 function validateCustomerResponseDraft(input: {
   response: string;
   assist: GptAssist;
+  responseStyle: DraftCustomerResponseStyle;
   knowledgeArticleIds: readonly string[];
   evidenceReadiness?: EvidenceReadiness;
   conversationContext?: CustomerResponseConversationContext;
-}): { checks: DraftCustomerResponseCheck[]; blockingMessages: string[] } {
+  diagnosisContext?: DiagnosisContext;
+  fixContext?: FixContext;
+}): {
+  checks: DraftCustomerResponseCheck[];
+  blockingMessages: string[];
+  candidateChecks: AiGuardrailCheck[];
+} {
   const response = input.response.trim();
   const checks: DraftCustomerResponseCheck[] = [];
   const blockingMessages: string[] = [];
@@ -621,7 +637,35 @@ function validateCustomerResponseDraft(input: {
       "The draft repeated a diagnostic evidence request instead of explaining the current suspected problem.",
   });
 
-  return { checks, blockingMessages };
+  const quality = validateDraftQuality({
+    response,
+    style: input.responseStyle,
+    evidenceReadiness: input.evidenceReadiness,
+    diagnosisContext: input.diagnosisContext,
+    fixContext: input.fixContext,
+  });
+  for (const check of quality.checks) {
+    if (check.status === "fail") continue;
+    checks.push({
+      id: check.id,
+      label: check.label,
+      status: check.status,
+      message: check.message,
+    });
+  }
+
+  return {
+    checks,
+    blockingMessages: [...blockingMessages, ...quality.blockingMessages],
+    candidateChecks: quality.checks,
+  };
+}
+
+function resolvedResponseStyle(
+  input: CustomerResponseDraftInput,
+  assist: GptAssist,
+): DraftCustomerResponseStyle {
+  return input.responseStyle === "auto" ? assist.selectedTone : input.responseStyle;
 }
 
 function containsPlatformFixSecretTroubleshooting(text: string): boolean {
