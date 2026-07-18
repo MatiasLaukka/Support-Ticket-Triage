@@ -64,9 +64,11 @@ describe("TriageService", () => {
 
   it("preserves GPT assist material on submitted recommendations", async () => {
     const harness = makeHarness();
+    const aiExecutionTrace = makeAiExecutionTrace();
 
     const recommendation = await harness.service.submit(
       makeSubmitInput({
+        aiExecutionTrace,
         gptAssist: {
           source: "openai",
           missingInfoSuggestions: [
@@ -102,6 +104,10 @@ describe("TriageService", () => {
     });
     expect(harness.recommendations.values[0]?.gptAssist).toEqual(
       recommendation.gptAssist,
+    );
+    expect(recommendation.aiExecutionTrace).toEqual(aiExecutionTrace);
+    expect(harness.recommendations.values[0]?.aiExecutionTrace).toEqual(
+      aiExecutionTrace,
     );
   });
 
@@ -1324,6 +1330,59 @@ function makeSubmitInput(
     actor: "triage-agent",
     submittedAt: "2026-06-10T09:00:00.000Z",
     ...overrides,
+  };
+}
+
+function makeAiExecutionTrace(): NonNullable<
+  SubmitRecommendationInput["aiExecutionTrace"]
+> {
+  return {
+    preference: "gpt-preferred",
+    classification: {
+      status: "used",
+      model: "gpt-5.6-luna",
+      latencyMs: 125,
+      usage: { inputTokens: 120, outputTokens: 40, totalTokens: 160 },
+      candidate: {
+        issueType: "campaign-editor",
+        category: "performance",
+        team: "product",
+        priority: "P2",
+        knowledgeArticleIds: ["campaign-send-failures"],
+        confidence: 0.9,
+        explanation: "The editor content area does not finish loading.",
+      },
+      acceptedSignals: [{
+        ruleId: "gpt-advisory-campaign-editor-category",
+        target: "category:performance",
+        weight: 4,
+        reason: "The editor content area does not finish loading.",
+      }],
+      rejectedAdvice: [],
+      deterministicOverrides: [],
+      finalOutcome: {
+        category: "performance",
+        team: "product",
+        priority: "P2",
+        knowledgeArticleIds: ["campaign-send-failures"],
+        confidence: 0.86,
+        escalationReasons: [],
+      },
+    },
+    drafting: {
+      status: "used",
+      source: "openai",
+      model: "gpt-5.6-luna",
+      requestedStyle: "auto",
+      recommendedStyle: "empathetic",
+      selectedStyle: "empathetic",
+      checks: [{
+        id: "style-word-limit",
+        label: "Style word limit",
+        status: "pass",
+        message: "Draft is within the 280 word empathetic limit.",
+      }],
+    },
   };
 }
 

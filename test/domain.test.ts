@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AiExecutionTraceSchema,
   ApprovalSchema,
   AuditEventSchema,
   CategorySchema,
@@ -199,6 +200,92 @@ describe("domain contracts", () => {
       weight: 2,
       reason: "Submitted category is api.",
     });
+  });
+
+  it("accepts a sanitized dual-stage AI execution trace", () => {
+    const trace = AiExecutionTraceSchema.parse({
+      preference: "gpt-preferred",
+      classification: {
+        status: "used",
+        model: "gpt-5.6-luna",
+        latencyMs: 125,
+        usage: { inputTokens: 120, outputTokens: 40, totalTokens: 160 },
+        candidate: {
+          issueType: "campaign-editor",
+          category: "performance",
+          team: "product",
+          priority: "P2",
+          knowledgeArticleIds: ["campaign-send-failures"],
+          confidence: 0.9,
+          explanation: "The editor content area does not finish loading.",
+        },
+        acceptedSignals: [{
+          ruleId: "gpt-advisory-campaign-editor-category",
+          target: "category:performance",
+          weight: 4,
+          reason: "The editor content area does not finish loading.",
+        }],
+        rejectedAdvice: [],
+        deterministicOverrides: [],
+        finalOutcome: {
+          category: "performance",
+          team: "product",
+          priority: "P2",
+          knowledgeArticleIds: ["campaign-send-failures"],
+          confidence: 0.86,
+          escalationReasons: [],
+        },
+      },
+      drafting: {
+        status: "used",
+        source: "openai",
+        model: "gpt-5.6-luna",
+        requestedStyle: "auto",
+        recommendedStyle: "empathetic",
+        selectedStyle: "empathetic",
+        checks: [{
+          id: "style-word-limit",
+          label: "Style word limit",
+          status: "pass",
+          message: "Draft is within the 280 word empathetic limit.",
+        }],
+      },
+    });
+
+    expect(trace.classification.status).toBe("used");
+    expect(trace.drafting.source).toBe("openai");
+  });
+
+  it("rejects raw provider details and inconsistent token usage", () => {
+    expect(() => AiExecutionTraceSchema.parse({
+      preference: "gpt-preferred",
+      classification: {
+        status: "fallback",
+        fallback: {
+          category: "provider-error",
+          message: "Request failed at C:\\private\\token.json with sk-secret",
+        },
+        acceptedSignals: [],
+        rejectedAdvice: [],
+        deterministicOverrides: [],
+        finalOutcome: {
+          category: "other",
+          team: "support",
+          priority: "P3",
+          knowledgeArticleIds: [],
+          confidence: 0.5,
+          escalationReasons: ["low-confidence"],
+        },
+      },
+      drafting: {
+        status: "skipped",
+        source: "deterministic",
+        requestedStyle: "auto",
+        recommendedStyle: "balanced",
+        selectedStyle: "balanced",
+        checks: [],
+      },
+    })).toThrow();
   });
 
   it("stores optional classifier signals on recommendations", () => {

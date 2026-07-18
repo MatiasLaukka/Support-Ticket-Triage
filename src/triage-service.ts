@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
+  AiExecutionTraceSchema,
   ApprovalSchema,
   AuditEventSchema,
   CategorySchema,
@@ -21,6 +22,7 @@ import {
   TicketStatusSchema,
   TriageRecommendationSchema,
   type Approval,
+  type AiExecutionTrace,
   type ApprovedField,
   type AuditEvent,
   type Category,
@@ -76,6 +78,7 @@ const SubmitRecommendationInputSchema = z
       .array(DraftCustomerResponseCheckSchema)
       .optional(),
     gptAssist: GptAssistSchema.optional(),
+    aiExecutionTrace: AiExecutionTraceSchema.optional(),
     rationale: NonBlankStringSchema.max(500),
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -223,6 +226,7 @@ export interface SubmitRecommendationInput {
     typeof DraftCustomerResponseCheckSchema
   >[];
   gptAssist?: GptAssist;
+  aiExecutionTrace?: AiExecutionTrace;
   rationale: string;
   confidence: number;
   recommendedNextAction: string;
@@ -422,6 +426,9 @@ export class TriageService {
         ? {}
         : { draftCustomerResponseChecks: parsed.draftCustomerResponseChecks }),
       ...(parsed.gptAssist === undefined ? {} : { gptAssist: parsed.gptAssist }),
+      ...(parsed.aiExecutionTrace === undefined
+        ? {}
+        : { aiExecutionTrace: parsed.aiExecutionTrace }),
       rationale: parsed.rationale,
       confidence: parsed.confidence,
       recommendedNextAction: parsed.recommendedNextAction,
