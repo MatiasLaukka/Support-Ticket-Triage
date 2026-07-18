@@ -980,8 +980,15 @@ function analyzeCustomerReplyLifecycle(input: {
   if (isCustomerStatusFollowUp(latestReply)) {
     const statusEvidenceReadiness =
       input.previousSupportResponse !== undefined &&
-      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)
-        ? platformFixEvidenceReadiness(evidenceReadiness)
+      supportResponseIndicatesCampaignEditorFix(
+        input.previousSupportResponse.body,
+      )
+        ? campaignEditorFixEvidenceReadiness(evidenceReadiness)
+        : input.previousSupportResponse !== undefined &&
+            supportResponseIndicatesPlatformFix(
+              input.previousSupportResponse.body,
+            )
+          ? platformFixEvidenceReadiness(evidenceReadiness)
         : withLifecycleSupportState(
             evidenceReadiness,
             requiresMoreCustomerEvidence(evidenceReadiness)
@@ -1015,11 +1022,18 @@ function analyzeCustomerReplyLifecycle(input: {
 
   if (
     input.previousSupportResponse !== undefined &&
-    supportResponseIndicatesPlatformFix(input.previousSupportResponse.body) &&
+    (supportResponseIndicatesCampaignEditorFix(
+      input.previousSupportResponse.body,
+    ) ||
+      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)) &&
     isCustomerStatusFollowUp(latestReply)
   ) {
     return {
-      evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
+      evidenceReadiness: supportResponseIndicatesCampaignEditorFix(
+        input.previousSupportResponse.body,
+      )
+        ? campaignEditorFixEvidenceReadiness(evidenceReadiness)
+        : platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "status-follow-up",
       recognizedEvidenceProgress: false,
     };
@@ -1027,11 +1041,18 @@ function analyzeCustomerReplyLifecycle(input: {
 
   if (
     input.previousSupportResponse !== undefined &&
-    supportResponseIndicatesPlatformFix(input.previousSupportResponse.body) &&
+    (supportResponseIndicatesCampaignEditorFix(
+      input.previousSupportResponse.body,
+    ) ||
+      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)) &&
     isCustomerExplanationRequest(latestReply)
   ) {
     return {
-      evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
+      evidenceReadiness: supportResponseIndicatesCampaignEditorFix(
+        input.previousSupportResponse.body,
+      )
+        ? campaignEditorFixEvidenceReadiness(evidenceReadiness)
+        : platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "explanation-request",
       recognizedEvidenceProgress: false,
     };
@@ -1268,7 +1289,7 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
     result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
   });
   const anotherBrowser = affirmativeReproduction(value, {
-    subject: /(?:another browser|different browser|microsoft edge|edge|firefox|safari)/i,
+    subject: /(?:another browser|different browser|microsoft edge|edge browser|firefox|safari)/i,
     result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
   });
   const multipleUsers = affirmativeMultiUserReproduction(value);
@@ -1300,6 +1321,11 @@ function affirmativeReproduction(
     "i",
   );
   if (negatedAttempt.test(value)) return false;
+  const incompleteAttempt = new RegExp(
+    String.raw`\b(?:will|would|should|could|may|might|plan(?:s|ned)?\s+to|please)\b.{0,24}\b(?:${attempt})\b.{0,24}\b(?:${subject})\b|\b(?:${subject})\b.{0,32}\b(?:will|would|should|could|may|might)\b.{0,20}\b(?:${attempt})\b`,
+    "i",
+  );
+  if (incompleteAttempt.test(value)) return false;
 
   return new RegExp(
     String.raw`\b(?:${attempt}|${result})\b.{0,64}\b(?:${subject})\b|\b(?:${subject})\b.{0,64}\b(?:${attempt}|${result})\b`,
@@ -1315,6 +1341,11 @@ function affirmativeMultiUserReproduction(value: string): boolean {
     "i",
   );
   if (negatedAdminAttempt.test(value)) return false;
+  const incompleteAdminAttempt = new RegExp(
+    String.raw`\b(?:will|would|should|could|may|might|plan(?:s|ned)?\s+to|please)\b.{0,24}\b(?:ask|try|test|open|check)\b.{0,24}\b(?:${adminSubject})\b|\b(?:${adminSubject})\b.{0,32}\b(?:will|would|should|could|may|might)\b.{0,20}\b(?:try|test|open|check)\b`,
+    "i",
+  );
+  if (incompleteAdminAttempt.test(value)) return false;
 
   const allUsersFailure =
     /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b.{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b.{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b.{0,32}\b(?:all|both)\s+of\s+us\b/i;
@@ -1329,6 +1360,11 @@ function supportResponseIndicatesPlatformFix(value: string): boolean {
   return /\b(?:platform delay|platform-side|incident review|event-ingestion delay|event processing|processing delay)\b/i.test(
     value,
   );
+}
+
+function supportResponseIndicatesCampaignEditorFix(value: string): boolean {
+  return /\b(?:frontend loading|frontend bundle|chunkloaderror)\b/i.test(value) &&
+    /\bcampaign(?:\s+|-)?editor\b/i.test(value);
 }
 
 function supportResponseIndicatesCloseableSolution(value: string): boolean {
@@ -1436,6 +1472,17 @@ function buildExplanationRequestResponse(
   }
 
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+    if (isCampaignEditorFixReadiness(evidenceReadiness)) {
+      return [
+        `Hi ${ticket.customer.name},`,
+        "",
+        "Thanks for checking in. In plain terms, the completed browser and user checks point to a frontend loading issue in the campaign editor.",
+        "",
+        "The repeated ChunkLoadError indicates that the editor bundle is not loading correctly for the affected campaign. Frontend engineering is checking the mitigation path.",
+        "",
+        "You do not need to repeat the same browser-session checks right now. We will update you when the campaign editor mitigation is ready to verify.",
+      ].join("\n");
+    }
     return [
       `Hi ${ticket.customer.name},`,
       "",
@@ -1519,7 +1566,9 @@ function formatCustomerSafeStatus(
       : `Current status: the ticket matches a documented support path. ${knownCause.problemSummary}`;
   }
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
-    return "Current status: this is still being handled as a possible platform delay affecting event processing.";
+    return isCampaignEditorFixReadiness(evidenceReadiness)
+      ? "Current status: frontend engineering is reviewing the campaign editor loading failure and reproduced ChunkLoadError."
+      : "Current status: this is still being handled as a possible platform delay affecting event processing.";
   }
   if (evidenceReadiness.supportState === "waiting-on-customer-action") {
     return "Current status: the next step is on your side before we can confirm the result.";
@@ -1531,6 +1580,14 @@ function formatCustomerSafeStatus(
     return "Current status: we have prepared the next response and are reviewing it before sending.";
   }
   return "Current status: we are still reviewing the latest details for this issue.";
+}
+
+function isCampaignEditorFixReadiness(
+  evidenceReadiness: EvidenceReadiness,
+): boolean {
+  return evidenceReadiness.requiredEvidence.some(
+    (requirement) => requirement.id === "campaign-editor-failure",
+  );
 }
 
 function formatCustomerSafeStatusNextStep(
