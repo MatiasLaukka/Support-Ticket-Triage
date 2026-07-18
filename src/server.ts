@@ -46,9 +46,15 @@ import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
   latestSupportResponseFromAudits,
-  latestSentAtForRecommendation,
   summarizeRecommendationsForTicket,
 } from "./approval-desk/workflow-read-model.js";
+import {
+  OperatorGuidanceSchema,
+  buildOperatorGuidance,
+  closeBlockers,
+  diagnosisBlockers,
+  fixBlockers,
+} from "./approval-desk/workflow-guidance.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
@@ -267,6 +273,12 @@ const QueueMetricsOutputSchema = z
 const SubmitRecommendationOutputSchema = z
   .object({ recommendation: TriageRecommendationSchema })
   .strict();
+const EvaluateTicketOutputSchema = z
+  .object({
+    recommendation: TriageRecommendationSchema,
+    operatorGuidance: OperatorGuidanceSchema,
+  })
+  .strict();
 const ApprovalOutputSchema = z
   .object({
     ticket: TicketSchema,
@@ -327,6 +339,7 @@ const TicketWorkflowOutputSchema = z
       })
       .strict(),
     latestRecommendation: TriageRecommendationSchema.optional(),
+    operatorGuidance: OperatorGuidanceSchema,
   })
   .strict();
 
@@ -522,13 +535,11 @@ export function createTriageServer(
       description:
         "Evaluate the current ticket timeline and store a pending recommendation.",
       inputSchema: EvaluateTicketInputSchema,
-      outputSchema: SubmitRecommendationOutputSchema,
+      outputSchema: EvaluateTicketOutputSchema,
       annotations: SubmissionAnnotations,
     },
     async (input) =>
-      toolResult(async () => ({
-        recommendation: await evaluateTicket(deps, input),
-      })),
+      toolResult(() => evaluateTicket(deps, input)),
   );
 
   server.registerTool(
@@ -645,7 +656,7 @@ async function getTicketWorkflow(
 async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
-) {
+): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
   const [ticket, audits] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
@@ -678,10 +689,24 @@ async function evaluateTicket(
         preferOpenAi: input.aiPreference === "gpt-preferred",
       }),
   });
-  return deps.service.submit({
+  const recommendation = await deps.service.submit({
     ...recommendationInput,
     submittedAt: deps.now().toISOString(),
   });
+  const [persistedTicket, persistedAudits, persistedRecommendations] =
+    await Promise.all([
+      deps.tickets.get(input.ticketId),
+      deps.audits.list(input.ticketId),
+      deps.recommendations.list(),
+    ]);
+  return {
+    recommendation,
+    operatorGuidance: buildOperatorGuidance({
+      ticket: persistedTicket,
+      audits: persistedAudits,
+      recommendations: persistedRecommendations,
+    }),
+  };
 }
 
 async function markResponseDone(
@@ -737,61 +762,23 @@ async function recordDiagnosis(
     recommendations,
     audits,
   ).latest;
-  if (latest === undefined) {
-    throw new DomainError(
-      "A completed evaluation is required before diagnosis.",
-      "INVALID_APPROVAL_FIELDS",
-    );
+  const [diagnosisBlocker] = diagnosisBlockers({
+    recommendation: latest,
+    audits,
+  });
+  if (diagnosisBlocker !== undefined) {
+    throw new DomainError(diagnosisBlocker, "INVALID_APPROVAL_FIELDS");
   }
-  const knownCauseReady = latest.supportState === "known-cause";
-  if (!knownCauseReady && (latest.missingEvidence?.length ?? 0) > 0) {
-    throw new DomainError(
-      "Diagnosis requires all required evidence to be gathered.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
-  if (
-    !knownCauseReady &&
-    !["diagnosing", "waiting-on-platform-fix"].includes(latest.supportState ?? "")
-  ) {
-    throw new DomainError(
-      "Diagnosis requires a diagnosis-ready ticket state.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
-  const sentAt = latestSentAtForRecommendation(audits, latest.id);
-  if (sentAt === undefined) {
-    throw new DomainError(
-      "The evaluated response must be marked done before diagnosis.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
-  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
-  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
-    throw new DomainError(
-      "Evaluate the latest customer reply before diagnosis.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
-  const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
-  if (
-    latestDiagnosisAt !== undefined &&
-    (latestReplyAt === undefined || latestDiagnosisAt > latestReplyAt)
-  ) {
-    throw new DomainError(
-      "Diagnosis has already been recorded for the latest context.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
+  const diagnosisRecommendation = latest as TriageRecommendation;
   return deps.service.recordDiagnosis({
     ticketId: input.ticketId,
     actor: input.actor,
     diagnosedAt: deps.now().toISOString(),
-    diagnosis: diagnosisContextForTicket(ticket, latest),
+    diagnosis: diagnosisContextForTicket(ticket, diagnosisRecommendation),
     knowledgeArticleIds:
-      latest.knowledgeArticleIds.length > 0
-        ? latest.knowledgeArticleIds
-        : [latest.knownCause ?? "known-cause"],
+      diagnosisRecommendation.knowledgeArticleIds.length > 0
+        ? diagnosisRecommendation.knowledgeArticleIds
+        : [diagnosisRecommendation.knownCause ?? "known-cause"],
   });
 }
 
@@ -804,33 +791,11 @@ async function markFixAvailable(
     deps.audits.list(input.ticketId),
     deps.recommendations.list(),
   ]);
-  const latestDiagnosis = latestDiagnosisAudit(audits);
-  if (latestDiagnosis === undefined) {
-    throw new DomainError(
-      "A completed diagnosis is required before marking a fix available.",
-      "INVALID_APPROVAL_FIELDS",
-    );
+  const [fixBlocker] = fixBlockers({ audits });
+  if (fixBlocker !== undefined) {
+    throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
   }
-  const diagnosis = diagnosisFromAudit(latestDiagnosis);
-  if (diagnosis?.confidence !== "confirmed") {
-    throw new DomainError(
-      "A confirmed diagnosis is required before marking a fix available.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
-  if (!["engineering", "integration-partner"].includes(String(diagnosis.owner))) {
-    throw new DomainError(
-      "This confirmed diagnosis does not require a platform fix.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
-  const latestFixAt = latestAuditTimestamp(audits, "fix-available");
-  if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
-    throw new DomainError(
-      "A fix has already been recorded for the latest diagnosis.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
+  const latestDiagnosis = latestDiagnosisAudit(audits) as AuditEvent;
   const latest = summarizeRecommendationsForTicket(
     ticket,
     recommendations,
@@ -854,26 +819,20 @@ async function closeTicket(
     deps.audits.list(input.ticketId),
     deps.recommendations.list(),
   ]);
-  if (ticket.status === "resolved") {
-    throw new DomainError("Ticket is already closed.", "INVALID_APPROVAL_FIELDS");
-  }
   const latest = summarizeRecommendationsForTicket(
     ticket,
     recommendations,
     audits,
   ).latest;
-  if (latest?.supportState !== "ready-for-close") {
-    throw new DomainError(
-      "Ticket must have a ready-to-close recommendation before it can be closed.",
-      "INVALID_APPROVAL_FIELDS",
-    );
+  const [closeBlocker] = closeBlockers({
+    ticket,
+    recommendation: latest,
+    audits,
+  });
+  if (closeBlocker !== undefined) {
+    throw new DomainError(closeBlocker, "INVALID_APPROVAL_FIELDS");
   }
-  if (latestSentAtForRecommendation(audits, latest.id) === undefined) {
-    throw new DomainError(
-      "The ready-to-close response must be marked done before the ticket can be closed.",
-      "INVALID_APPROVAL_FIELDS",
-    );
-  }
+  const closingRecommendation = latest as TriageRecommendation;
 
   const closedAt = deps.now().toISOString();
   const { ticket: updated, result: auditEvent } =
@@ -892,7 +851,7 @@ async function closeTicket(
           actor: input.actor,
           action: "ticket-updated",
           ticketId: input.ticketId,
-          recommendationId: latest.id,
+          recommendationId: closingRecommendation.id,
           before: {
             status: previousTicket.status,
             revision: previousTicket.revision,
@@ -904,7 +863,7 @@ async function closeTicket(
           },
           rationale:
             "Ticket closed after the customer confirmed resolution and the closing response was sent.",
-          knowledgeArticleIds: latest.knowledgeArticleIds,
+          knowledgeArticleIds: closingRecommendation.knowledgeArticleIds,
           result: "success",
         });
         await deps.audits.append(event);

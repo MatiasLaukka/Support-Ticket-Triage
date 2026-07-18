@@ -511,6 +511,7 @@ describe("createTriageServer action protocol", () => {
 
     expect(result.isError).not.toBe(true);
     const value = expectStableStructured(result);
+    expect(value).not.toHaveProperty("operatorGuidance");
     const recommendation = TriageRecommendationSchema.parse(
       value.recommendation,
     );
@@ -797,6 +798,9 @@ describe("createTriageServer action protocol", () => {
         "The API response status is 503. The request ID is req_12345 and the failure timestamp was 2026-06-10 09:15 UTC.",
       source: "manual",
     });
+    const ticketReads = vi.spyOn(fixture.tickets, "get");
+    const auditReads = vi.spyOn(fixture.audits, "list");
+    const recommendationReads = vi.spyOn(fixture.recommendations, "list");
 
     const evaluated = await callTool(client, "evaluate_ticket", {
       ticketId: "TKT-1001",
@@ -816,6 +820,20 @@ describe("createTriageServer action protocol", () => {
     });
     expect(recommendation.draftCustomerResponse).toContain("Kind regards");
     expect(recommendation.classificationSignals?.length ?? 0).toBeGreaterThan(0);
+    expect(evaluated.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "review",
+        nextAction: "review-recommendation",
+        approval: {
+          required: true,
+          fields: ["priority", "tags", "customerResponse"],
+        },
+        unlocksTool: "mark_response_done",
+      },
+    });
+    expect(ticketReads).toHaveBeenCalledTimes(3);
+    expect(auditReads).toHaveBeenCalledTimes(2);
+    expect(recommendationReads).toHaveBeenCalledTimes(1);
     expect(await fixture.recommendations.get(recommendation.id)).toEqual(
       recommendation,
     );

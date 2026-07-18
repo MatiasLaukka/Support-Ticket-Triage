@@ -3,6 +3,7 @@ import {
   buildConversationHistory,
   buildConversationTimeline,
 } from "./conversation-history.js";
+import { buildOperatorGuidance } from "./workflow-guidance.js";
 
 export type RecommendationWorkflowState =
   | "active"
@@ -44,6 +45,7 @@ export function buildTicketWorkflowReadModel(input: {
     recommendationHistory: recommendation.history,
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
+    operatorGuidance: buildOperatorGuidance(input),
   };
 }
 
