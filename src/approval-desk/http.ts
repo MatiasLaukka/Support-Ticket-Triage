@@ -30,8 +30,8 @@ import {
 import {
   createCustomerResponseDraftProviderFromEnv,
   type CustomerResponseDraftProvider,
-  type GptClassificationReasoningProvider,
 } from "./draft-response-provider.js";
+import type { ClassificationReasoningProvider } from "./classification-reasoning-provider.js";
 import { classifyTicketFromContext } from "./classifier.js";
 import { buildConversationContextForTicket } from "./conversation-context.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
@@ -169,7 +169,7 @@ const WorkflowActionBodySchema = z
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
-  classificationReasoningProvider?: GptClassificationReasoningProvider;
+  classificationReasoningProvider?: ClassificationReasoningProvider;
 }
 
 export function createApprovalDeskHttpServer(
@@ -997,7 +997,7 @@ async function createRecommendation(
   const deterministicClassification = classifyTicketFromContext(
     conversationContextForClassification,
   );
-  const gptReasoning =
+  const gptReasoningExecution =
     options.classificationReasoningProvider === undefined || outcome !== undefined
       ? undefined
       : await options.classificationReasoningProvider.reason({
@@ -1005,6 +1005,7 @@ async function createRecommendation(
           conversationContext: conversationContextForClassification,
           deterministicClassification,
         });
+  const gptReasoning = gptReasoningExecution?.reasoning;
   const advisoryClassificationSignals =
     gptReasoning === undefined
       ? undefined

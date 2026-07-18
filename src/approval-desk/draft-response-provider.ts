@@ -1,9 +1,13 @@
 import { z } from "zod";
 import {
+  AiUsageSchema,
   DraftCustomerResponseStyleInputSchema,
   DraftCustomerResponseStyleSchema,
 } from "../domain.js";
 import type {
+  AiFallbackCategory,
+  AiGuardrailCheck,
+  AiUsage,
   DraftCustomerResponseCheck,
   DraftCustomerResponseSource,
   ExpectedOutcome,
@@ -81,6 +85,11 @@ export interface CustomerResponseDraft {
   source: DraftCustomerResponseSource;
   response: string;
   assist: GptAssist;
+  telemetry?: {
+    model: string;
+    latencyMs: number;
+    usage?: AiUsage;
+  };
 }
 
 export interface CustomerResponseDraftProvider {
@@ -105,17 +114,17 @@ export interface GptClassificationReasoningInput {
   deterministicClassification: TicketClassification;
 }
 
-export interface GptClassificationReasoningProvider {
-  reason(
-    input: GptClassificationReasoningInput,
-  ): Promise<GptClassificationReasoning>;
-}
-
 export interface ValidatedCustomerResponseDraft {
   source: DraftCustomerResponseSource;
   response: string;
   checks: DraftCustomerResponseCheck[];
   assist: GptAssist;
+  telemetry?: CustomerResponseDraft["telemetry"];
+  fallback?: {
+    category: AiFallbackCategory;
+    message: string;
+  };
+  candidateChecks: AiGuardrailCheck[];
 }
 
 export type FetchLike = (
@@ -155,9 +164,7 @@ export class UnavailableOpenAiDraftProvider
   implements CustomerResponseDraftProvider
 {
   async draft(): Promise<CustomerResponseDraft> {
-    throw new Error(
-      "OpenAI drafting is enabled but OPENAI_API_KEY is not set.",
-    );
+    throw new UnavailableOpenAiError();
   }
 }
 
@@ -171,10 +178,14 @@ export class OpenAiCustomerResponseDraftProvider
       responseStyle?: DraftCustomerResponseStyleInput;
       timeoutMs?: number;
       fetch?: FetchLike;
+      now?: () => number;
     },
   ) {}
 
   async draft(input: CustomerResponseDraftInput): Promise<CustomerResponseDraft> {
+    const model = this.options.model ?? DEFAULT_OPENAI_MODEL;
+    const now = this.options.now ?? Date.now;
+    const startedAt = now();
     const fetchImpl = this.options.fetch ?? fetch;
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_OPENAI_DRAFT_TIMEOUT_MS;
     const abortController = new AbortController();
@@ -188,7 +199,7 @@ export class OpenAiCustomerResponseDraftProvider
         },
         signal: abortController.signal,
         body: JSON.stringify({
-          model: this.options.model ?? DEFAULT_OPENAI_MODEL,
+          model,
           instructions: buildDraftInstructions(
             input.responseStyle ?? this.options.responseStyle ?? "balanced",
             formatDraftSignOff(input),
@@ -274,11 +285,7 @@ export class OpenAiCustomerResponseDraftProvider
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           abortController.abort();
-          reject(
-            new Error(
-              `OpenAI drafting request timed out after ${timeoutMs} ms.`,
-            ),
-          );
+          reject(new OpenAiTimeoutError());
         }, timeoutMs);
       }),
     ]).finally(() => {
@@ -288,17 +295,11 @@ export class OpenAiCustomerResponseDraftProvider
     });
 
     const raw = await response.text();
-    if (!response.ok) {
-      throw new Error(
-        `OpenAI drafting request failed with ${response.status}${formatOpenAiErrorDetail(
-          raw,
-        )}.`,
-      );
-    }
+    if (!response.ok) throw new Error("OpenAI request failed.");
 
-    const parsed = OpenAiDraftResponseSchema.parse(
-      JSON.parse(extractResponseText(JSON.parse(raw))),
-    );
+    const envelope = JSON.parse(raw);
+    const parsed = OpenAiDraftResponseSchema.parse(JSON.parse(extractResponseText(envelope)));
+    const usage = mapUsage(envelope);
     const selectedTone =
       input.responseStyle === "auto" ? parsed.recommendedTone : input.responseStyle;
     return {
@@ -315,17 +316,27 @@ export class OpenAiCustomerResponseDraftProvider
         audience: parsed.audience,
         checks: [],
       },
+      telemetry: {
+        model,
+        latencyMs: Math.max(0, now() - startedAt),
+        ...(usage === undefined ? {} : { usage }),
+      },
     };
   }
 }
 
 export function createCustomerResponseDraftProviderFromEnv(
   env: NodeJS.ProcessEnv,
-  options: { responseStyle?: DraftCustomerResponseStyleInput } = {},
+  options: {
+    responseStyle?: DraftCustomerResponseStyleInput;
+    preferOpenAi?: boolean;
+  } = {},
 ): CustomerResponseDraftProvider | undefined {
-  const configured = DraftProviderSchema.default("deterministic").parse(
-    env.APPROVAL_DRAFT_PROVIDER,
-  );
+  const configured = options.preferOpenAi === true
+    ? "openai"
+    : DraftProviderSchema.default("deterministic").parse(
+        env.APPROVAL_DRAFT_PROVIDER,
+      );
   if (configured === "deterministic") {
     return undefined;
   }
@@ -382,29 +393,31 @@ export async function draftCustomerResponseWithFallback(input: {
           ...candidate.assist,
           checks: validation.checks,
         },
+        ...(candidate.telemetry === undefined ? {} : { telemetry: candidate.telemetry }),
+        candidateChecks: [],
       };
     }
 
     return fallbackDraft({
       draftInput: input.draftInput,
-      reason: `Provider draft rejected: ${validation.blockingMessages.join(
-        " ",
-      )}`,
+      reason: `Provider draft rejected: ${validation.blockingMessages.join(" ")}`,
+      fallback: {
+        category: "guardrail-rejected",
+        message: "OpenAI draft did not pass review checks; deterministic output was used.",
+      },
     });
   } catch (error) {
     return fallbackDraft({
       draftInput: input.draftInput,
-      reason:
-        error instanceof Error
-          ? error.message
-          : "Draft provider failed before returning a response.",
+      fallback: classifyAiFailure(error),
     });
   }
 }
 
 function fallbackDraft(input: {
   draftInput: CustomerResponseDraftInput;
-  reason: string;
+  reason?: string;
+  fallback: { category: AiFallbackCategory; message: string };
 }): ValidatedCustomerResponseDraft {
   const fallbackAssist = buildDeterministicGptAssist(
     input.draftInput,
@@ -426,7 +439,9 @@ function fallbackDraft(input: {
       id: "fallback-used",
       label: "Fallback used",
       status: "warn",
-      message: sanitizeValidationMessage(input.reason),
+      message: input.reason === undefined
+        ? input.fallback.message
+        : sanitizeValidationMessage(input.reason),
     },
     ...validation.checks,
   ];
@@ -441,7 +456,37 @@ function fallbackDraft(input: {
       ...fallbackAssist,
       checks,
     },
+    fallback: input.fallback,
+    candidateChecks: [],
   };
+}
+
+export class UnavailableOpenAiError extends Error {
+  constructor() {
+    super("OpenAI is not configured.");
+  }
+}
+
+export class OpenAiTimeoutError extends Error {
+  constructor() {
+    super("OpenAI request timed out.");
+  }
+}
+
+export function classifyAiFailure(error: unknown): {
+  category: AiFallbackCategory;
+  message: string;
+} {
+  if (error instanceof UnavailableOpenAiError) {
+    return { category: "not-configured", message: "OpenAI is not configured; deterministic output was used." };
+  }
+  if (error instanceof OpenAiTimeoutError) {
+    return { category: "timeout", message: "OpenAI timed out; deterministic output was used." };
+  }
+  if (error instanceof z.ZodError || error instanceof SyntaxError) {
+    return { category: "invalid-schema", message: "OpenAI returned invalid structured output; deterministic output was used." };
+  }
+  return { category: "provider-error", message: "OpenAI was unavailable; deterministic output was used." };
 }
 
 function validateCustomerResponseDraft(input: {
@@ -914,43 +959,22 @@ function extractResponseText(response: unknown): string {
   return text;
 }
 
+function mapUsage(response: unknown): AiUsage | undefined {
+  const usage = z.object({
+    usage: z.object({
+      input_tokens: z.number().int().nonnegative(),
+      output_tokens: z.number().int().nonnegative(),
+      total_tokens: z.number().int().nonnegative(),
+    }).optional(),
+  }).passthrough().parse(response).usage;
+  if (usage === undefined) return undefined;
+  return AiUsageSchema.parse({
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    totalTokens: usage.total_tokens,
+  });
+}
+
 function sanitizeValidationMessage(message: string): string {
   return message.replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]");
-}
-
-function formatOpenAiErrorDetail(raw: string): string {
-  if (raw.trim() === "") {
-    return "";
-  }
-
-  const parsed = z
-    .object({
-      error: z
-        .object({
-          message: z.string().trim().min(1).optional(),
-          type: z.string().trim().min(1).optional(),
-          code: z.union([z.string().trim().min(1), z.number()]).optional(),
-        })
-        .optional(),
-    })
-    .safeParse(safeJson(raw));
-  if (!parsed.success || parsed.data.error === undefined) {
-    return "";
-  }
-
-  const error = parsed.data.error;
-  const label = error.code ?? error.type;
-  const message = error.message;
-  const labelText = label === undefined ? "" : ` (${String(label)})`;
-  const messageText =
-    message === undefined ? "" : `: ${sanitizeValidationMessage(message)}`;
-  return `${labelText}${messageText}`;
-}
-
-function safeJson(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }

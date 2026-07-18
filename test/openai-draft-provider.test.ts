@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createCustomerResponseDraftProviderFromEnv,
+  draftCustomerResponseWithFallback,
+  OpenAiTimeoutError,
   OpenAiCustomerResponseDraftProvider,
+  UnavailableOpenAiError,
 } from "../src/approval-desk/draft-response-provider.js";
 import type { ExpectedOutcome, KnowledgeArticle, Ticket } from "../src/domain.js";
 
@@ -44,6 +47,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                   ],
                 },
               ],
+              usage: { input_tokens: 80, output_tokens: 30, total_tokens: 110 },
             }),
         };
       },
@@ -59,7 +63,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       companyName: "Northstar Marketing Support",
     });
 
-    expect(draft).toEqual({
+    expect(draft).toMatchObject({
       source: "openai",
       response:
         "We are checking the storefront event and flow setup.\n\nKind regards,\nSupport Team\nNorthstar Marketing Support",
@@ -81,6 +85,11 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
         audience: "merchant-admin",
         checks: [],
       },
+    });
+    expect(draft.telemetry).toEqual({
+      model: "gpt-5.6-luna",
+      latencyMs: expect.any(Number),
+      usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110 },
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.url).toBe("https://api.openai.com/v1/responses");
@@ -302,7 +311,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
         actor: "approval-desk",
         companyName: "Northstar Marketing Support",
       }),
-    ).rejects.toThrow("OPENAI_API_KEY is not set");
+    ).rejects.toThrow("OpenAI is not configured.");
   });
 
   it("surfaces sanitized OpenAI error details for rate and quota failures", async () => {
@@ -334,9 +343,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
         actor: "approval-desk",
         companyName: "Northstar Marketing Support",
       }),
-    ).rejects.toThrow(
-      "OpenAI drafting request failed with 429 (insufficient_quota): You exceeded your current quota for [redacted-api-key], please check your plan and billing details.",
-    );
+    ).rejects.toThrow("OpenAI request failed.");
   });
 
   it("times out slow OpenAI drafting requests", async () => {
@@ -368,7 +375,32 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       ),
     ]);
 
-    expect(result).toBe("OpenAI drafting request timed out after 10 ms.");
+    expect(result).toBe("OpenAI request timed out.");
+  });
+
+  it.each([
+    ["not-configured", new UnavailableOpenAiError()],
+    ["timeout", new OpenAiTimeoutError()],
+    ["invalid-schema", new SyntaxError("raw provider payload")],
+    ["provider-error", new Error("sk-secret at C:\\private\\trace")],
+  ] as const)("maps %s failures to sanitized fallback metadata", async (category, error) => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: { draft: async () => { throw error; } },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft: "Fallback draft.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result.fallback?.category).toBe(category);
+    expect(result.fallback?.message).not.toContain("sk-secret");
+    expect(result.fallback?.message).not.toContain("C:\\private");
+    expect(result.candidateChecks).toEqual([]);
   });
 });
 

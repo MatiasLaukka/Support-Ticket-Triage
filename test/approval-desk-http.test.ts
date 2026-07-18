@@ -2003,14 +2003,17 @@ describe("createApprovalDeskHttpServer", () => {
       classificationReasoningProvider: {
         async reason() {
           return {
-            issueType: "campaign-editor",
-            candidateCategory: "performance",
-            candidateTeam: "product",
-            knowledgeArticleIds: ["campaign-send-failures"],
-            confidence: 0.9,
-            evidence: ["customer says the campaign editor page stays blank"],
-            missingEvidenceThatWouldChangeClassification: [],
-            explanation: "The reply describes a campaign editor loading failure.",
+            reasoning: {
+              issueType: "campaign-editor",
+              candidateCategory: "performance",
+              candidateTeam: "product",
+              knowledgeArticleIds: ["campaign-send-failures"],
+              confidence: 0.9,
+              evidence: ["customer says the campaign editor page stays blank"],
+              missingEvidenceThatWouldChangeClassification: [],
+              explanation: "The reply describes a campaign editor loading failure.",
+            },
+            telemetry: { model: "gpt-5.6-luna", latencyMs: 1 },
           };
         },
       },
