@@ -1282,12 +1282,14 @@ function campaignEditorFixEvidenceReadiness(
 }
 
 function hasCampaignEditorPlatformFixContext(value: string): boolean {
+  const privateWindowExpression =
+    /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?)/i;
   const alternateBrowser =
     /(?:another browser|different browser|microsoft edge|edge browser|firefox|safari)/i;
   const campaignEditorFailure =
     /\b(?:campaign(?:\s+|-)?editor|editor)\b.{0,80}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b|\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b.{0,80}\b(?:campaign(?:\s+|-)?editor|editor)\b/i;
   const privateWindow = affirmativeReproduction(value, {
-    subject: /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?)/i,
+    subject: privateWindowExpression,
     result: /(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result)|reproduced)/i,
   });
   const anotherBrowser = affirmativeReproduction(value, {
@@ -1296,9 +1298,11 @@ function hasCampaignEditorPlatformFixContext(value: string): boolean {
   });
   const multipleUsers = affirmativeMultiUserReproduction(value);
   const chunkLoadError = /\bchunkloaderror\b/i;
-  const isolationSubject = String.raw`(?:private|incognito|${alternateBrowser.source}|another admin|other admin|additional admin)`;
+  const isolationSubject = String.raw`(?:${privateWindowExpression.source}|${alternateBrowser.source}|another admin|other admin|additional admin)`;
+  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
+  const successfulResult = String.raw`(?:works?|loads?|opens?|loaded|opened|working|is\s+working|not\s+blank)`;
   const successfulIsolation = new RegExp(
-    String.raw`\b(?:works?|loads?|opens?|loaded|opened|working|not blank)\b.{0,64}\b${isolationSubject}\b|\b${isolationSubject}\b.{0,64}\b(?:works?|loads?|loaded|opened|is working|not blank)\b`,
+    String.raw`\b${editorSubject}\b[^.!?\n]{0,40}\b${successfulResult}\b[^.!?\n]{0,64}\b${isolationSubject}\b|\b${isolationSubject}\b[^.!?\n]{0,64}\b${editorSubject}\b[^.!?\n]{0,40}\b${successfulResult}\b`,
     "i",
   );
   const negatedChunkLoadError =
@@ -1319,7 +1323,7 @@ function affirmativeReproduction(
 ): boolean {
   const subject = input.subject.source;
   const result = input.result.source;
-  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|without)`;
+  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|nobody(?:\s+has)?|without)`;
   const attempt = String.raw`(?:try|tried|test|tested|use|used|open|opened|check|checked|reproduce|reproduced)`;
   const completedAttempt = String.raw`(?:tried|tested|used|opened|checked|reproduced)`;
   const negatedAttempt = new RegExp(
@@ -1346,7 +1350,7 @@ function affirmativeMultiUserReproduction(value: string): boolean {
   const allUsersFailure =
     /\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b.{0,48}\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b|\b(?:all|multiple|several|both)\s+(?:admins?|users?)\b.{0,48}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))\b|\b(?:blank|same (?:issue|result))\b.{0,32}\b(?:all|both)\s+of\s+us\b/i;
   const adminAttempt = new RegExp(
-    String.raw`\b(?:asked|tried|tested|opened|checked|reproduced)\b.{0,48}\b(?:${adminSubject})\b|\b(?:${adminSubject})\b.{0,48}\b(?:tried|tested|opened|checked|reproduced)\b|\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result))\b|\b(?:blank|not loading|fails? to load|same (?:issue|result))\b[^.!?\n]{0,48}\b(?:${adminSubject})\b`,
+    String.raw`\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:tried|tested|used|opened|checked|reproduced)\b|\b(?:${adminSubject})\b[^.!?\n]{0,48}\b(?:blank|not loading|fails? to load|same (?:issue|result))\b|\b(?:blank|not loading|fails? to load|same (?:issue|result))\b[^.!?\n]{0,48}\b(?:${adminSubject})\b`,
     "i",
   );
   return allUsersFailure.test(value) || adminAttempt.test(value);

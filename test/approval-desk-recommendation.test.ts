@@ -1175,6 +1175,73 @@ describe("Approval Desk recommendation builder", () => {
 
   it.each([
     {
+      boundary: "opened browsers with an explicit editor failure",
+      promotes: true,
+      body:
+        "I opened a private window and Microsoft Edge, and another admin reproduced the same issue. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      boundary: "opened browsers with an explicit editor success",
+      promotes: false,
+      body:
+        "I opened a private window and Microsoft Edge, and another admin reproduced the same issue. The campaign editor now loads normally for all users, although the old console log shows ChunkLoadError.",
+    },
+    {
+      boundary: "asked admin plus an explicit all-user failure",
+      promotes: true,
+      body:
+        "I tried a private window and Microsoft Edge, then asked another admin to open the same campaign. The campaign editor is still blank for all of us and the console shows ChunkLoadError.",
+    },
+    {
+      boundary: "asked admin with only a future result",
+      promotes: false,
+      body:
+        "I tried a private window and Microsoft Edge. I asked another admin to test tomorrow. The campaign editor is still blank for me and the console shows ChunkLoadError.",
+    },
+    {
+      boundary: "private campaign wording after valid completed evidence",
+      promotes: true,
+      body:
+        "I tried a private window and Microsoft Edge, and another admin reproduced the same blank campaign editor with ChunkLoadError. We need a mitigation that works for this private campaign.",
+    },
+    {
+      boundary: "private campaign wording without a private-window result",
+      promotes: false,
+      body:
+        "The private campaign editor is blank in Microsoft Edge for all users and shows ChunkLoadError, but nobody has tried a private or incognito window.",
+    },
+  ])(
+    "separates $boundary",
+    async ({ body, promotes }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-campaign-editor-semantic-boundary",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      if (promotes) {
+        expect(input.supportState).toBe("waiting-on-platform-fix");
+      } else {
+        expect(input.supportState).not.toBe("waiting-on-platform-fix");
+      }
+    },
+  );
+
+  it.each([
+    {
       turn: "status follow-up",
       body: "Any update on when this will be fixed?",
     },
