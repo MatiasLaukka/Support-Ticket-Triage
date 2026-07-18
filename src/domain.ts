@@ -163,7 +163,7 @@ const SanitizedAiMessageSchema = NonBlankStringSchema
   .max(240)
   .refine(
     (message) =>
-      !/^\s*[{\[]|sk-[A-Za-z0-9_-]+|\b(?:api[-_]?key|access[-_]?token|secret|token)\s*[=:]\s*\S+|authorization|bearer\s+|(?:[A-Za-z]:[\\/]|(?:^|[\s"'`(])(?:~[\\/]|\.{1,2}[\\/]|[\\/]{2}[^\\/\s]+[\\/]|\/(?:home|users|var|etc|tmp)\/))|traceback|stack\s*trace|\bat\s+.+\(.+:\d+:\d+\)|\b(?:system|developer|user)\s+(?:prompt|message|instructions?)\s*:|\b(?:openai|anthropic|provider)\s+(?:error|response|payload)(?:\s+(?:response|payload|body))?\s*:/i.test(message),
+      !/^\s*[{\[]|sk-[A-Za-z0-9_-]+|\b(?:api[-_]?key|access[-_]?token|secret|token)\s*[=:]\s*\S+|authorization|bearer\s+|(?:[A-Za-z]:[\\/]|(?:^|[\s"'`(])(?:(?:~?[\\/]|[\\/]{2})(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+|(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+))|traceback|stack\s*trace|\bat\s+.+\(.+:\d+:\d+\)|\b(?:system|developer|user)\s+(?:prompt|message|instructions?)\s*:|\b(?:openai|anthropic|provider)\s+(?:error|response|payload)(?:\s+(?:response|payload|body))?\s*:/i.test(message),
     "AI trace messages must not contain credentials or machine paths.",
   );
 

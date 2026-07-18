@@ -466,6 +466,20 @@ describe("domain contracts", () => {
     expect(AiExecutionTraceSchema.safeParse(trace).success).toBe(false);
   });
 
+  it.each([
+    ["generic Unix root", "See /opt/service/config.json."],
+    ["another Unix root", "See /srv/triage/cache.json."],
+    ["non-dot relative path", "See src/internal/key.ts."],
+    ["nested relative path", "See config/prod/secrets.json."],
+    ["Windows path", "See D:\\service\\config.json."],
+    ["UNC path", "See \\\\server\\share\\config.json."],
+  ])("rejects filesystem paths from narrative trace fields: %s", (_kind, value) => {
+    const trace = makeAiExecutionTrace();
+    trace.classification.acceptedSignals[0]!.reason = value;
+
+    expect(AiExecutionTraceSchema.safeParse(trace).success).toBe(false);
+  });
+
   it("rejects mismatched AI token usage", () => {
     const trace = makeAiExecutionTrace();
     trace.classification.usage!.totalTokens = 161;
