@@ -208,6 +208,7 @@ npm run demo:skill-showcase -- --deterministic
 
 Controlled-mode checkpoints:
 
+- the report explicitly prints `Mode: controlled`;
 - no API key, provider configuration, or network access is required;
 - local controlled classification and drafting providers produce auditable
   `used` traces while deterministic safety rules retain final authority;
@@ -224,6 +225,7 @@ Controlled-mode checkpoints:
 
 Deterministic-mode checkpoints:
 
+- the report explicitly prints `Mode: deterministic`;
 - no classification or drafting provider is passed and no provider call is
   made;
 - classification stages are `skipped`, drafting stages are normally
@@ -243,7 +245,8 @@ npm run demo:skill-showcase -- --live
 
 If the key is missing, the command fails with
 `OPENAI_API_KEY is required for live showcase mode.` The recorded showcase did
-not run live mode.
+not run live mode. Unknown arguments, duplicate mode flags, and conflicting
+mode flags also exit nonzero with fixed safe errors.
 
 ## 3. Security Escalation
 

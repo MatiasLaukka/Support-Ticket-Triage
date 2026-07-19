@@ -29,6 +29,7 @@ Recorded results:
 
 | Evidence | Controlled/default | Deterministic |
 | --- | --- | --- |
+| Reported mode | `controlled` | `deterministic` |
 | External provider call | None; local controlled providers only | None; no providers passed |
 | Classification trace | Seven `used` stages | Seven `skipped` stages |
 | Drafting trace | Six `used`; final `guardrail-rejected` fallback | Six `skipped`; final `not-configured` fallback |
@@ -40,7 +41,9 @@ The controlled transcript is preserved exactly in
 [skill-showcase-example.md](skill-showcase-example.md). Each workflow entry
 shows the new next action, making the replay auditable without exposing ticket
 text, response text, prompts, or provider payloads. Audit output is restricted
-to event type, actor, and timestamp.
+to event type, actor, and timestamp. The report also identifies the selected
+safe mode, and invalid, duplicate, or conflicting CLI arguments exit nonzero
+instead of silently falling back to controlled mode.
 
 The focused test command was:
 

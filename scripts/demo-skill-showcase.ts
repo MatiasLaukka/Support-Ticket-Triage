@@ -44,6 +44,7 @@ const SHOWCASE_START = Date.parse("2026-06-10T10:00:00.000Z");
 export type SkillShowcaseMode = "controlled" | "deterministic" | "live";
 
 export interface SkillShowcaseReport {
+  mode: SkillShowcaseMode;
   toolCalls: string[];
   aiStages: AiExecutionTrace[];
   workflowStages: Array<{
@@ -64,6 +65,26 @@ export interface SkillShowcaseReport {
   serialized: string;
 }
 
+export interface RunSkillShowcaseOptions {
+  root: string;
+  dataRoot: string;
+  mode: SkillShowcaseMode;
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface SkillShowcaseCliOptions {
+  args: readonly string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  createTemporaryRoot?: () => Promise<string>;
+  removeTemporaryRoot?: (root: string) => Promise<void>;
+  runShowcase?: (
+    options: RunSkillShowcaseOptions,
+  ) => Promise<SkillShowcaseReport>;
+  writeStdout?: (text: string) => void;
+  writeStderr?: (text: string) => void;
+}
+
 interface WorkflowSnapshot {
   ticket: Ticket;
   latestRecommendation?: z.infer<typeof TriageRecommendationSchema>;
@@ -78,14 +99,11 @@ const WorkflowSnapshotSchema = z
   })
   .passthrough();
 
-export async function runSkillShowcase(options: {
-  root: string;
-  dataRoot: string;
-  mode: SkillShowcaseMode;
-}): Promise<SkillShowcaseReport> {
-  if (options.mode === "live" && !process.env.OPENAI_API_KEY?.trim()) {
-    throw new Error("OPENAI_API_KEY is required for live showcase mode.");
-  }
+export async function runSkillShowcase(
+  options: RunSkillShowcaseOptions,
+): Promise<SkillShowcaseReport> {
+  const env = options.env ?? process.env;
+  requireLiveConfiguration(options.mode, env);
 
   let clockTick = 0;
   const deps = await createRuntimeDependencies({
@@ -97,12 +115,12 @@ export async function runSkillShowcase(options: {
       TRIAGE_KNOWLEDGE_ROOT: resolve(options.root, "data/knowledge"),
     },
   });
-  const providers = providersForMode(options.mode);
+  const providers = providersForMode(options.mode, env);
   const client = await connectInMemory(
     createTriageServer({
       ...deps,
       ...providers,
-      env: options.mode === "live" ? process.env : {},
+      env: options.mode === "live" ? env : {},
     }),
   );
 
@@ -115,21 +133,20 @@ export async function runSkillShowcase(options: {
 
 export function providersForMode(
   mode: SkillShowcaseMode,
+  env: NodeJS.ProcessEnv = process.env,
 ): Pick<
   TriageServerDependencies,
   "classificationReasoningProvider" | "draftProvider"
 > {
   if (mode === "deterministic") return {};
   if (mode === "live") {
-    if (!process.env.OPENAI_API_KEY?.trim()) {
-      throw new Error("OPENAI_API_KEY is required for live showcase mode.");
-    }
+    requireLiveConfiguration(mode, env);
     return {
       classificationReasoningProvider:
-        createClassificationReasoningProviderFromEnv(process.env, {
+        createClassificationReasoningProviderFromEnv(env, {
           preferOpenAi: true,
         }),
-      draftProvider: createCustomerResponseDraftProviderFromEnv(process.env, {
+      draftProvider: createCustomerResponseDraftProviderFromEnv(env, {
         responseStyle: "auto",
         preferOpenAi: true,
       }),
@@ -170,6 +187,7 @@ async function replayTkt1010(input: {
         await input.deps.audits.list(TICKET_ID),
       );
       const report = {
+        mode: input.mode,
         toolCalls,
         aiStages,
         workflowStages,
@@ -204,7 +222,10 @@ async function replayTkt1010(input: {
         if (recommendation === undefined) {
           throw new Error("Review guidance did not include a recommendation.");
         }
-        const fields = [...workflow.operatorGuidance.approval.fields];
+        const approval = showcaseApprovalFields(
+          workflow.operatorGuidance.approval,
+        );
+        const fields = approval.fields;
         await callTool(input.client, toolCalls, "mark_response_done", {
           recommendationId: recommendation.id,
           ticketId: TICKET_ID,
@@ -215,7 +236,7 @@ async function replayTkt1010(input: {
           confirm: true,
         });
         approvals.push({
-          required: true,
+          required: approval.required,
           fields,
           actor: ACTOR,
         });
@@ -241,7 +262,7 @@ async function replayTkt1010(input: {
         break;
       case "wait-for-customer":
         throw new Error(
-          `Showcase fixture stopped while waiting for a customer reply. Stages: ${workflowStages.join(" -> ")}. Blockers: ${workflow.operatorGuidance.blockers.join(" | ")}`,
+          `Showcase fixture stopped while waiting for customer. Workflow: ${formatWorkflowTrail(workflowStages)}.`,
         );
     }
 
@@ -335,12 +356,30 @@ function sanitizeGuidance(
   return { stage: guidance.stage, nextAction: guidance.nextAction };
 }
 
+export function showcaseApprovalFields(
+  approval: OperatorGuidance["approval"],
+): { required: true; fields: ApprovedField[] } {
+  if (!approval.required) {
+    throw new Error("Review guidance did not require explicit approval.");
+  }
+  return { required: approval.required, fields: [...approval.fields] };
+}
+
+export function formatWorkflowTrail(
+  stages: SkillShowcaseReport["workflowStages"],
+): string {
+  return stages
+    .map(({ stage, nextAction }) => `${stage}/${nextAction}`)
+    .join(" -> ");
+}
+
 function serializeReport(
   report: Omit<SkillShowcaseReport, "serialized">,
 ): string {
   const lines = [
     "# Codex Skill AI Showcase",
     "",
+    `- Mode: ${report.mode}`,
     `- Final ticket status: ${report.finalTicketStatus}`,
     "",
     "## Governed MCP tool calls",
@@ -385,34 +424,106 @@ function serializeReport(
   return lines.join("\n");
 }
 
-async function main(): Promise<void> {
-  const hasDeterministic = process.argv.includes("--deterministic");
-  const hasLive = process.argv.includes("--live");
-  if (hasDeterministic && hasLive) {
+export function parseSkillShowcaseArgs(
+  args: readonly string[],
+): SkillShowcaseMode {
+  if (args.some((arg) => !["--deterministic", "--live"].includes(arg))) {
+    throw new Error(
+      "Unknown showcase argument. Use no flags, --deterministic, or --live.",
+    );
+  }
+  const deterministicCount = args.filter(
+    (arg) => arg === "--deterministic",
+  ).length;
+  const liveCount = args.filter((arg) => arg === "--live").length;
+  if (deterministicCount > 1 || liveCount > 1) {
+    throw new Error("Showcase mode flags may be provided only once.");
+  }
+  if (deterministicCount === 1 && liveCount === 1) {
     throw new Error("Choose either --deterministic or --live, not both.");
   }
-  const mode: SkillShowcaseMode = hasLive
+  return liveCount === 1
     ? "live"
-    : hasDeterministic
+    : deterministicCount === 1
       ? "deterministic"
       : "controlled";
-  const dataRoot = await mkdtemp(join(tmpdir(), "skill-showcase-"));
+}
+
+export async function runSkillShowcaseCli(
+  options: SkillShowcaseCliOptions,
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const mode = parseSkillShowcaseArgs(options.args);
+  requireLiveConfiguration(mode, env);
+  const createTemporaryRoot = options.createTemporaryRoot ??
+    (() => mkdtemp(join(tmpdir(), "skill-showcase-")));
+  const removeTemporaryRoot = options.removeTemporaryRoot ??
+    ((root: string) => rm(root, { recursive: true, force: true }));
+  const dataRoot = await createTemporaryRoot();
   try {
-    const report = await runSkillShowcase({
-      root: process.cwd(),
+    const report = await (options.runShowcase ?? runSkillShowcase)({
+      root: options.cwd,
       dataRoot,
       mode,
+      env,
     });
-    process.stdout.write(`${report.serialized}\n`);
+    (options.writeStdout ?? ((text) => process.stdout.write(text)))(
+      `${report.serialized}\n`,
+    );
   } finally {
-    await rm(dataRoot, { recursive: true, force: true });
+    await removeTemporaryRoot(dataRoot);
   }
 }
 
+export async function main(options: SkillShowcaseCliOptions): Promise<number> {
+  try {
+    await runSkillShowcaseCli(options);
+    return 0;
+  } catch (error) {
+    const message = safeCliErrorMessage(error);
+    (options.writeStderr ?? ((text) => process.stderr.write(text)))(
+      `${message}\n`,
+    );
+    return 1;
+  }
+}
+
+function requireLiveConfiguration(
+  mode: SkillShowcaseMode,
+  env: NodeJS.ProcessEnv,
+): void {
+  if (mode === "live" && !env.OPENAI_API_KEY?.trim()) {
+    throw new Error("OPENAI_API_KEY is required for live showcase mode.");
+  }
+}
+
+function safeCliErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const fixedMessages = new Set([
+    "OPENAI_API_KEY is required for live showcase mode.",
+    "Choose either --deterministic or --live, not both.",
+    "Showcase mode flags may be provided only once.",
+    "Unknown showcase argument. Use no flags, --deterministic, or --live.",
+    "Showcase exceeded the bounded transition limit.",
+    "Review guidance did not require explicit approval.",
+  ]);
+  if (fixedMessages.has(message)) return message;
+  if (
+    /^Showcase fixture stopped while waiting for customer\. Workflow: (?:[a-z-]+\/[a-z-]+)(?: -> [a-z-]+\/[a-z-]+)*\.$/.test(
+      message,
+    )
+  ) {
+    return message;
+  }
+  return "Showcase failed.";
+}
+
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.filename) {
-  main().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : "Showcase failed.";
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
+  void main({
+    args: process.argv.slice(2),
+    cwd: process.cwd(),
+    env: process.env,
+  }).then((exitCode) => {
+    process.exitCode = exitCode;
   });
 }

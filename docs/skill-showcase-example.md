@@ -1,5 +1,6 @@
 # Codex Skill AI Showcase
 
+- Mode: controlled
 - Final ticket status: resolved
 
 ## Governed MCP tool calls

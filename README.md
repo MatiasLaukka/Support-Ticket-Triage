@@ -118,8 +118,9 @@ shows correlated event-ingestion delay handling and incident-response routing.
 The command-line showcase replays the synthetic `TKT-1010` lifecycle through
 the MCP interface in fresh temporary state. It follows each
 `operatorGuidance.nextAction`, reads the workflow again after every action, and
-cleans the temporary state when it exits. The saved controlled transcript is
-in [docs/skill-showcase-example.md](docs/skill-showcase-example.md).
+cleans the temporary state when it exits. Every report names its selected safe
+mode. The saved controlled transcript is in
+[docs/skill-showcase-example.md](docs/skill-showcase-example.md).
 
 ```powershell
 npm run build
@@ -153,7 +154,8 @@ npm run demo:skill-showcase -- --live
 ```
 
 The recorded portfolio results cover controlled and deterministic modes only;
-no live showcase run is claimed.
+no live showcase run is claimed. Unknown arguments and repeated or conflicting
+mode flags fail safely, so a typo cannot silently select controlled mode.
 
 ## Screenshots
 
