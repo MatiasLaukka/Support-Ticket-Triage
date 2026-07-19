@@ -18,6 +18,7 @@
     "start": "node dist/src/index.js",
     "approval-desk": "node dist/src/approval-desk.js",
     "demo:approval-desk": "node dist/scripts/demo-approval-desk.js",
+    "demo:skill-showcase": "node dist/scripts/demo-skill-showcase.js",
     "demo:showcase": "node dist/scripts/demo-approval-desk.js"
   },
   "dependencies": {

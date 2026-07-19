@@ -196,6 +196,55 @@ Expected checkpoints:
   still shows the service action;
 - rejection requires feedback and leaves ticket fields unchanged.
 
+## 2b. Resettable Codex Skill AI Showcase
+
+Build once, then run the default controlled and explicit deterministic modes:
+
+```powershell
+npm run build
+npm run demo:skill-showcase
+npm run demo:skill-showcase -- --deterministic
+```
+
+Controlled-mode checkpoints:
+
+- no API key, provider configuration, or network access is required;
+- local controlled classification and drafting providers produce auditable
+  `used` traces while deterministic safety rules retain final authority;
+- the final controlled drafting trace remains the backend's
+  `guardrail-rejected` fallback and is reported exactly;
+- the driver reads `get_ticket_workflow` before starting and after every
+  transition, then performs only the named `operatorGuidance.nextAction`;
+- every `review-recommendation` gate visibly discloses the scripted
+  `portfolio-reviewer` simulation and submits exactly the guidance-provided
+  approval fields to `mark_response_done`;
+- the next-action trail passes through diagnosis-ready, diagnosis-recorded,
+  fix-ready, verification, ready-for-close, and closed; and
+- the final ticket status is `resolved`.
+
+Deterministic-mode checkpoints:
+
+- no classification or drafting provider is passed and no provider call is
+  made;
+- classification stages are `skipped`, drafting stages are normally
+  `skipped`, and the final drafting stage preserves `fallback` with category
+  `not-configured` and the safe deterministic-output reason;
+- the same guidance-driven workflow reaches `resolved`; and
+- neither output includes ticket/request/response bodies, raw prompts, raw
+  provider data, credentials, authorization values, or machine paths.
+
+The optional live mode is never selected unless `--live` is present. Its
+prerequisite and command are:
+
+```powershell
+$env:OPENAI_API_KEY = 'set-in-the-shell-only'
+npm run demo:skill-showcase -- --live
+```
+
+If the key is missing, the command fails with
+`OPENAI_API_KEY is required for live showcase mode.` The recorded showcase did
+not run live mode.
+
 ## 3. Security Escalation
 
 Send this exact user prompt:

@@ -14,6 +14,53 @@ npm run demo:showcase
 The command resets local runtime data, starts the browser Approval Desk, and
 prints a local URL.
 
+## Resettable Skill Showcase Results
+
+The separate command-line showcase uses fresh temporary state and exercises
+the same governed lifecycle exclusively through MCP tools:
+
+```powershell
+npm run build
+npm run demo:skill-showcase
+npm run demo:skill-showcase -- --deterministic
+```
+
+Recorded results:
+
+| Evidence | Controlled/default | Deterministic |
+| --- | --- | --- |
+| External provider call | None; local controlled providers only | None; no providers passed |
+| Classification trace | Seven `used` stages | Seven `skipped` stages |
+| Drafting trace | Six `used`; final `guardrail-rejected` fallback | Six `skipped`; final `not-configured` fallback |
+| Human boundary | Seven disclosed `portfolio-reviewer` simulations using guidance-provided fields | Same |
+| Lifecycle | Diagnose, Fix, verification, ready-for-close, closed | Same |
+| Final status | `resolved` | `resolved` |
+
+The controlled transcript is preserved exactly in
+[skill-showcase-example.md](skill-showcase-example.md). Each workflow entry
+shows the new next action, making the replay auditable without exposing ticket
+text, response text, prompts, or provider payloads. Audit output is restricted
+to event type, actor, and timestamp.
+
+The focused test command was:
+
+```powershell
+npm test -- --run test/demo-skill-showcase.test.ts
+```
+
+Result: one test file passed, with all 3 tests passing. The test verifies the
+narrow report schema, exact guidance-driven lifecycle, controlled AI traces,
+no-provider deterministic semantics, the final `not-configured` fallback, and
+safe live-mode configuration failure.
+
+Live mode is optional and was not run for these results. To run it, set the key
+only in the current shell and select it explicitly:
+
+```powershell
+$env:OPENAI_API_KEY = 'set-in-the-shell-only'
+npm run demo:skill-showcase -- --live
+```
+
 ## Primary Scenario
 
 Ticket: `TKT-1010`
