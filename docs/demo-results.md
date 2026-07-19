@@ -51,7 +51,7 @@ The focused test command was:
 npm test -- --run test/demo-skill-showcase.test.ts
 ```
 
-Result: one test file passed, with all 3 tests passing. The test verifies the
+Result: one test file passed, with all 14 tests passing. The test verifies the
 narrow report schema, exact guidance-driven lifecycle, controlled AI traces,
 no-provider deterministic semantics, the final `not-configured` fallback, and
 safe live-mode configuration failure.
