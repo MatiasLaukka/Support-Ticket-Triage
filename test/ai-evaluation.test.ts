@@ -5,6 +5,7 @@ import { TicketSchema } from "../src/domain.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import {
+  OpenAiCustomerResponseDraftProvider,
   OpenAiTimeoutError,
   type CustomerResponseDraftProvider,
 } from "../src/approval-desk/draft-response-provider.js";
@@ -309,6 +310,56 @@ describe("evaluateTicketWithAi", () => {
         category: "guardrail-rejected",
         message: "OpenAI output did not pass response guardrails; deterministic output was used.",
       },
+    });
+  });
+
+  it("preserves exact attempted-model telemetry when a real OpenAI draft is guardrail-rejected", async () => {
+    const clock = [1_000, 1_037];
+    const draftProvider = new OpenAiCustomerResponseDraftProvider({
+      apiKey: "sk-test-secret",
+      model: "gpt-5.6-luna",
+      now: () => clock.shift() ?? 1_037,
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          output: [{
+            content: [{
+              type: "output_text",
+              text: JSON.stringify({
+                draftCustomerResponse:
+                  "Use campaign-send-failures to close this ticket.",
+                missingInfoSuggestions: ["Share a screenshot of the loading state."],
+                investigationSteps: ["Review the campaign editor loading path."],
+                tone: "empathetic",
+                recommendedTone: "empathetic",
+                toneReason: "The customer reports an interrupted campaign workflow.",
+                audience: "merchant-admin",
+              }),
+            }],
+          }],
+          usage: { input_tokens: 81, output_tokens: 19, total_tokens: 100 },
+        }),
+      }),
+    });
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: campaignEditorProvider,
+      draftProvider,
+    });
+
+    expect(input.aiExecutionTrace?.drafting).toMatchObject({
+      status: "fallback",
+      source: "fallback",
+      model: "gpt-5.6-luna",
+      latencyMs: 37,
+      usage: { inputTokens: 81, outputTokens: 19, totalTokens: 100 },
+      fallback: { category: "guardrail-rejected" },
     });
   });
 

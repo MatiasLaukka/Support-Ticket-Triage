@@ -45,6 +45,9 @@ import { evaluateEscalation, validateApprovedFields } from "./policy.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
+const ticketOperations = new Map<TicketId, Promise<void>>();
+const NEWER_REPLY_SUPERSESSION_REASON =
+  "A newer customer reply requires a fresh recommendation.";
 
 const SubmitRecommendationInputSchema = z
   .object({
@@ -334,6 +337,7 @@ export interface TicketStore {
 export interface RecommendationStore {
   create(value: TriageRecommendation): Promise<void>;
   get(id: string): Promise<TriageRecommendation>;
+  list(): Promise<TriageRecommendation[]>;
   deletePending(id: string): Promise<void>;
   transitionResolution(
     id: string,
@@ -348,6 +352,7 @@ export interface RecommendationStore {
 
 export interface AuditStore {
   append(event: AuditEvent): Promise<void>;
+  list(ticketId?: TicketId): Promise<AuditEvent[]>;
 }
 
 export interface TriageServiceDependencies {
@@ -487,13 +492,39 @@ export class TriageService {
     return recommendation;
   }
 
+  async submitEvaluation(
+    input: SubmitRecommendationInput,
+  ): Promise<{
+    recommendation: TriageRecommendation;
+    recommendations: TriageRecommendation[];
+  }> {
+    const parsed = SubmitRecommendationInputSchema.parse(input);
+    return serializeTicket(parsed.ticketId, async () => {
+      const recommendation = await this.submit(parsed);
+      const recommendations =
+        await this.supersedePendingRecommendationsWithNewerReply({
+          ticketId: parsed.ticketId,
+          actor: parsed.actor,
+          supersededAt: parsed.submittedAt,
+        });
+      return { recommendation, recommendations };
+    });
+  }
+
   async approve(
     input: Approval,
   ): Promise<{ ticket: Ticket; auditEvent: AuditEvent }> {
     const approval = ApprovalSchema.parse(input);
-    return serializeRecommendation(approval.recommendationId, () =>
-      this.approveValidated(approval),
-    );
+    return serializeTicket(approval.ticketId, async () => {
+      await this.supersedePendingRecommendationsWithNewerReply({
+        ticketId: approval.ticketId,
+        actor: approval.actor,
+        supersededAt: approval.approvedAt,
+      });
+      return serializeRecommendation(approval.recommendationId, () =>
+        this.approveValidated(approval),
+      );
+    });
   }
 
   async reject(input: RejectRecommendationInput): Promise<AuditEvent> {
@@ -548,25 +579,27 @@ export class TriageService {
 
   async addCustomerReply(input: AddCustomerReplyInput): Promise<AuditEvent> {
     const reply = AddCustomerReplyInputSchema.parse(input);
-    await this.dependencies.tickets.get(reply.ticketId);
+    return serializeTicket(reply.ticketId, async () => {
+      await this.dependencies.tickets.get(reply.ticketId);
 
-    const auditEvent = AuditEventSchema.parse({
-      id: this.uuid(),
-      timestamp: reply.receivedAt,
-      actor: reply.actor,
-      action: "customer-reply-received",
-      ticketId: reply.ticketId,
-      before: {},
-      after: {
-        body: reply.body,
-        ...(reply.source === undefined ? {} : { source: reply.source }),
-      },
-      rationale: "Customer reply added to ticket conversation.",
-      knowledgeArticleIds: [],
-      result: "success",
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: reply.receivedAt,
+        actor: reply.actor,
+        action: "customer-reply-received",
+        ticketId: reply.ticketId,
+        before: {},
+        after: {
+          body: reply.body,
+          ...(reply.source === undefined ? {} : { source: reply.source }),
+        },
+        rationale: "Customer reply added to ticket conversation.",
+        knowledgeArticleIds: [],
+        result: "success",
+      });
+      await this.dependencies.audit.append(auditEvent);
+      return auditEvent;
     });
-    await this.dependencies.audit.append(auditEvent);
-    return auditEvent;
   }
 
   async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
@@ -617,9 +650,56 @@ export class TriageService {
     input: SupersedeRecommendationInput,
   ): Promise<AuditEvent> {
     const supersession = SupersedeRecommendationInputSchema.parse(input);
-    return serializeRecommendation(supersession.recommendationId, () =>
-      this.supersedeRecommendationValidated(supersession),
+    return serializeTicket(supersession.ticketId, () =>
+      serializeRecommendation(supersession.recommendationId, () =>
+        this.supersedeRecommendationValidated(supersession),
+      ),
     );
+  }
+
+  private async supersedePendingRecommendationsWithNewerReply(input: {
+    ticketId: TicketId;
+    actor: string;
+    supersededAt: string;
+  }): Promise<TriageRecommendation[]> {
+    const [audits, storedRecommendations] = await Promise.all([
+      this.dependencies.audit.list(input.ticketId),
+      this.dependencies.recommendations.list(),
+    ]);
+    let recommendations = [...storedRecommendations];
+    const latestReplyAt = audits
+      .filter((event) => event.action === "customer-reply-received")
+      .map((event) => event.timestamp)
+      .sort((left, right) => right.localeCompare(left))[0];
+    if (latestReplyAt === undefined) {
+      return recommendations;
+    }
+
+    for (const recommendation of recommendations.filter(
+      (candidate) =>
+        candidate.ticketId === input.ticketId &&
+        candidate.resolution === "pending" &&
+        latestReplyAt > candidate.createdAt,
+    )) {
+      await serializeRecommendation(recommendation.id, () =>
+        this.supersedeRecommendationValidated({
+          recommendationId: recommendation.id,
+          ticketId: input.ticketId,
+          actor: input.actor,
+          supersededAt: input.supersededAt,
+          reason: NEWER_REPLY_SUPERSESSION_REASON,
+        }),
+      );
+      recommendations = recommendations.map((candidate) =>
+        candidate.id === recommendation.id
+          ? TriageRecommendationSchema.parse({
+              ...candidate,
+              resolution: "superseded",
+            })
+          : candidate,
+      );
+    }
+    return recommendations;
   }
 
   private async approveValidated(
@@ -982,6 +1062,27 @@ function approvedValues(
     after[field] = approvedFieldValue(recommendation, approval, field);
   }
   return { before, after };
+}
+
+async function serializeTicket<T>(
+  ticketId: TicketId,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = ticketOperations.get(ticketId) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolveOperation) => {
+    release = resolveOperation;
+  });
+  ticketOperations.set(ticketId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (ticketOperations.get(ticketId) === current) {
+      ticketOperations.delete(ticketId);
+    }
+  }
 }
 
 function ticketValue(ticket: Ticket, field: ApprovedField): unknown {

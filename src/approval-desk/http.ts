@@ -930,48 +930,15 @@ function latestSupportResponseFromAudits(
     .sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0];
 }
 
-async function supersedePendingRecommendationsWithNewerReply(input: {
-  deps: RuntimeDependencies;
-  ticketId: string;
-  actor: string;
-  recommendations: readonly TriageRecommendation[];
-  persistedCustomerReplies: readonly { createdAt: string }[];
-}): Promise<void> {
-  const latestReplyAt = input.persistedCustomerReplies
-    .map((reply) => reply.createdAt)
-    .sort((left, right) => right.localeCompare(left))[0];
-  if (latestReplyAt === undefined) {
-    return;
-  }
-
-  const supersededAt = input.deps.now().toISOString();
-  const pendingRecommendations = input.recommendations.filter(
-    (recommendation) =>
-      recommendation.ticketId === input.ticketId &&
-      recommendation.resolution === "pending" &&
-      latestReplyAt > recommendation.createdAt,
-  );
-  for (const recommendation of pendingRecommendations) {
-    await input.deps.service.supersedeRecommendation({
-      recommendationId: recommendation.id,
-      ticketId: input.ticketId,
-      actor: input.actor,
-      supersededAt,
-      reason: "A newer customer reply requires a fresh recommendation.",
-    });
-  }
-}
-
 async function createRecommendation(
   { deps, options, request }: RouteContext,
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const [ticket, audits, recommendations] = await Promise.all([
+  const [ticket, audits] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
-    deps.recommendations.list(),
   ]);
   const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -1013,16 +980,9 @@ async function createRecommendation(
         preferOpenAi: body.aiPreference === "gpt-preferred",
       }),
   });
-  const recommendation = await deps.service.submit({
-      ...input,
-      submittedAt: deps.now().toISOString(),
-  });
-  await supersedePendingRecommendationsWithNewerReply({
-    deps,
-    ticketId,
-    actor: body.actor,
-    recommendations,
-    persistedCustomerReplies,
+  const { recommendation } = await deps.service.submitEvaluation({
+    ...input,
+    submittedAt: deps.now().toISOString(),
   });
   return { recommendation };
 }

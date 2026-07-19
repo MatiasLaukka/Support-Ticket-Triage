@@ -689,15 +689,16 @@ async function evaluateTicket(
         preferOpenAi: input.aiPreference === "gpt-preferred",
       }),
   });
-  const recommendation = await deps.service.submit({
+  const evaluation = await deps.service.submitEvaluation({
     ...recommendationInput,
     submittedAt: deps.now().toISOString(),
   });
-  const [persistedTicket, persistedAudits, persistedRecommendations] =
+  const { recommendation, recommendations: persistedRecommendations } =
+    evaluation;
+  const [persistedTicket, persistedAudits] =
     await Promise.all([
       deps.tickets.get(input.ticketId),
       deps.audits.list(input.ticketId),
-      deps.recommendations.list(),
     ]);
   return {
     recommendation,

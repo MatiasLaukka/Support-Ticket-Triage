@@ -30,9 +30,10 @@ Recorded results:
 | Evidence | Controlled/default | Deterministic |
 | --- | --- | --- |
 | Reported mode | `controlled` | `deterministic` |
-| External provider call | None; local controlled providers only | None; no providers passed |
+| Provider provenance | Classification and drafting are `controlled-local-simulation`; network is `disabled` | Classification and drafting are `not-configured`; network is `disabled` |
+| External provider call | None; controlled local simulation only | None; no providers passed |
 | Classification trace | Seven `used` stages | Seven `skipped` stages |
-| Drafting trace | Six `used`; final `guardrail-rejected` fallback | Six `skipped`; final `not-configured` fallback |
+| Drafting trace | Seven normalized `used` local-simulation stages, all with local deterministic source | Seven `skipped` stages, all with local deterministic source |
 | Human boundary | Seven disclosed `portfolio-reviewer` simulations using guidance-provided fields | Same |
 | Lifecycle | Diagnose, Fix, verification, ready-for-close, closed | Same |
 | Final status | `resolved` | `resolved` |
@@ -42,8 +43,10 @@ The controlled transcript is preserved exactly in
 shows the new next action, making the replay auditable without exposing ticket
 text, response text, prompts, or provider payloads. Audit output is restricted
 to event type, actor, and timestamp. The report also identifies the selected
-safe mode, and invalid, duplicate, or conflicting CLI arguments exit nonzero
-instead of silently falling back to controlled mode.
+safe mode and explicit provider provenance. Controlled traces are normalized
+only for the showcase report so local simulation is never attributed to a
+real external model adapter. Invalid, duplicate, or conflicting CLI arguments
+exit nonzero instead of silently falling back to controlled mode.
 
 The focused test command was:
 
@@ -51,10 +54,12 @@ The focused test command was:
 npm test -- --run test/demo-skill-showcase.test.ts
 ```
 
-Result: one test file passed, with all 14 tests passing. The test verifies the
-narrow report schema, exact guidance-driven lifecycle, controlled AI traces,
-no-provider deterministic semantics, the final `not-configured` fallback, and
-safe live-mode configuration failure.
+Result: one test file passed, with all 15 tests passing. The test verifies the
+narrow report schema, exact guidance-driven lifecycle, explicit controlled
+local-simulation provenance, accepted local deterministic drafting,
+no-provider deterministic skipped semantics,
+safe live-mode configuration failure, and preservation of the real live
+OpenAI adapters when live mode is explicitly configured.
 
 Live mode is optional and was not run for these results. To run it, set the key
 only in the current shell and select it explicitly:

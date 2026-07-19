@@ -401,6 +401,26 @@ describe("buildOperatorGuidance", () => {
     expect(guidance.approval.required).toBe(true);
   });
 
+  it("requires reevaluation when a customer reply is newer than a pending recommendation", () => {
+    const pending = pendingRecommendationWorkflow();
+    const input = {
+      ...pending,
+      audits: [
+        ...pending.audits,
+        audit("customer-reply-received", "2026-06-10T09:01:00.000Z"),
+      ],
+    };
+
+    const guidance = buildOperatorGuidance(input);
+
+    expect(guidance).toMatchObject({
+      stage: "customer-replied",
+      nextAction: "evaluate-ticket",
+      approval: { required: false, fields: [] },
+      unlocksTool: "evaluate_ticket",
+    });
+  });
+
   it.each([
     ["diagnosis-recorded", diagnosisRecordedWorkflow()],
     ["verification", verificationWorkflow()],

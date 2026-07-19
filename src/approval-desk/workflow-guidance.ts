@@ -194,22 +194,6 @@ export function buildOperatorGuidance(input: {
     });
   }
 
-  if (latest?.resolution === "pending") {
-    return OperatorGuidanceSchema.parse({
-      stage: "review",
-      changed: "A pending recommendation is awaiting human review.",
-      nextAction: "review-recommendation",
-      reason:
-        "Explicit approval is required before applying fields or sending a response.",
-      approval: {
-        required: true,
-        fields: changedApprovalFields(input.ticket, latest),
-      },
-      unlocksTool: "mark_response_done",
-      blockers: [],
-    });
-  }
-
   const latestReplyAt = latestAuditTimestamp(
     input.audits,
     "customer-reply-received",
@@ -226,6 +210,22 @@ export function buildOperatorGuidance(input: {
         "The latest customer context must be evaluated before lifecycle work continues.",
       approval: noApproval,
       unlocksTool: "evaluate_ticket",
+      blockers: [],
+    });
+  }
+
+  if (latest?.resolution === "pending") {
+    return OperatorGuidanceSchema.parse({
+      stage: "review",
+      changed: "A pending recommendation is awaiting human review.",
+      nextAction: "review-recommendation",
+      reason:
+        "Explicit approval is required before applying fields or sending a response.",
+      approval: {
+        required: true,
+        fields: changedApprovalFields(input.ticket, latest),
+      },
+      unlocksTool: "mark_response_done",
       blockers: [],
     });
   }

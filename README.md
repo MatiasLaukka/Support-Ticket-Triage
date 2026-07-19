@@ -119,6 +119,7 @@ The command-line showcase replays the synthetic `TKT-1010` lifecycle through
 the MCP interface in fresh temporary state. It follows each
 `operatorGuidance.nextAction`, reads the workflow again after every action, and
 cleans the temporary state when it exits. Every report names its selected safe
+mode and the classification, drafting, and network provenance used for that
 mode. The saved controlled transcript is in
 [docs/skill-showcase-example.md](docs/skill-showcase-example.md).
 
@@ -129,19 +130,20 @@ npm run demo:skill-showcase -- --deterministic
 ```
 
 The default `controlled` mode makes no network request and needs no configured
-provider. Local controlled providers exercise both optional AI roles:
-classification reasoning and customer-response drafting. Their auditable
-traces are `used` when their advice or draft is accepted; deterministic policy
-still owns routing, lifecycle, validation, and approval. The final controlled
-draft is deliberately reported as the backend `guardrail-rejected` fallback,
-not relabeled.
+external provider. Local controlled simulations exercise both optional AI
+roles: classification reasoning and customer-response drafting. The report
+labels both roles `controlled-local-simulation`, labels network access
+`disabled`, and never attributes their output to an external model adapter.
+Their auditable traces are `used` when their advice or draft is accepted;
+deterministic policy still owns routing, lifecycle, validation, and approval.
+All seven controlled drafting stages are reported as accepted local
+deterministic output with explicit simulation provenance.
 
 The explicit `--deterministic` mode passes no providers and never makes a
 provider call. Its classification traces and normal drafting traces are
-`skipped`. The final drafting trace is the backend's auditable `fallback` with
-category `not-configured` and the safe reason that deterministic output was
-used. Both modes traverse Diagnose, Fix, verification, ready-for-close, and
-closed stages. Every review step is an explicitly disclosed scripted
+`skipped`, including the valid customer-confirmed closure draft. Both modes
+traverse Diagnose, Fix, verification, ready-for-close, and closed stages.
+Every review step is an explicitly disclosed scripted
 `portfolio-reviewer` simulation using exactly the approval fields supplied by
 the workflow guidance.
 

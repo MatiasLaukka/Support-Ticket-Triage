@@ -396,6 +396,49 @@ describe("TriageService", () => {
     });
   });
 
+  it("supersedes and rejects approval of a pending recommendation after a newer customer reply", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The API retry now returns a different error.",
+      receivedAt: "2026-06-10T09:01:00.000Z",
+    });
+
+    await expect(harness.service.approve(makeApproval())).rejects.toMatchObject({
+      code: "STALE_APPROVAL",
+    });
+
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "superseded",
+    });
+    expect(harness.audit.events.map(({ action }) => action)).toEqual([
+      "recommendation-submitted",
+      "customer-reply-received",
+      "recommendation-superseded",
+      "approval-rejected",
+    ]);
+  });
+
+  it("allows approval when the latest customer reply is not newer than the recommendation", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "This reply belongs to the evaluated context.",
+      receivedAt: "2026-06-10T09:00:00.000Z",
+    });
+
+    await expect(
+      harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).resolves.toMatchObject({
+      ticket: { revision: 3 },
+      auditEvent: { action: "recommendation-approved" },
+    });
+  });
+
   it("appends a rejected audit and leaves state unchanged when approval revision is stale", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput());
@@ -1126,6 +1169,10 @@ class MemoryRecommendationStore implements RecommendationStore {
     return structuredClone(value);
   }
 
+  async list(): Promise<TriageRecommendation[]> {
+    return structuredClone(this.values);
+  }
+
   async markResolved(
     id: string,
     resolution: "approved" | "rejected",
@@ -1223,6 +1270,14 @@ class MemoryAuditStore implements AuditStore {
       );
     }
     this.events.push(structuredClone(event));
+  }
+
+  async list(ticketId?: Ticket["id"]): Promise<AuditEvent[]> {
+    return structuredClone(
+      ticketId === undefined
+        ? this.events
+        : this.events.filter((event) => event.ticketId === ticketId),
+    );
   }
 }
 

@@ -1414,7 +1414,7 @@ function hasDirectAdminFailure(value: string): boolean {
     "i",
   );
   const reproducedFailure = new RegExp(
-    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?reproduced\b`,
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?reproduced\b[^.!?;:\n]{0,40}\b(?:(?:the\s+)?same\s+(?:issue|result|failure)|(?:the\s+)?(?:same\s+)?blank\s+(?:campaign(?:\s+|-)?editor|editor|page)|not\s+loading|won't\s+load|does\s+not\s+load|doesn't\s+load|fails?\s+to\s+load)\b`,
     "i",
   );
   const testedAndObservedFailure = new RegExp(
@@ -1428,6 +1428,7 @@ function hasDirectAdminFailure(value: string): boolean {
   return evidenceClauses(value).some((clause) => {
     const failureClause = withoutNegatedBlankResults(clause);
     return !negatedAdminAttempt.test(failureClause) &&
+      !hasExplicitEditorSuccess(clause) &&
       (reproducedFailure.test(failureClause) ||
         testedAndObservedFailure.test(failureClause) ||
         explicitAdminResult.test(failureClause));

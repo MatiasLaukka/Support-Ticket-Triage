@@ -43,8 +43,21 @@ const SHOWCASE_START = Date.parse("2026-06-10T10:00:00.000Z");
 
 export type SkillShowcaseMode = "controlled" | "deterministic" | "live";
 
+export interface SkillShowcaseProviderProvenance {
+  classification:
+    | "controlled-local-simulation"
+    | "not-configured"
+    | "live-openai-adapter";
+  drafting:
+    | "controlled-local-simulation"
+    | "not-configured"
+    | "live-openai-adapter";
+  networkPolicy: "disabled" | "live-provider-allowed";
+}
+
 export interface SkillShowcaseReport {
   mode: SkillShowcaseMode;
+  providerProvenance: SkillShowcaseProviderProvenance;
   toolCalls: string[];
   aiStages: AiExecutionTrace[];
   workflowStages: Array<{
@@ -186,10 +199,12 @@ async function replayTkt1010(input: {
       const auditEvents = sanitizeAuditEvents(
         await input.deps.audits.list(TICKET_ID),
       );
+      const normalizedAiStages = normalizeAiStages(input.mode, aiStages);
       const report = {
         mode: input.mode,
+        providerProvenance: providerProvenanceForMode(input.mode),
         toolCalls,
-        aiStages,
+        aiStages: normalizedAiStages,
         workflowStages,
         approvals,
         finalTicketStatus: workflow.ticket.status,
@@ -303,9 +318,9 @@ function controlledProviders(): {
     draftProvider: {
       async draft(input) {
         return {
-          source: "openai",
+          source: "deterministic",
           response: ensureDraftSignOff(input.deterministicDraft, input),
-          assist: buildDeterministicGptAssist(input, "openai", []),
+          assist: buildDeterministicGptAssist(input, "deterministic", []),
           telemetry: { model: "controlled-local", latencyMs: 0 },
         };
       },
@@ -356,6 +371,45 @@ function sanitizeGuidance(
   return { stage: guidance.stage, nextAction: guidance.nextAction };
 }
 
+function providerProvenanceForMode(
+  mode: SkillShowcaseMode,
+): SkillShowcaseProviderProvenance {
+  if (mode === "controlled") {
+    return {
+      classification: "controlled-local-simulation",
+      drafting: "controlled-local-simulation",
+      networkPolicy: "disabled",
+    };
+  }
+  if (mode === "deterministic") {
+    return {
+      classification: "not-configured",
+      drafting: "not-configured",
+      networkPolicy: "disabled",
+    };
+  }
+  return {
+    classification: "live-openai-adapter",
+    drafting: "live-openai-adapter",
+    networkPolicy: "live-provider-allowed",
+  };
+}
+
+function normalizeAiStages(
+  mode: SkillShowcaseMode,
+  stages: readonly AiExecutionTrace[],
+): AiExecutionTrace[] {
+  if (mode !== "controlled") return [...stages];
+
+  return stages.map((trace) => {
+    const drafting = trace.drafting.source === "deterministic" &&
+        trace.drafting.status === "skipped"
+      ? { ...trace.drafting, status: "used" as const }
+      : trace.drafting;
+    return AiExecutionTraceSchema.parse({ ...trace, drafting });
+  });
+}
+
 export function showcaseApprovalFields(
   approval: OperatorGuidance["approval"],
 ): { required: true; fields: ApprovedField[] } {
@@ -380,6 +434,7 @@ function serializeReport(
     "# Codex Skill AI Showcase",
     "",
     `- Mode: ${report.mode}`,
+    `- Provider provenance: classification=${report.providerProvenance.classification}; drafting=${report.providerProvenance.drafting}; network=${report.providerProvenance.networkPolicy}.`,
     `- Final ticket status: ${report.finalTicketStatus}`,
     "",
     "## Governed MCP tool calls",

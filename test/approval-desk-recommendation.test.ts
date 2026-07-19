@@ -1490,6 +1490,20 @@ describe("Approval Desk recommendation builder", () => {
       adminResult: "Another admin saw the editor was blank.",
       promotes: true,
     },
+    {
+      adminResult:
+        "Another admin reproduced it and the editor worked normally.",
+      promotes: false,
+    },
+    {
+      adminResult: "Another admin reproduced the same blank editor.",
+      promotes: true,
+    },
+    {
+      adminResult:
+        "Another admin reproduced the same failure and the editor stayed blank.",
+      promotes: true,
+    },
   ])(
     "applies editor polarity to direct admin evidence: $adminResult",
     async ({ adminResult, promotes }) => {

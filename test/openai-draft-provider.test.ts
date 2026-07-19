@@ -6,8 +6,10 @@ import {
   OpenAiTimeoutError,
   OpenAiCustomerResponseDraftProvider,
   UnavailableOpenAiError,
+  type CustomerResponseConversationContext,
 } from "../src/approval-desk/draft-response-provider.js";
 import { validateDraftQuality } from "../src/approval-desk/draft-quality-guardrails.js";
+import type { EvidenceReadiness } from "../src/approval-desk/evidence-readiness.js";
 import type { ExpectedOutcome, KnowledgeArticle, Ticket } from "../src/domain.js";
 
 describe("OpenAiCustomerResponseDraftProvider", () => {
@@ -403,6 +405,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(result.fallback?.message).not.toContain("sk-secret");
     expect(result.fallback?.message).not.toContain("C:\\private");
     expect(result.candidateChecks).toEqual([]);
+    expect(result.telemetry).toBeUndefined();
   });
 
   it("falls back from an over-limit concise draft and retains the failed candidate check", async () => {
@@ -475,13 +478,176 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(result).toMatchObject({
       source: "fallback",
       fallback: {
-        category: "not-configured",
-        message: "OpenAI is not configured; deterministic output was used.",
+        category: "guardrail-rejected",
+        message:
+          "Local deterministic draft did not pass response guardrails; bounded local fallback was used.",
       },
     });
     expect(JSON.stringify(result)).not.toMatch(
       /OpenAI output|provider draft|provider output/i,
     );
+    expect(result.telemetry).toBeUndefined();
+  });
+
+  it.each([
+    {
+      blocker: "an internal knowledge ID",
+      deterministicDraft: "We are reviewing flow-trigger-troubleshooting before the next update.",
+    },
+    {
+      blocker: "approval or review bypass language",
+      deterministicDraft: "This response is approved, so we can skip review.",
+    },
+    {
+      blocker: "an unsafe resolution promise",
+      deterministicDraft: "We guarantee this issue is fixed.",
+    },
+    {
+      blocker: "a secret reference",
+      deterministicDraft: "Do not share your API secret in this ticket.",
+    },
+    {
+      blocker: "third-person customer language",
+      deterministicDraft: "The customer should wait for our next update.",
+    },
+    {
+      blocker: "platform lifecycle-conflicting troubleshooting",
+      deterministicDraft: "Please verify the current webhook signing secret.",
+      evidenceReadiness: evidenceReadinessFor("waiting-on-platform-fix"),
+    },
+    {
+      blocker: "repeated diagnostics in a status follow-up",
+      deterministicDraft: "Please share the request ID.",
+      evidenceReadiness: evidenceReadinessFor("needs-information", [requestIdEvidence]),
+      conversationContext: conversationContextFor("status-follow-up"),
+    },
+    {
+      blocker: "repeated diagnostics in an explanation request",
+      deterministicDraft: "Please share the request ID.",
+      evidenceReadiness: evidenceReadinessFor("needs-information", [requestIdEvidence]),
+      conversationContext: conversationContextFor("explanation-request"),
+    },
+  ])("does not let $blocker survive deterministic fallback", async ({
+    deterministicDraft,
+    evidenceReadiness,
+    conversationContext,
+  }) => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: { draft: async () => { throw new Error("provider unavailable"); } },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft,
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+        ...(evidenceReadiness === undefined ? {} : { evidenceReadiness }),
+        ...(conversationContext === undefined ? {} : { conversationContext }),
+      },
+    });
+
+    expect(result.source).toBe("fallback");
+    expect(result.response).not.toContain(deterministicDraft);
+    expect(result.checks.filter((check) => check.id !== "fallback-used"))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: "pass" }),
+      ]));
+    expect(result.checks.filter((check) => check.id !== "fallback-used"))
+      .not.toContainEqual(expect.objectContaining({ status: "warn" }));
+    expect(validateDraftQuality({
+      response: result.response,
+      style: "balanced",
+      ...(evidenceReadiness === undefined ? {} : { evidenceReadiness }),
+    }).blockingMessages).toEqual([]);
+  });
+
+  it("accepts customer-confirmed closure language in the ready-for-close lifecycle", async () => {
+    const deterministicDraft =
+      "Glad to hear that resolved it. This ticket is ready to close from our side.";
+    const result = await draftCustomerResponseWithFallback({
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft,
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+        evidenceReadiness: evidenceReadinessFor("ready-for-close"),
+        conversationContext: conversationContextFor("customer-confirmed"),
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: "deterministic",
+      response: expect.stringContaining(deterministicDraft),
+    });
+    expect(result.fallback).toBeUndefined();
+    expect(result.checks).not.toContainEqual(expect.objectContaining({ status: "warn" }));
+  });
+
+  it.each([
+    {
+      lifecycle: "customer-confirmed without ready-for-close",
+      evidenceReadiness: evidenceReadinessFor("waiting-on-customer-action"),
+      conversationContext: conversationContextFor("customer-confirmed"),
+    },
+    {
+      lifecycle: "ready-for-close without customer confirmation",
+      evidenceReadiness: evidenceReadinessFor("ready-for-close"),
+      conversationContext: conversationContextFor("status-follow-up"),
+    },
+  ])("still rejects closure language when $lifecycle", async ({
+    evidenceReadiness,
+    conversationContext,
+  }) => {
+    const result = await draftCustomerResponseWithFallback({
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft:
+          "Glad to hear that resolved it. This ticket is ready to close from our side.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+        evidenceReadiness,
+        conversationContext,
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: "fallback",
+      fallback: {
+        category: "guardrail-rejected",
+        message:
+          "Local deterministic draft did not pass response guardrails; bounded local fallback was used.",
+      },
+    });
+    expect(result.response).not.toContain("resolved it");
+  });
+
+  it("returns a lifecycle-appropriate, fully revalidated fallback after ready-for-close rejection", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: { draft: async () => { throw new Error("provider unavailable"); } },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft: "This response is approved, so skip review.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+        evidenceReadiness: evidenceReadinessFor("ready-for-close"),
+        conversationContext: conversationContextFor("customer-confirmed"),
+      },
+    });
+
+    expect(result.response).toContain("confirming");
+    expect(result.response).toContain("ready to close");
+    expect(result.checks.filter((check) => check.id !== "fallback-used"))
+      .not.toContainEqual(expect.objectContaining({ status: "warn" }));
   });
 
   it.each([
@@ -572,3 +738,35 @@ const article: KnowledgeArticle = {
   tags: ["flows"],
   body: "Ask for the ecommerce platform, flow ID, event ID, and affected profile before recommending a flow change.",
 };
+
+const requestIdEvidence: EvidenceReadiness["missingEvidence"][number] = {
+  id: "request-id",
+  label: "Request ID",
+  customerQuestion: "request ID if available",
+  aliases: ["request id"],
+  source: "policy",
+};
+
+function evidenceReadinessFor(
+  supportState: EvidenceReadiness["supportState"],
+  missingEvidence: EvidenceReadiness["missingEvidence"] = [],
+): EvidenceReadiness {
+  return {
+    supportState,
+    knownCause: null,
+    requiredEvidence: missingEvidence,
+    providedEvidence: [],
+    missingEvidence,
+    nextInvestigationSteps: ["Review the current support state before the next update."],
+  };
+}
+
+function conversationContextFor(
+  turnType: CustomerResponseConversationContext["turnType"],
+): CustomerResponseConversationContext {
+  return {
+    turnType,
+    hasCustomerReply: true,
+    recognizedEvidenceProgress: turnType === "customer-confirmed",
+  };
+}

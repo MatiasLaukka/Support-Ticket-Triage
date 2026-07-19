@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AiExecutionTraceSchema,
   AiUsageSchema,
   DraftCustomerResponseStyleInputSchema,
   DraftCustomerResponseStyleSchema,
@@ -35,6 +36,11 @@ export const DEFAULT_SUPPORT_COMPANY_NAME = "Northstar Marketing Support";
 const DEFAULT_SUPPORT_ACTOR = "Support Team";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DraftProviderSchema = z.enum(["deterministic", "openai"]);
+const DraftTelemetrySchema = AiExecutionTraceSchema.shape.drafting.pick({
+  model: true,
+  latencyMs: true,
+  usage: true,
+}).required({ model: true, latencyMs: true });
 const OpenAiDraftResponseSchema = z
   .object({
     draftCustomerResponse: z.string().trim().min(1),
@@ -412,10 +418,16 @@ export async function draftCustomerResponseWithFallback(input: {
             message: "OpenAI output did not pass response guardrails; deterministic output was used.",
           }
         : {
-            category: "not-configured",
-            message: "OpenAI is not configured; deterministic output was used.",
+            category: "guardrail-rejected",
+            message: "Local deterministic draft did not pass response guardrails; bounded local fallback was used.",
           },
       candidateChecks: validation.candidateChecks,
+      rejectedCandidateChecks: validation.checks.filter(
+        (check) => check.status === "warn",
+      ),
+      ...(openAiCandidate && candidate.telemetry !== undefined
+        ? { telemetry: sanitizeDraftTelemetry(candidate.telemetry) }
+        : {}),
     });
   } catch (error) {
     return fallbackDraft({
@@ -430,8 +442,10 @@ function fallbackDraft(input: {
   reason?: string;
   fallback: { category: AiFallbackCategory; message: string };
   candidateChecks?: AiGuardrailCheck[];
+  rejectedCandidateChecks?: DraftCustomerResponseCheck[];
+  telemetry?: CustomerResponseDraft["telemetry"];
 }): ValidatedCustomerResponseDraft {
-  const fallbackAssist = buildDeterministicGptAssist(
+  let fallbackAssist = buildDeterministicGptAssist(
     input.draftInput,
     "fallback",
     [],
@@ -441,26 +455,7 @@ function fallbackDraft(input: {
     input.draftInput.deterministicDraft,
     input.draftInput,
   );
-  const quality = validateDraftQuality({
-    response,
-    style: responseStyle,
-    evidenceReadiness: input.draftInput.evidenceReadiness,
-    diagnosisContext: input.draftInput.diagnosisContext,
-    fixContext: input.draftInput.fixContext,
-  });
-  let validation = validateCustomerResponseDraft({
-    response,
-    assist: fallbackAssist,
-    responseStyle,
-    knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
-    evidenceReadiness: input.draftInput.evidenceReadiness,
-    conversationContext: input.draftInput.conversationContext,
-    diagnosisContext: input.draftInput.diagnosisContext,
-    fixContext: input.draftInput.fixContext,
-  });
-  if (quality.blockingMessages.length > 0) {
-    response = boundedSafetyFallbackResponse();
-    validation = validateCustomerResponseDraft({
+  const validateFallback = () => validateCustomerResponseDraft({
       response,
       assist: fallbackAssist,
       responseStyle,
@@ -470,6 +465,21 @@ function fallbackDraft(input: {
       diagnosisContext: input.draftInput.diagnosisContext,
       fixContext: input.draftInput.fixContext,
     });
+  let validation = validateFallback();
+  if (validation.blockingMessages.length > 0) {
+    fallbackAssist = withoutCustomerInformationRequests(fallbackAssist);
+    validation = validateFallback();
+  }
+  if (validation.blockingMessages.length > 0) {
+    fallbackAssist = boundedSafetyFallbackAssist(fallbackAssist);
+    validation = validateFallback();
+  }
+  if (validation.blockingMessages.length > 0) {
+    response = boundedSafetyFallbackResponse(input.draftInput);
+    validation = validateFallback();
+  }
+  if (validation.blockingMessages.length > 0) {
+    throw new Error("Bounded safety fallback failed response guardrails.");
   }
   const checks: DraftCustomerResponseCheck[] = [
     {
@@ -480,6 +490,7 @@ function fallbackDraft(input: {
         ? input.fallback.message
         : sanitizeValidationMessage(input.reason),
     },
+    ...(input.rejectedCandidateChecks ?? []),
     ...validation.checks,
   ];
   return {
@@ -492,11 +503,41 @@ function fallbackDraft(input: {
     },
     fallback: input.fallback,
     candidateChecks: input.candidateChecks ?? [],
+    ...(input.telemetry === undefined ? {} : { telemetry: input.telemetry }),
   };
 }
 
-function boundedSafetyFallbackResponse(): string {
-  return `Thank you for your patience. Our support team is reviewing the issue and will provide the next update as soon as possible.\n\n${formatDraftSignOff({})}`;
+function boundedSafetyFallbackResponse(input: CustomerResponseDraftInput): string {
+  const body = isCustomerConfirmedReadyForClose(input)
+    ? "Thank you for confirming the issue is resolved. This ticket is ready to close."
+    : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
+  return `${body}\n\n${formatDraftSignOff(input)}`;
+}
+
+function boundedSafetyFallbackAssist(assist: GptAssist): GptAssist {
+  return {
+    ...withoutCustomerInformationRequests(assist),
+    investigationSteps: [
+      "Review the ticket context before the next customer update.",
+    ],
+  };
+}
+
+function withoutCustomerInformationRequests(assist: GptAssist): GptAssist {
+  return {
+    ...assist,
+    missingInfoSuggestions: [
+      "No additional customer information is requested in this fallback draft.",
+    ],
+    checks: [],
+  };
+}
+
+function sanitizeDraftTelemetry(
+  telemetry: NonNullable<CustomerResponseDraft["telemetry"]>,
+): CustomerResponseDraft["telemetry"] | undefined {
+  const parsed = DraftTelemetrySchema.safeParse(telemetry);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export class UnavailableOpenAiError extends Error {
@@ -548,6 +589,7 @@ function validateCustomerResponseDraft(input: {
     ...input.assist.missingInfoSuggestions,
     ...input.assist.investigationSteps,
   ].join(" ");
+  const customerConfirmedReadyForClose = isCustomerConfirmedReadyForClose(input);
 
   pushCheck({
     checks,
@@ -577,13 +619,9 @@ function validateCustomerResponseDraft(input: {
     blockingMessages,
     id: "no-approval-bypass",
     label: "No approval bypass",
-    passed:
-      !/\b(approved|approval|skip approval|skip review|close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(
-        response,
-      ) &&
-      !/\b(approved|approval|skip approval|skip review|close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(
-        assistText,
-      ),
+    passed: !containsApprovalBypass(`${response} ${assistText}`) &&
+      !containsClosureAction(assistText) &&
+      (customerConfirmedReadyForClose || !containsClosureAction(response)),
     failMessage: "The draft implied approval, closure, or review bypass.",
   });
 
@@ -592,13 +630,9 @@ function validateCustomerResponseDraft(input: {
     blockingMessages,
     id: "no-unsafe-resolution-promise",
     label: "No unsafe resolution promise",
-    passed:
-      !/\b(guarantee|guaranteed|fixed|resolved|sent successfully|will be fixed)\b/i.test(
-        response,
-      ) &&
-      !/\b(guarantee|guaranteed|fixed|resolved|sent successfully|will be fixed)\b/i.test(
-        assistText,
-      ),
+    passed: !containsUnsafeResolutionPromise(`${response} ${assistText}`) &&
+      !containsResolvedClaim(assistText) &&
+      (customerConfirmedReadyForClose || !containsResolvedClaim(response)),
     failMessage: "The draft promised a resolution that has not been verified.",
   });
 
@@ -619,7 +653,9 @@ function validateCustomerResponseDraft(input: {
     blockingMessages,
     id: "customer-addressed-directly",
     label: "Customer addressed directly",
-    passed: !/\bthe customer(?:'s|s)?\b/i.test(response),
+    passed: !/\bthe customer(?:'s|s)?\b(?!\s+(?:account|data|event|profile|record|store|timeline|workspace)\b)/i.test(
+      response,
+    ),
     failMessage:
       "The draft referred to the recipient as the customer instead of addressing them directly.",
   });
@@ -690,6 +726,32 @@ function validateCustomerResponseDraft(input: {
   };
 }
 
+function isCustomerConfirmedReadyForClose(input: {
+  evidenceReadiness?: EvidenceReadiness;
+  conversationContext?: CustomerResponseConversationContext;
+}): boolean {
+  return input.evidenceReadiness?.supportState === "ready-for-close" &&
+    input.conversationContext?.turnType === "customer-confirmed";
+}
+
+function containsApprovalBypass(text: string): boolean {
+  return /\b(approved|approval|skip approval|skip review)\b/i.test(text);
+}
+
+function containsClosureAction(text: string): boolean {
+  return /\b(close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(text);
+}
+
+function containsUnsafeResolutionPromise(text: string): boolean {
+  return /\b(guarantee|guaranteed|fixed|sent successfully|will be fixed)\b/i.test(text);
+}
+
+function containsResolvedClaim(text: string): boolean {
+  return /\b(?:is|was|has been|looks|appears|now|already|fully)\s+resolved\b|\bresolved\s+(?:it|the issue|the problem)\b/i.test(
+    text,
+  );
+}
+
 function resolvedResponseStyle(
   input: CustomerResponseDraftInput,
   assist: GptAssist,
@@ -716,9 +778,9 @@ function containsDiagnosticEvidenceAsk(input: {
 }): boolean {
   const text = input.text.toLowerCase();
   if (
-    /\b(?:please share|to move (?:this )?forward|we still need|still need|share the|send (?:us )?the|provide (?:the )?)\b/i.test(
+    /\b(?:please share|to move (?:this )?forward|we still need|still need|send us the)\b/i.test(
       text,
-    )
+    ) || containsDirectCustomerInformationAsk(text)
   ) {
     return true;
   }
@@ -1046,6 +1108,17 @@ function mapUsage(response: unknown): AiUsage | undefined {
     outputTokens: usage.output_tokens,
     totalTokens: usage.total_tokens,
   });
+}
+
+function containsDirectCustomerInformationAsk(text: string): boolean {
+  const directAsk = /\b(?:share|send|provide)\s+the\b/gi;
+  for (const match of text.matchAll(directAsk)) {
+    const preceding = text.slice(Math.max(0, (match.index ?? 0) - 32), match.index);
+    if (!/\b(?:we|i|our team)\s+(?:will|can|should)\s*$/i.test(preceding)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function sanitizeValidationMessage(message: string): string {

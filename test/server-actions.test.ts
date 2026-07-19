@@ -1066,7 +1066,7 @@ describe("createTriageServer action protocol", () => {
       },
     });
     expect(ticketReads).toHaveBeenCalledTimes(3);
-    expect(auditReads).toHaveBeenCalledTimes(2);
+    expect(auditReads).toHaveBeenCalledTimes(3);
     expect(recommendationReads).toHaveBeenCalledTimes(1);
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
       ticketBeforeEvaluation,
@@ -1074,6 +1074,45 @@ describe("createTriageServer action protocol", () => {
     expect(await fixture.recommendations.get(recommendation.id)).toEqual(
       recommendation,
     );
+  });
+
+  it("supersedes an older pending recommendation after a newer reply during evaluate_ticket", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const previous = await seedRecommendation(fixture);
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body:
+        "The API response status is 503. The request ID is req_12345 and the failure timestamp was 2026-06-10 09:15 UTC.",
+      source: "manual",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    const current = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+    expect(await fixture.recommendations.get(previous.id)).toMatchObject({
+      resolution: "superseded",
+    });
+    expect(
+      (await fixture.recommendations.list()).filter(
+        ({ resolution }) => resolution === "pending",
+      ),
+    ).toEqual([expect.objectContaining({ id: current.id })]);
+    expect(
+      (await fixture.audits.list("TKT-1001")).map(({ action }) => action),
+    ).toEqual([
+      "recommendation-submitted",
+      "customer-reply-received",
+      "recommendation-submitted",
+      "recommendation-superseded",
+    ]);
   });
 
   it("runs both optional GPT stages through evaluate_ticket", async () => {

@@ -1,6 +1,7 @@
 # Codex Skill AI Showcase
 
 - Mode: controlled
+- Provider provenance: classification=controlled-local-simulation; drafting=controlled-local-simulation; network=disabled.
 - Final ticket status: resolved
 
 ## Governed MCP tool calls
@@ -51,8 +52,7 @@
 - Evaluation 4: preference=gpt-preferred; classification=used; drafting=used.
 - Evaluation 5: preference=gpt-preferred; classification=used; drafting=used.
 - Evaluation 6: preference=gpt-preferred; classification=used; drafting=used.
-- Evaluation 7: preference=gpt-preferred; classification=used; drafting=fallback.
-  - Drafting fallback: guardrail-rejected; OpenAI output did not pass response guardrails; deterministic output was used.
+- Evaluation 7: preference=gpt-preferred; classification=used; drafting=used.
 
 ## Workflow stages
 

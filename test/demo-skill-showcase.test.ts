@@ -12,8 +12,11 @@ import {
   type SkillShowcaseMode,
   type SkillShowcaseReport,
 } from "../scripts/demo-skill-showcase.js";
+import { OpenAiClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import { OpenAiCustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 
 const roots: string[] = [];
+const SHOWCASE_TEST_TIMEOUT_MS = 15_000;
 
 afterEach(async () => {
   await Promise.all(
@@ -29,6 +32,14 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
   expect(fetchCalls).toBe(0);
   expect(report.mode).toBe("controlled");
   expect(report.serialized).toContain("- Mode: controlled");
+  expect(report.providerProvenance).toEqual({
+    classification: "controlled-local-simulation",
+    drafting: "controlled-local-simulation",
+    networkPolicy: "disabled",
+  });
+  expect(report.serialized).toContain(
+    "- Provider provenance: classification=controlled-local-simulation; drafting=controlled-local-simulation; network=disabled.",
+  );
   expect(report.toolCalls).toEqual(
     expect.arrayContaining([
       "get_ticket_workflow",
@@ -49,6 +60,11 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
       }),
     ]),
   );
+  expect(report.aiStages.every((trace) =>
+    trace.drafting.status === "used" && trace.drafting.source === "deterministic"
+  )).toBe(true);
+  expect(report.aiStages.every((trace) => trace.drafting.fallback === undefined))
+    .toBe(true);
   expect(report.workflowStages).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ stage: "review", nextAction: "review-recommendation" }),
@@ -87,9 +103,12 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
   expect(report.serialized).not.toMatch(
     /sk-[A-Za-z0-9_-]+|authorization|raw prompt|[A-Za-z]:\\|customer body omitted|recorded [a-z-]+/i,
   );
-});
+  expect(JSON.stringify(report)).not.toMatch(
+    /OpenAI output|live OpenAI (?:call|adapter)|"source":"openai"/i,
+  );
+}, SHOWCASE_TEST_TIMEOUT_MS);
 
-it("uses no providers in deterministic mode and preserves the backend fallback trace", async () => {
+it("uses no providers in deterministic mode and preserves skipped local drafting traces", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "skill-showcase-"));
   roots.push(dataRoot);
   const { report, fetchCalls } = await runOfflineShowcase("deterministic", dataRoot);
@@ -97,19 +116,21 @@ it("uses no providers in deterministic mode and preserves the backend fallback t
   expect(fetchCalls).toBe(0);
   expect(report.mode).toBe("deterministic");
   expect(report.serialized).toContain("- Mode: deterministic");
+  expect(report.providerProvenance).toEqual({
+    classification: "not-configured",
+    drafting: "not-configured",
+    networkPolicy: "disabled",
+  });
   expect(providersForMode("deterministic")).toEqual({});
   expect(report.aiStages.every((trace) => trace.preference === "deterministic")).toBe(true);
   expect(report.aiStages.every((trace) => trace.classification.status === "skipped")).toBe(true);
-  expect(report.aiStages.slice(0, -1).every((trace) => trace.drafting.status === "skipped")).toBe(true);
-  expect(report.aiStages.at(-1)?.drafting).toMatchObject({
-    status: "fallback",
-    fallback: {
-      category: "not-configured",
-      message: "OpenAI is not configured; deterministic output was used.",
-    },
-  });
+  expect(report.aiStages.every((trace) =>
+    trace.drafting.status === "skipped" &&
+    trace.drafting.source === "deterministic" &&
+    trace.drafting.fallback === undefined
+  )).toBe(true);
   expect(report.finalTicketStatus).toBe("resolved");
-});
+}, SHOWCASE_TEST_TIMEOUT_MS);
 
 it("requires an explicit API key before constructing live providers", () => {
   const original = process.env.OPENAI_API_KEY;
@@ -122,6 +143,19 @@ it("requires an explicit API key before constructing live providers", () => {
     if (original === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = original;
   }
+});
+
+it("preserves live mode's real OpenAI adapters", () => {
+  const providers = providersForMode("live", {
+    OPENAI_API_KEY: "configured-only-for-construction-test",
+  });
+
+  expect(providers.classificationReasoningProvider).toBeInstanceOf(
+    OpenAiClassificationReasoningProvider,
+  );
+  expect(providers.draftProvider).toBeInstanceOf(
+    OpenAiCustomerResponseDraftProvider,
+  );
 });
 
 describe("showcase CLI", () => {
@@ -288,6 +322,23 @@ async function invokeCli(
 function fakeReport(mode: SkillShowcaseMode): SkillShowcaseReport {
   return {
     mode,
+    providerProvenance: mode === "controlled"
+      ? {
+          classification: "controlled-local-simulation",
+          drafting: "controlled-local-simulation",
+          networkPolicy: "disabled",
+        }
+      : mode === "deterministic"
+        ? {
+            classification: "not-configured",
+            drafting: "not-configured",
+            networkPolicy: "disabled",
+          }
+        : {
+            classification: "live-openai-adapter",
+            drafting: "live-openai-adapter",
+            networkPolicy: "live-provider-allowed",
+          },
     toolCalls: [],
     aiStages: [],
     workflowStages: [],
