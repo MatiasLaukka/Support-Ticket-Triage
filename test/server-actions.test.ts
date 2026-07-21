@@ -329,6 +329,14 @@ function expectStableStructured(result: CallToolResult): Record<string, unknown>
   return structured;
 }
 
+function deferred() {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 async function submit(
   client: Client,
   overrides: Partial<SubmitRecommendationInput> = {},
@@ -1066,7 +1074,7 @@ describe("createTriageServer action protocol", () => {
       },
     });
     expect(ticketReads).toHaveBeenCalledTimes(3);
-    expect(auditReads).toHaveBeenCalledTimes(3);
+    expect(auditReads).toHaveBeenCalledTimes(4);
     expect(recommendationReads).toHaveBeenCalledTimes(1);
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
       ticketBeforeEvaluation,
@@ -1144,6 +1152,45 @@ describe("createTriageServer action protocol", () => {
         },
       },
     });
+  });
+
+  it("rejects evaluate_ticket when a customer reply arrives during provider work", async () => {
+    const fixture = await createFixture();
+    const providerStarted = deferred();
+    const allowProvider = deferred();
+    const client = await connect(fixture, {
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerStarted.resolve();
+          await allowProvider.promise;
+          return campaignEditorClassificationProvider.reason(input);
+        },
+      },
+    });
+
+    const evaluation = callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "skill-showcase",
+      aiPreference: "gpt-preferred",
+    });
+    await providerStarted.promise;
+    await fixture.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "This first reply arrived while classification was paused.",
+      receivedAt: "2026-06-10T09:59:59.000Z",
+    });
+    allowProvider.resolve();
+    const evaluated = await evaluation;
+
+    expect(evaluated.isError).toBe(true);
+    expect(textOf(evaluated)).toContain(
+      "STALE_APPROVAL: Evaluation customer reply snapshot is stale.",
+    );
+    expect(await fixture.recommendations.list()).toEqual([]);
+    expect(
+      (await fixture.audits.list("TKT-1001")).map(({ action }) => action),
+    ).toEqual(["customer-reply-received"]);
   });
 
   it("completes gpt-preferred evaluation without configured providers", async () => {
@@ -1224,6 +1271,13 @@ describe("createTriageServer action protocol", () => {
 
   it("marks a reviewed response done by approving named fields and recording sent response", async () => {
     const fixture = await createFixture();
+    const atomicCompletion = vi.spyOn(
+      fixture.service as TriageService & {
+        approveAndMarkResponseSent: TriageService["approveAndMarkResponseSent"];
+      },
+      "approveAndMarkResponseSent",
+    );
+    const separateApproval = vi.spyOn(fixture.service, "approve");
     const client = await connect(fixture);
     const evaluated = await callTool(client, "evaluate_ticket", {
       ticketId: "TKT-1001",
@@ -1262,6 +1316,8 @@ describe("createTriageServer action protocol", () => {
         },
       },
     });
+    expect(atomicCompletion).toHaveBeenCalledOnce();
+    expect(separateApproval).not.toHaveBeenCalled();
     const workflow = await callTool(client, "get_ticket_workflow", {
       id: "TKT-1001",
     });

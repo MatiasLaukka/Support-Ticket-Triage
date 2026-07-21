@@ -122,6 +122,7 @@ export interface GptClassificationReasoningInput {
 }
 
 export interface ValidatedCustomerResponseDraft {
+  providerAttempted: boolean;
   source: DraftCustomerResponseSource;
   response: string;
   checks: DraftCustomerResponseCheck[];
@@ -380,6 +381,7 @@ export async function draftCustomerResponseWithFallback(input: {
   draftInput: CustomerResponseDraftInput;
 }): Promise<ValidatedCustomerResponseDraft> {
   const deterministic = new DeterministicCustomerResponseDraftProvider();
+  const providerAttempted = input.provider !== undefined;
   const provider = input.provider ?? deterministic;
   try {
     const candidate = await provider.draft(input.draftInput);
@@ -396,6 +398,7 @@ export async function draftCustomerResponseWithFallback(input: {
     });
     if (validation.blockingMessages.length === 0) {
       return {
+        providerAttempted,
         source: candidate.source,
         response,
         checks: validation.checks,
@@ -410,6 +413,7 @@ export async function draftCustomerResponseWithFallback(input: {
 
     const openAiCandidate = candidate.source === "openai";
     return fallbackDraft({
+      providerAttempted,
       draftInput: input.draftInput,
       reason: `${openAiCandidate ? "Provider" : "Deterministic"} draft rejected: ${validation.blockingMessages.join(" ")}`,
       fallback: openAiCandidate
@@ -431,6 +435,7 @@ export async function draftCustomerResponseWithFallback(input: {
     });
   } catch (error) {
     return fallbackDraft({
+      providerAttempted,
       draftInput: input.draftInput,
       fallback: classifyAiFailure(error),
     });
@@ -438,6 +443,7 @@ export async function draftCustomerResponseWithFallback(input: {
 }
 
 function fallbackDraft(input: {
+  providerAttempted: boolean;
   draftInput: CustomerResponseDraftInput;
   reason?: string;
   fallback: { category: AiFallbackCategory; message: string };
@@ -494,6 +500,7 @@ function fallbackDraft(input: {
     ...validation.checks,
   ];
   return {
+    providerAttempted: input.providerAttempted,
     source: "fallback",
     response,
     checks,

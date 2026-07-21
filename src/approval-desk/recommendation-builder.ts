@@ -298,7 +298,8 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   });
 
   const draftingTrace: AiExecutionTrace["drafting"] = {
-    status: draft.source === "openai"
+    status: draft.source === "openai" ||
+        (draft.source === "deterministic" && draft.providerAttempted)
       ? "used"
       : draft.source === "fallback"
         ? "fallback"

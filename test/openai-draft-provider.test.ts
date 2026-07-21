@@ -406,6 +406,28 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(result.fallback?.message).not.toContain("C:\\private");
     expect(result.candidateChecks).toEqual([]);
     expect(result.telemetry).toBeUndefined();
+    expect(result.providerAttempted).toBe(true);
+  });
+
+  it("distinguishes implicit deterministic drafting from an explicit provider attempt", async () => {
+    const draftInput = {
+      ticket,
+      outcome,
+      knowledgeArticles: [],
+      deterministicDraft: "We are reviewing the issue and will provide an update.",
+      responseStyle: "balanced" as const,
+      actor: "approval-desk",
+      companyName: "Northstar Marketing Support",
+    };
+
+    const implicit = await draftCustomerResponseWithFallback({ draftInput });
+    const explicit = await draftCustomerResponseWithFallback({
+      provider: { draft: async (input) => new DeterministicCustomerResponseDraftProvider().draft(input) },
+      draftInput,
+    });
+
+    expect(implicit.providerAttempted).toBe(false);
+    expect(explicit.providerAttempted).toBe(true);
   });
 
   it("falls back from an over-limit concise draft and retains the failed candidate check", async () => {

@@ -112,6 +112,42 @@ describe("evaluateTicketWithAi", () => {
     ]));
   });
 
+  it("records an accepted explicitly supplied deterministic drafting provider as used", async () => {
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: campaignEditorProvider,
+      draftProvider: {
+        async draft(draftInput) {
+          return {
+            source: "deterministic",
+            response: draftInput.deterministicDraft,
+            assist: {
+              source: "deterministic",
+              missingInfoSuggestions: ["Share a screenshot of the loading state."],
+              investigationSteps: ["Review the campaign editor loading path."],
+              tone: "empathetic",
+              recommendedTone: "empathetic",
+              selectedTone: "empathetic",
+              toneReason: "The customer reports an interrupted campaign workflow.",
+              audience: "merchant-admin",
+              checks: [],
+            },
+          };
+        },
+      },
+    });
+
+    expect(input.aiExecutionTrace?.drafting).toMatchObject({
+      status: "used",
+      source: "deterministic",
+    });
+  });
+
   it("keeps deterministic security routing when GPT suggests performance", async () => {
     const input = await evaluateTicketWithAi({
       ticket: await loadSeedTicket("TKT-1004"),

@@ -22,6 +22,7 @@ import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
+import { customerReplyWatermarkFromAudits } from "../triage-service.js";
 import {
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
@@ -983,6 +984,7 @@ async function createRecommendation(
   const { recommendation } = await deps.service.submitEvaluation({
     ...input,
     submittedAt: deps.now().toISOString(),
+    evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
   });
   return { recommendation };
 }

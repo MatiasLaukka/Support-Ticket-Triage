@@ -14,6 +14,7 @@ import {
 } from "../scripts/demo-skill-showcase.js";
 import { OpenAiClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import { OpenAiCustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
+import { RecommendationRepository } from "../src/recommendation-repository.js";
 
 const roots: string[] = [];
 const SHOWCASE_TEST_TIMEOUT_MS = 15_000;
@@ -65,6 +66,10 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
   )).toBe(true);
   expect(report.aiStages.every((trace) => trace.drafting.fallback === undefined))
     .toBe(true);
+  const persistedTraces = (await new RecommendationRepository(
+    join(dataRoot, "recommendations"),
+  ).list()).map((recommendation) => recommendation.aiExecutionTrace);
+  expect(report.aiStages).toEqual(persistedTraces);
   expect(report.workflowStages).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ stage: "review", nextAction: "review-recommendation" }),

@@ -64,6 +64,7 @@ import type {
   SubmitRecommendationInput,
   TriageService,
 } from "./triage-service.js";
+import { customerReplyWatermarkFromAudits } from "./triage-service.js";
 
 const PAGE_SIZE = 50;
 const MAX_OFFSET = 10_000;
@@ -692,6 +693,7 @@ async function evaluateTicket(
   const evaluation = await deps.service.submitEvaluation({
     ...recommendationInput,
     submittedAt: deps.now().toISOString(),
+    evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
   });
   const { recommendation, recommendations: persistedRecommendations } =
     evaluation;
@@ -714,10 +716,6 @@ async function markResponseDone(
   deps: TriageServerDependencies,
   input: z.infer<typeof MarkResponseDoneInputSchema>,
 ): Promise<z.infer<typeof MarkResponseDoneOutputSchema>> {
-  const approval = await deps.service.approve({
-    ...input,
-    approvedAt: deps.now().toISOString(),
-  });
   const customerResponse = input.editedCustomerResponse;
   if (customerResponse === undefined) {
     throw new DomainError(
@@ -725,26 +723,31 @@ async function markResponseDone(
       "INVALID_APPROVAL_FIELDS",
     );
   }
-  const auditsBeforeSent = await deps.audits.list(input.ticketId);
-  const sentEvent = await deps.service.markResponseSent({
-    recommendationId: input.recommendationId,
-    ticketId: input.ticketId,
-    actor: input.actor,
-    sentAt: deps.now().toISOString(),
-    customerResponse,
+  const completed = await deps.service.approveAndMarkResponseSent({
+    approval: {
+      ...input,
+      approvedAt: deps.now().toISOString(),
+    },
+    responseSent: {
+      recommendationId: input.recommendationId,
+      ticketId: input.ticketId,
+      actor: input.actor,
+      sentAt: deps.now().toISOString(),
+      customerResponse,
+    },
   });
   const recommendation = await deps.recommendations.get(input.recommendationId);
   const automaticReply = await maybeAddAutomaticCustomerReplyAfterSent({
     deps,
     ticketId: input.ticketId,
     recommendation,
-    auditsBeforeSent,
-    sentAt: sentEvent.timestamp,
+    auditsBeforeSent: completed.auditsBeforeSent,
+    sentAt: completed.sentEvent.timestamp,
   });
   return {
-    ticket: approval.ticket,
-    approvalEvent: approval.auditEvent,
-    sentEvent,
+    ticket: completed.ticket,
+    approvalEvent: completed.approvalEvent,
+    sentEvent: completed.sentEvent,
     ...(automaticReply === undefined ? {} : { automaticReply }),
   };
 }

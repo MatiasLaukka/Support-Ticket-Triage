@@ -199,12 +199,11 @@ async function replayTkt1010(input: {
       const auditEvents = sanitizeAuditEvents(
         await input.deps.audits.list(TICKET_ID),
       );
-      const normalizedAiStages = normalizeAiStages(input.mode, aiStages);
       const report = {
         mode: input.mode,
         providerProvenance: providerProvenanceForMode(input.mode),
         toolCalls,
-        aiStages: normalizedAiStages,
+        aiStages,
         workflowStages,
         approvals,
         finalTicketStatus: workflow.ticket.status,
@@ -393,21 +392,6 @@ function providerProvenanceForMode(
     drafting: "live-openai-adapter",
     networkPolicy: "live-provider-allowed",
   };
-}
-
-function normalizeAiStages(
-  mode: SkillShowcaseMode,
-  stages: readonly AiExecutionTrace[],
-): AiExecutionTrace[] {
-  if (mode !== "controlled") return [...stages];
-
-  return stages.map((trace) => {
-    const drafting = trace.drafting.source === "deterministic" &&
-        trace.drafting.status === "skipped"
-      ? { ...trace.drafting, status: "used" as const }
-      : trace.drafting;
-    return AiExecutionTraceSchema.parse({ ...trace, drafting });
-  });
 }
 
 export function showcaseApprovalFields(

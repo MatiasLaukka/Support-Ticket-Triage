@@ -102,6 +102,21 @@ const RejectRecommendationInputSchema = z
   })
   .strict();
 
+const CustomerReplyWatermarkSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none") }).strict(),
+  z
+    .object({
+      state: z.literal("reply"),
+      timestamp: IsoTimestampSchema,
+      id: z.uuid(),
+    })
+    .strict(),
+]);
+
+const SubmitEvaluationInputSchema = SubmitRecommendationInputSchema.extend({
+  evaluatedCustomerReplyWatermark: CustomerReplyWatermarkSchema,
+});
+
 const CancelApprovalInputSchema = z
   .object({
     recommendationId: z.uuid(),
@@ -239,6 +254,14 @@ export interface SubmitRecommendationInput {
   submittedAt: string;
 }
 
+export type CustomerReplyWatermark = z.infer<
+  typeof CustomerReplyWatermarkSchema
+>;
+
+export interface SubmitEvaluationInput extends SubmitRecommendationInput {
+  evaluatedCustomerReplyWatermark: CustomerReplyWatermark;
+}
+
 export interface RejectRecommendationInput {
   recommendationId: string;
   ticketId: TicketId;
@@ -261,6 +284,11 @@ export interface MarkResponseSentInput {
   actor: string;
   sentAt: string;
   customerResponse: string;
+}
+
+export interface ApproveAndMarkResponseSentInput {
+  approval: Approval;
+  responseSent: MarkResponseSentInput;
 }
 
 export interface AddCustomerReplyInput {
@@ -361,6 +389,34 @@ export interface TriageServiceDependencies {
   audit: AuditStore;
   now?: () => Date;
   uuid?: () => string;
+}
+
+export function customerReplyWatermarkFromAudits(
+  audits: readonly AuditEvent[],
+): CustomerReplyWatermark {
+  const latestReply = audits
+    .filter((event) => event.action === "customer-reply-received")
+    .at(-1);
+  return latestReply === undefined
+    ? { state: "none" }
+    : {
+        state: "reply",
+        timestamp: latestReply.timestamp,
+        id: latestReply.id,
+      };
+}
+
+function customerReplyWatermarksMatch(
+  evaluated: CustomerReplyWatermark,
+  current: CustomerReplyWatermark,
+): boolean {
+  return (
+    evaluated.state === current.state &&
+    (evaluated.state === "none" ||
+      (current.state === "reply" &&
+        evaluated.timestamp === current.timestamp &&
+        evaluated.id === current.id))
+  );
 }
 
 export class TriageService {
@@ -493,19 +549,31 @@ export class TriageService {
   }
 
   async submitEvaluation(
-    input: SubmitRecommendationInput,
+    input: SubmitEvaluationInput,
   ): Promise<{
     recommendation: TriageRecommendation;
     recommendations: TriageRecommendation[];
   }> {
-    const parsed = SubmitRecommendationInputSchema.parse(input);
-    return serializeTicket(parsed.ticketId, async () => {
-      const recommendation = await this.submit(parsed);
+    const parsed = SubmitEvaluationInputSchema.parse(input);
+    const { evaluatedCustomerReplyWatermark, ...recommendationInput } = parsed;
+    return serializeTicket(recommendationInput.ticketId, async () => {
+      const currentCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+        await this.dependencies.audit.list(recommendationInput.ticketId),
+      );
+      if (
+        !customerReplyWatermarksMatch(
+          evaluatedCustomerReplyWatermark,
+          currentCustomerReplyWatermark,
+        )
+      ) {
+        throw stale("Evaluation customer reply snapshot is stale.");
+      }
+      const recommendation = await this.submit(recommendationInput);
       const recommendations =
         await this.supersedePendingRecommendationsWithNewerReply({
-          ticketId: parsed.ticketId,
-          actor: parsed.actor,
-          supersededAt: parsed.submittedAt,
+          ticketId: recommendationInput.ticketId,
+          actor: recommendationInput.actor,
+          supersededAt: recommendationInput.submittedAt,
         });
       return { recommendation, recommendations };
     });
@@ -545,35 +613,56 @@ export class TriageService {
     input: MarkResponseSentInput,
   ): Promise<AuditEvent> {
     const sent = MarkResponseSentInputSchema.parse(input);
-    return serializeRecommendation(sent.recommendationId, async () => {
-      const recommendation = await this.dependencies.recommendations.get(
-        sent.recommendationId,
-      );
-      if (
-        recommendation.resolution !== "approved" ||
-        recommendation.ticketId !== sent.ticketId
-      ) {
-        throw stale("Approved customer response cannot be marked sent.");
-      }
+    return serializeRecommendation(sent.recommendationId, () =>
+      this.markResponseSentValidated(sent),
+    );
+  }
 
-      const auditEvent = AuditEventSchema.parse({
-        id: this.uuid(),
-        timestamp: sent.sentAt,
-        actor: sent.actor,
-        action: "customer-response-sent",
-        ticketId: sent.ticketId,
-        recommendationId: recommendation.id,
-        before: {},
-        after: {
-          sentAt: sent.sentAt,
-          customerResponse: sent.customerResponse,
-        },
-        rationale: "Approved customer response was sent.",
-        knowledgeArticleIds: recommendation.knowledgeArticleIds,
-        result: "success",
+  async approveAndMarkResponseSent(
+    input: ApproveAndMarkResponseSentInput,
+  ): Promise<{
+    ticket: Ticket;
+    approvalEvent: AuditEvent;
+    sentEvent: AuditEvent;
+    auditsBeforeSent: AuditEvent[];
+  }> {
+    const approval = ApprovalSchema.parse(input.approval);
+    const responseSent = MarkResponseSentInputSchema.parse(input.responseSent);
+    if (
+      approval.recommendationId !== responseSent.recommendationId ||
+      approval.ticketId !== responseSent.ticketId
+    ) {
+      throw stale("Approval and sent response do not match.");
+    }
+    if (
+      !approval.approvedFields.includes("customerResponse") ||
+      approval.editedCustomerResponse !== responseSent.customerResponse
+    ) {
+      throw new DomainError(
+        "Sent customer response must match the approved customer response.",
+        "INVALID_APPROVAL_FIELDS",
+      );
+    }
+
+    return serializeTicket(approval.ticketId, async () => {
+      await this.supersedePendingRecommendationsWithNewerReply({
+        ticketId: approval.ticketId,
+        actor: approval.actor,
+        supersededAt: approval.approvedAt,
       });
-      await this.dependencies.audit.append(auditEvent);
-      return auditEvent;
+      return serializeRecommendation(approval.recommendationId, async () => {
+        const approved = await this.approveValidated(approval);
+        const auditsBeforeSent = await this.dependencies.audit.list(
+          approval.ticketId,
+        );
+        const sentEvent = await this.markResponseSentValidated(responseSent);
+        return {
+          ticket: approved.ticket,
+          approvalEvent: approved.auditEvent,
+          sentEvent,
+          auditsBeforeSent,
+        };
+      });
     });
   }
 
@@ -809,6 +898,39 @@ export class TriageService {
       );
 
     return { ticket: updated, auditEvent: committedAuditEvent };
+  }
+
+  private async markResponseSentValidated(
+    sent: MarkResponseSentInput,
+  ): Promise<AuditEvent> {
+    const recommendation = await this.dependencies.recommendations.get(
+      sent.recommendationId,
+    );
+    if (
+      recommendation.resolution !== "approved" ||
+      recommendation.ticketId !== sent.ticketId
+    ) {
+      throw stale("Approved customer response cannot be marked sent.");
+    }
+
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: sent.sentAt,
+      actor: sent.actor,
+      action: "customer-response-sent",
+      ticketId: sent.ticketId,
+      recommendationId: recommendation.id,
+      before: {},
+      after: {
+        sentAt: sent.sentAt,
+        customerResponse: sent.customerResponse,
+      },
+      rationale: "Approved customer response was sent.",
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      result: "success",
+    });
+    await this.dependencies.audit.append(auditEvent);
+    return auditEvent;
   }
 
   private async appendApprovalRejectedAudit(

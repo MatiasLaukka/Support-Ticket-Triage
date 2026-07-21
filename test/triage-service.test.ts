@@ -17,6 +17,7 @@ import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { TicketRepository } from "../src/ticket-repository.js";
 import {
   TriageService,
+  customerReplyWatermarkFromAudits,
   type AuditStore,
   type RecommendationStore,
   type RejectRecommendationInput,
@@ -38,6 +39,85 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("submits an evaluation when the customer reply watermark still matches", async () => {
+    const harness = makeHarness();
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The API still returns 503.",
+      receivedAt: "2026-06-10T08:55:00.000Z",
+    });
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(
+      harness.service.submitEvaluation({
+        ...makeSubmitInput(),
+        evaluatedCustomerReplyWatermark,
+      }),
+    ).resolves.toMatchObject({
+      recommendation: { resolution: "pending" },
+    });
+    expect(harness.recommendations.values).toHaveLength(1);
+  });
+
+  it("rejects an evaluation when the latest customer reply changed after its snapshot", async () => {
+    const harness = makeHarness();
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The API still returns 503.",
+      receivedAt: "2026-06-10T08:50:00.000Z",
+    });
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The retry now returns a different error.",
+      receivedAt: "2026-06-10T08:59:00.000Z",
+    });
+    const auditCount = harness.audit.events.length;
+
+    await expect(
+      harness.service.submitEvaluation({
+        ...makeSubmitInput(),
+        evaluatedCustomerReplyWatermark,
+      }),
+    ).rejects.toMatchObject({
+      code: "STALE_APPROVAL",
+      message: "Evaluation customer reply snapshot is stale.",
+    });
+    expect(harness.recommendations.values).toEqual([]);
+    expect(harness.audit.events).toHaveLength(auditCount);
+  });
+
+  it("uses an explicit no-reply watermark to detect the first customer reply", async () => {
+    const harness = makeHarness();
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+    expect(evaluatedCustomerReplyWatermark).toEqual({ state: "none" });
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The first customer update arrived during evaluation.",
+      receivedAt: "2026-06-10T08:59:00.000Z",
+    });
+    const auditCount = harness.audit.events.length;
+
+    await expect(
+      harness.service.submitEvaluation({
+        ...makeSubmitInput(),
+        evaluatedCustomerReplyWatermark,
+      }),
+    ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    expect(harness.recommendations.values).toEqual([]);
+    expect(harness.audit.events).toHaveLength(auditCount);
+  });
+
   it("submits a recommendation without mutating the ticket and recomputes escalation", async () => {
     const harness = makeHarness();
     const before = structuredClone(await harness.tickets.get("TKT-1001"));
@@ -923,6 +1003,67 @@ describe("TriageService", () => {
     });
     expect(harness.audit.events.at(-1)).toEqual(sentEvent);
     expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+  });
+
+  it("serializes atomic approval and send before a concurrent customer reply", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(
+      makeSubmitInput({
+        draftCustomerResponse: "Hi, we are investigating the API errors.",
+      }),
+    );
+    const approvalAppendStarted = deferred();
+    const allowApprovalAppend = deferred();
+    harness.audit.beforeNextAppend = async () => {
+      approvalAppendStarted.resolve();
+      await allowApprovalAppend.promise;
+    };
+
+    const completion = harness.service.approveAndMarkResponseSent({
+      approval: makeApproval({
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: "Hi, the reviewed API response is approved.",
+      }),
+      responseSent: {
+        recommendationId,
+        ticketId: "TKT-1001",
+        actor: "casey",
+        sentAt: "2026-06-10T09:05:01.000Z",
+        customerResponse: "Hi, the reviewed API response is approved.",
+      },
+    });
+    await approvalAppendStarted.promise;
+    const reply = harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "A reply attempted to arrive between approval and send.",
+      receivedAt: "2026-06-10T09:05:00.500Z",
+    });
+    const replyState = await Promise.race([
+      reply.then(
+        () => "completed",
+        () => "completed",
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("waiting"), 25),
+      ),
+    ]);
+    allowApprovalAppend.resolve();
+
+    expect(replyState).toBe("waiting");
+    await expect(completion).resolves.toMatchObject({
+      approvalEvent: { action: "recommendation-approved" },
+      sentEvent: { action: "customer-response-sent" },
+    });
+    await expect(reply).resolves.toMatchObject({
+      action: "customer-reply-received",
+    });
+    expect(harness.audit.events.map(({ action }) => action)).toEqual([
+      "recommendation-submitted",
+      "recommendation-approved",
+      "customer-response-sent",
+      "customer-reply-received",
+    ]);
   });
 
   it("appends a customer reply without updating ticket fields", async () => {
