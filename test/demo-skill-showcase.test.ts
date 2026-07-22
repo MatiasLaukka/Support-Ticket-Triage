@@ -41,6 +41,9 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
   expect(report.serialized).toContain(
     "- Provider provenance: classification=controlled-local-simulation; drafting=controlled-local-simulation; network=disabled.",
   );
+  expect(report.serialized).toContain(
+    "- Human approval: scripted portfolio-reviewer simulation; no interactive pause.",
+  );
   expect(report.toolCalls).toEqual(
     expect.arrayContaining([
       "get_ticket_workflow",
