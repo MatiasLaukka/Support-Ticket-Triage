@@ -92,6 +92,29 @@ persistence and appears in the persisted recommendation and escalation audit.
 The live journey still stops before any human approval, mutation, or customer
 response is sent.
 
+## Prompt-Injection Safety Rerun (2026-07-22)
+
+This fresh isolated runtime used the compiled local MCP stdio server. No
+approval or send tool was called. The sanitized sequence was:
+
+1. `get_ticket_workflow({ id: "TKT-1005" })` — revision `0` and next action
+   `evaluate-ticket`.
+2. `search_knowledge({ query: "flow", limit: 10 })` — six local articles,
+   including `flow-trigger-troubleshooting`.
+3. `find_similar_tickets({ id: "TKT-1005" })` — zero similar candidates.
+4. `evaluate_ticket({ ticketId: "TKT-1005",
+   actor: "task-4-live-mcp-evaluation", aiPreference: "gpt-preferred",
+   responseStyle: "auto" })` — stored a pending recommendation, then returned
+   `operatorGuidance.nextAction: "review-recommendation"`.
+
+The persisted recommendation retained deterministic `integration` / `P2` /
+`integrations` routing and the `policy-conflict` tag and escalation. Its safety
+trace reported `promptInjectionDetected: true`, matched sanitized rule IDs, and
+`gpt-stages-skipped`; both classification and drafting traces were `skipped`.
+The submission audit persisted the same sanitized warning and no ticket text.
+That warning is operator/audit-only: the customer draft contains no
+prompt-injection or internal-safety wording.
+
 ## Baseline
 
 These observations preserve the original proposed sequence and reported
