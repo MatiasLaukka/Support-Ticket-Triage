@@ -110,6 +110,49 @@ describe("evaluateTicketWithAi", () => {
     expect(input.classificationSignals).toEqual(expect.arrayContaining([
       expect.objectContaining({ target: "category:performance" }),
     ]));
+    expect(input.aiExecutionTrace?.safety).toBeUndefined();
+  });
+
+  it("skips GPT stages for prompt injection while preserving deterministic triage", async () => {
+    let classificationCalls = 0;
+    let draftingCalls = 0;
+    const input = await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1005"),
+      actor: "skill-showcase",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: {
+        async reason() {
+          classificationCalls += 1;
+          throw new Error("classification provider must not be called");
+        },
+      },
+      draftProvider: {
+        async draft() {
+          draftingCalls += 1;
+          throw new Error("drafting provider must not be called");
+        },
+      },
+    });
+
+    expect(classificationCalls).toBe(0);
+    expect(draftingCalls).toBe(0);
+    expect(input.category).toBe("integration");
+    expect(input.team).toBe("integrations");
+    expect(input.escalationReasons).toContain("policy-conflict");
+    expect(input.draftCustomerResponseSource).toBe("deterministic");
+    expect(input.aiExecutionTrace).toMatchObject({
+      classification: { status: "skipped", acceptedSignals: [] },
+      drafting: { status: "skipped", source: "deterministic" },
+      safety: {
+        promptInjectionDetected: true,
+        action: "gpt-stages-skipped",
+        matchedRules: expect.arrayContaining(["approval-bypass"]),
+      },
+    });
+    expect(input.draftCustomerResponse.toLowerCase()).not.toContain("prompt injection");
   });
 
   it("records an accepted explicitly supplied deterministic drafting provider as used", async () => {

@@ -110,7 +110,7 @@ describe("repository-local support ticket triage Skill", () => {
     const { body } = parseSkill(readRequired(skillPath));
     const words = body.match(/\b[\w'-]+\b/g) ?? [];
 
-    expect(words.length).toBeLessThan(700);
+    expect(words.length).toBeLessThan(750);
     expect(body).toMatch(/^# Triaging Support Tickets/m);
     expect(body).toContain("references/policy.md");
     expect(body).toContain("references/ai-workflow.md");
@@ -213,6 +213,21 @@ describe("repository-local support ticket triage Skill", () => {
     expect(reference).toMatch(/Customer next step.*Your next step/is);
     expect(reference).toMatch(/GPT.*next step.*advisory.*(?:never|not).*instruction/is);
     expect(reference).toMatch(/operatorGuidance\.nextAction.*authoritative/is);
+  });
+
+  it("requires operator-only reporting for prompt-injection safety decisions", () => {
+    const { body } = parseSkill(readRequired(skillPath));
+    const reference = readRequired(aiWorkflowPath);
+
+    expect(body).toMatch(
+      /promptInjectionDetected.*sanitized warning.*operator.*matched rule IDs/is,
+    );
+    expect(body).toMatch(
+      /both GPT stages.*skipped.*deterministic result.*normal escalation/is,
+    );
+    expect(reference).toMatch(
+      /operator.*audit-only.*never.*customer draft.*internal detection/is,
+    );
   });
 
   it("requires unmistakable rejection intent and concrete feedback", () => {

@@ -133,6 +133,13 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
   });
 }
 
+function ordinaryEvaluationTicket(): Ticket {
+  return makeTicket({
+    description:
+      "Production requests fail consistently. We need the request ID and failure timestamp to investigate.",
+  });
+}
+
 function makeSubmitInput(
   overrides: Partial<SubmitToolInput> = {},
 ): SubmitToolInput {
@@ -189,7 +196,7 @@ function makeRejectInput(
   };
 }
 
-async function createFixture(): Promise<{
+async function createFixture(ticket = makeTicket()): Promise<{
   root: string;
   tickets: TicketRepository;
   knowledge: KnowledgeRepository;
@@ -205,7 +212,7 @@ async function createFixture(): Promise<{
   await mkdir(knowledgeRoot, { recursive: true });
   await writeFile(
     seedFile,
-    `${JSON.stringify([makeTicket()], null, 2)}\n`,
+    `${JSON.stringify([ticket], null, 2)}\n`,
     "utf8",
   );
   await writeFile(
@@ -1124,7 +1131,7 @@ describe("createTriageServer action protocol", () => {
   });
 
   it("runs both optional GPT stages through evaluate_ticket", async () => {
-    const fixture = await createFixture();
+    const fixture = await createFixture(ordinaryEvaluationTicket());
     const client = await connect(fixture, {
       classificationReasoningProvider: campaignEditorClassificationProvider,
       draftProvider: acceptedDraftProvider,
@@ -1155,7 +1162,7 @@ describe("createTriageServer action protocol", () => {
   });
 
   it("rejects evaluate_ticket when a customer reply arrives during provider work", async () => {
-    const fixture = await createFixture();
+    const fixture = await createFixture(ordinaryEvaluationTicket());
     const providerStarted = deferred();
     const allowProvider = deferred();
     const client = await connect(fixture, {
@@ -1194,7 +1201,7 @@ describe("createTriageServer action protocol", () => {
   });
 
   it("completes gpt-preferred evaluation without configured providers", async () => {
-    const client = await connect(await createFixture());
+    const client = await connect(await createFixture(ordinaryEvaluationTicket()));
     const evaluated = await callTool(client, "evaluate_ticket", {
       ticketId: "TKT-1001",
       actor: "skill-showcase",
@@ -1227,7 +1234,7 @@ describe("createTriageServer action protocol", () => {
     vi.stubGlobal("fetch", fetch);
 
     try {
-      const evaluated = await callTool(await connect(await createFixture()), "evaluate_ticket", {
+      const evaluated = await callTool(await connect(await createFixture(ordinaryEvaluationTicket())), "evaluate_ticket", {
         ticketId: "TKT-1001",
         actor: "skill-showcase",
         aiPreference: "gpt-preferred",

@@ -38,6 +38,7 @@ import {
 import { buildConversationContextForTicket } from "./conversation-context.js";
 import { isFinalDiagnosisForCustomer } from "./customer-service-drafting-skill.js";
 import { getKnownCause } from "./known-cause-catalog.js";
+import type { PromptInjectionAssessment } from "./prompt-injection-safety.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
@@ -250,6 +251,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   fixContext?: FixContext;
   aiPreference?: AiPreference;
   classificationTrace?: AiExecutionTrace["classification"];
+  safety?: PromptInjectionAssessment;
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const providerOutcome = input.outcome ?? {
@@ -268,7 +270,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   });
 
   const draft = await draftCustomerResponseWithFallback({
-    provider: input.draftProvider,
+    provider: input.safety?.detected ? undefined : input.draftProvider,
     draftInput: {
       ticket: input.ticket,
       outcome: providerOutcome,
@@ -298,7 +300,9 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   });
 
   const draftingTrace: AiExecutionTrace["drafting"] = {
-    status: draft.source === "openai" ||
+    status: input.safety?.detected
+      ? "skipped"
+      : draft.source === "openai" ||
         (draft.source === "deterministic" && draft.providerAttempted)
       ? "used"
       : draft.source === "fallback"
@@ -325,6 +329,16 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
       : {
           aiExecutionTrace: {
             preference: input.aiPreference ?? "auto",
+            ...(input.safety?.detected !== true
+              ? {}
+              : {
+                  safety: {
+                    promptInjectionDetected: input.safety.detected,
+                    matchedRules: input.safety.matchedRules,
+                    action: "gpt-stages-skipped",
+                    warning: input.safety.warning,
+                  },
+                }),
             classification: input.classificationTrace,
             drafting: draftingTrace,
           },
