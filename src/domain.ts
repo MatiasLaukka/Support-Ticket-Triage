@@ -145,6 +145,122 @@ export const ClassificationSignalSchema = z
   })
   .strict();
 
+export const AiPreferenceSchema = z.enum([
+  "auto",
+  "gpt-preferred",
+  "deterministic",
+]);
+
+export const AiFallbackCategorySchema = z.enum([
+  "not-configured",
+  "timeout",
+  "provider-error",
+  "invalid-schema",
+  "guardrail-rejected",
+]);
+
+const SanitizedAiMessageSchema = NonBlankStringSchema
+  .max(240)
+  .refine(
+    (message) =>
+      !/^\s*[{\[]|sk-[A-Za-z0-9_-]+|\b(?:api[-_]?key|access[-_]?token|secret|token)\s*[=:]\s*\S+|authorization|bearer\s+|(?:[A-Za-z]:[\\/]|(?:^|[\s"'`(])(?:(?:~?[\\/]|[\\/]{2})(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+|(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+))|traceback|stack\s*trace|\bat\s+.+\(.+:\d+:\d+\)|\b(?:system|developer|user)\s+(?:prompt|message|instructions?)\s*:|\b(?:openai|anthropic|provider)\s+(?:error|response|payload)(?:\s+(?:response|payload|body))?\s*:/i.test(message),
+    "AI trace messages must not contain credentials or machine paths.",
+  );
+
+const AiModelSchema = z
+  .string()
+  .max(120)
+  .regex(
+    /^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/,
+    "AI model identifiers must contain only identifier characters.",
+  );
+
+const AiTraceTargetSchema = z
+  .string()
+  .max(120)
+  .regex(
+    /^[a-z][a-z0-9-]*(?::[A-Za-z][A-Za-z0-9-]*)+$/,
+    "AI trace targets must be colon-delimited identifiers.",
+  );
+
+export const AiUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+}).strict().refine(
+  (usage) => usage.totalTokens === usage.inputTokens + usage.outputTokens,
+  { message: "totalTokens must equal inputTokens plus outputTokens." },
+);
+
+export const AiGuardrailCheckSchema = z.object({
+  id: SlugSchema,
+  label: SanitizedAiMessageSchema,
+  status: z.enum(["pass", "warn", "fail"]),
+  message: SanitizedAiMessageSchema,
+}).strict();
+
+const AiFallbackSchema = z.object({
+  category: AiFallbackCategorySchema,
+  message: SanitizedAiMessageSchema,
+}).strict();
+
+const AiClassificationCandidateSchema = z.object({
+  issueType: SlugSchema,
+  category: CategorySchema.optional(),
+  team: TeamSchema.optional(),
+  priority: PrioritySchema.optional(),
+  knowledgeArticleIds: z.array(SlugSchema),
+  confidence: z.number().min(0).max(1),
+  explanation: SanitizedAiMessageSchema,
+}).strict();
+
+const AiClassificationSignalSchema = z.object({
+  ruleId: SlugSchema,
+  target: AiTraceTargetSchema,
+  weight: z.number(),
+  reason: SanitizedAiMessageSchema,
+}).strict();
+
+const AiFinalClassificationSchema = z.object({
+  category: CategorySchema,
+  team: TeamSchema,
+  priority: PrioritySchema,
+  knowledgeArticleIds: z.array(SlugSchema),
+  confidence: z.number().min(0).max(1),
+  escalationReasons: z.array(RequiredEscalationSchema),
+}).strict();
+
+export const AiExecutionTraceSchema = z.object({
+  preference: AiPreferenceSchema,
+  classification: z.object({
+    status: z.enum(["skipped", "used", "fallback"]),
+    model: AiModelSchema.optional(),
+    latencyMs: z.number().int().nonnegative().optional(),
+    usage: AiUsageSchema.optional(),
+    fallback: AiFallbackSchema.optional(),
+    candidate: AiClassificationCandidateSchema.optional(),
+    acceptedSignals: z.array(AiClassificationSignalSchema),
+    rejectedAdvice: z.array(z.object({
+      target: AiTraceTargetSchema,
+      reason: SanitizedAiMessageSchema,
+    }).strict()),
+    deterministicOverrides: z.array(SanitizedAiMessageSchema),
+    finalOutcome: AiFinalClassificationSchema,
+  }).strict(),
+  drafting: z.object({
+    status: z.enum(["skipped", "used", "fallback"]),
+    source: DraftCustomerResponseSourceSchema,
+    model: AiModelSchema.optional(),
+    latencyMs: z.number().int().nonnegative().optional(),
+    usage: AiUsageSchema.optional(),
+    fallback: AiFallbackSchema.optional(),
+    requestedStyle: DraftCustomerResponseStyleInputSchema,
+    recommendedStyle: DraftCustomerResponseStyleSchema,
+    selectedStyle: DraftCustomerResponseStyleSchema,
+    checks: z.array(AiGuardrailCheckSchema),
+  }).strict(),
+}).strict();
+
 export const CustomerSchema = z
   .object({
     name: NonBlankStringSchema,
@@ -275,6 +391,7 @@ export const TriageRecommendationSchema = z
       .array(DraftCustomerResponseCheckSchema)
       .optional(),
     gptAssist: GptAssistSchema.optional(),
+    aiExecutionTrace: AiExecutionTraceSchema.optional(),
     rationale: NonBlankStringSchema,
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -471,6 +588,11 @@ export type DraftCustomerResponseCheck = z.infer<
 >;
 export type GptAssistAudience = z.infer<typeof GptAssistAudienceSchema>;
 export type GptAssist = z.infer<typeof GptAssistSchema>;
+export type AiPreference = z.infer<typeof AiPreferenceSchema>;
+export type AiFallbackCategory = z.infer<typeof AiFallbackCategorySchema>;
+export type AiUsage = z.infer<typeof AiUsageSchema>;
+export type AiGuardrailCheck = z.infer<typeof AiGuardrailCheckSchema>;
+export type AiExecutionTrace = z.infer<typeof AiExecutionTraceSchema>;
 export type Customer = z.infer<typeof CustomerSchema>;
 export type RequesterTechnicalLevel = z.infer<
   typeof RequesterTechnicalLevelSchema

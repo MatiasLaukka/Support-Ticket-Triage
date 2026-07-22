@@ -1,9 +1,14 @@
 import { z } from "zod";
 import {
+  AiExecutionTraceSchema,
+  AiUsageSchema,
   DraftCustomerResponseStyleInputSchema,
   DraftCustomerResponseStyleSchema,
 } from "../domain.js";
 import type {
+  AiFallbackCategory,
+  AiGuardrailCheck,
+  AiUsage,
   DraftCustomerResponseCheck,
   DraftCustomerResponseSource,
   ExpectedOutcome,
@@ -23,6 +28,7 @@ import {
   buildCustomerServiceDraftingInstructions,
   buildCustomerServiceSkillContext,
 } from "./customer-service-drafting-skill.js";
+import { validateDraftQuality } from "./draft-quality-guardrails.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 const DEFAULT_OPENAI_DRAFT_TIMEOUT_MS = 20_000;
@@ -30,6 +36,11 @@ export const DEFAULT_SUPPORT_COMPANY_NAME = "Northstar Marketing Support";
 const DEFAULT_SUPPORT_ACTOR = "Support Team";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DraftProviderSchema = z.enum(["deterministic", "openai"]);
+const DraftTelemetrySchema = AiExecutionTraceSchema.shape.drafting.pick({
+  model: true,
+  latencyMs: true,
+  usage: true,
+}).required({ model: true, latencyMs: true });
 const OpenAiDraftResponseSchema = z
   .object({
     draftCustomerResponse: z.string().trim().min(1),
@@ -81,6 +92,11 @@ export interface CustomerResponseDraft {
   source: DraftCustomerResponseSource;
   response: string;
   assist: GptAssist;
+  telemetry?: {
+    model: string;
+    latencyMs: number;
+    usage?: AiUsage;
+  };
 }
 
 export interface CustomerResponseDraftProvider {
@@ -105,17 +121,18 @@ export interface GptClassificationReasoningInput {
   deterministicClassification: TicketClassification;
 }
 
-export interface GptClassificationReasoningProvider {
-  reason(
-    input: GptClassificationReasoningInput,
-  ): Promise<GptClassificationReasoning>;
-}
-
 export interface ValidatedCustomerResponseDraft {
+  providerAttempted: boolean;
   source: DraftCustomerResponseSource;
   response: string;
   checks: DraftCustomerResponseCheck[];
   assist: GptAssist;
+  telemetry?: CustomerResponseDraft["telemetry"];
+  fallback?: {
+    category: AiFallbackCategory;
+    message: string;
+  };
+  candidateChecks: AiGuardrailCheck[];
 }
 
 export type FetchLike = (
@@ -155,9 +172,7 @@ export class UnavailableOpenAiDraftProvider
   implements CustomerResponseDraftProvider
 {
   async draft(): Promise<CustomerResponseDraft> {
-    throw new Error(
-      "OpenAI drafting is enabled but OPENAI_API_KEY is not set.",
-    );
+    throw new UnavailableOpenAiError();
   }
 }
 
@@ -171,10 +186,14 @@ export class OpenAiCustomerResponseDraftProvider
       responseStyle?: DraftCustomerResponseStyleInput;
       timeoutMs?: number;
       fetch?: FetchLike;
+      now?: () => number;
     },
   ) {}
 
   async draft(input: CustomerResponseDraftInput): Promise<CustomerResponseDraft> {
+    const model = this.options.model ?? DEFAULT_OPENAI_MODEL;
+    const now = this.options.now ?? Date.now;
+    const startedAt = now();
     const fetchImpl = this.options.fetch ?? fetch;
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_OPENAI_DRAFT_TIMEOUT_MS;
     const abortController = new AbortController();
@@ -188,7 +207,7 @@ export class OpenAiCustomerResponseDraftProvider
         },
         signal: abortController.signal,
         body: JSON.stringify({
-          model: this.options.model ?? DEFAULT_OPENAI_MODEL,
+          model,
           instructions: buildDraftInstructions(
             input.responseStyle ?? this.options.responseStyle ?? "balanced",
             formatDraftSignOff(input),
@@ -274,11 +293,7 @@ export class OpenAiCustomerResponseDraftProvider
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           abortController.abort();
-          reject(
-            new Error(
-              `OpenAI drafting request timed out after ${timeoutMs} ms.`,
-            ),
-          );
+          reject(new OpenAiTimeoutError());
         }, timeoutMs);
       }),
     ]).finally(() => {
@@ -288,17 +303,11 @@ export class OpenAiCustomerResponseDraftProvider
     });
 
     const raw = await response.text();
-    if (!response.ok) {
-      throw new Error(
-        `OpenAI drafting request failed with ${response.status}${formatOpenAiErrorDetail(
-          raw,
-        )}.`,
-      );
-    }
+    if (!response.ok) throw new Error("OpenAI request failed.");
 
-    const parsed = OpenAiDraftResponseSchema.parse(
-      JSON.parse(extractResponseText(JSON.parse(raw))),
-    );
+    const envelope = JSON.parse(raw);
+    const parsed = OpenAiDraftResponseSchema.parse(JSON.parse(extractResponseText(envelope)));
+    const usage = mapUsage(envelope);
     const selectedTone =
       input.responseStyle === "auto" ? parsed.recommendedTone : input.responseStyle;
     return {
@@ -315,17 +324,27 @@ export class OpenAiCustomerResponseDraftProvider
         audience: parsed.audience,
         checks: [],
       },
+      telemetry: {
+        model,
+        latencyMs: Math.max(0, now() - startedAt),
+        ...(usage === undefined ? {} : { usage }),
+      },
     };
   }
 }
 
 export function createCustomerResponseDraftProviderFromEnv(
   env: NodeJS.ProcessEnv,
-  options: { responseStyle?: DraftCustomerResponseStyleInput } = {},
+  options: {
+    responseStyle?: DraftCustomerResponseStyleInput;
+    preferOpenAi?: boolean;
+  } = {},
 ): CustomerResponseDraftProvider | undefined {
-  const configured = DraftProviderSchema.default("deterministic").parse(
-    env.APPROVAL_DRAFT_PROVIDER,
-  );
+  const configured = options.preferOpenAi === true
+    ? "openai"
+    : DraftProviderSchema.default("deterministic").parse(
+        env.APPROVAL_DRAFT_PROVIDER,
+      );
   if (configured === "deterministic") {
     return undefined;
   }
@@ -362,6 +381,7 @@ export async function draftCustomerResponseWithFallback(input: {
   draftInput: CustomerResponseDraftInput;
 }): Promise<ValidatedCustomerResponseDraft> {
   const deterministic = new DeterministicCustomerResponseDraftProvider();
+  const providerAttempted = input.provider !== undefined;
   const provider = input.provider ?? deterministic;
   try {
     const candidate = await provider.draft(input.draftInput);
@@ -369,12 +389,16 @@ export async function draftCustomerResponseWithFallback(input: {
     const validation = validateCustomerResponseDraft({
       response,
       assist: candidate.assist,
+      responseStyle: resolvedResponseStyle(input.draftInput, candidate.assist),
       knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
       evidenceReadiness: input.draftInput.evidenceReadiness,
       conversationContext: input.draftInput.conversationContext,
+      diagnosisContext: input.draftInput.diagnosisContext,
+      fixContext: input.draftInput.fixContext,
     });
     if (validation.blockingMessages.length === 0) {
       return {
+        providerAttempted,
         source: candidate.source,
         response,
         checks: validation.checks,
@@ -382,75 +406,189 @@ export async function draftCustomerResponseWithFallback(input: {
           ...candidate.assist,
           checks: validation.checks,
         },
+        ...(candidate.telemetry === undefined ? {} : { telemetry: candidate.telemetry }),
+        candidateChecks: validation.candidateChecks,
       };
     }
 
+    const openAiCandidate = candidate.source === "openai";
     return fallbackDraft({
+      providerAttempted,
       draftInput: input.draftInput,
-      reason: `Provider draft rejected: ${validation.blockingMessages.join(
-        " ",
-      )}`,
+      reason: `${openAiCandidate ? "Provider" : "Deterministic"} draft rejected: ${validation.blockingMessages.join(" ")}`,
+      fallback: openAiCandidate
+        ? {
+            category: "guardrail-rejected",
+            message: "OpenAI output did not pass response guardrails; deterministic output was used.",
+          }
+        : {
+            category: "guardrail-rejected",
+            message: "Local deterministic draft did not pass response guardrails; bounded local fallback was used.",
+          },
+      candidateChecks: validation.candidateChecks,
+      rejectedCandidateChecks: validation.checks.filter(
+        (check) => check.status === "warn",
+      ),
+      ...(openAiCandidate && candidate.telemetry !== undefined
+        ? { telemetry: sanitizeDraftTelemetry(candidate.telemetry) }
+        : {}),
     });
   } catch (error) {
     return fallbackDraft({
+      providerAttempted,
       draftInput: input.draftInput,
-      reason:
-        error instanceof Error
-          ? error.message
-          : "Draft provider failed before returning a response.",
+      fallback: classifyAiFailure(error),
     });
   }
 }
 
 function fallbackDraft(input: {
+  providerAttempted: boolean;
   draftInput: CustomerResponseDraftInput;
-  reason: string;
+  reason?: string;
+  fallback: { category: AiFallbackCategory; message: string };
+  candidateChecks?: AiGuardrailCheck[];
+  rejectedCandidateChecks?: DraftCustomerResponseCheck[];
+  telemetry?: CustomerResponseDraft["telemetry"];
 }): ValidatedCustomerResponseDraft {
-  const fallbackAssist = buildDeterministicGptAssist(
+  let fallbackAssist = buildDeterministicGptAssist(
     input.draftInput,
     "fallback",
     [],
   );
-  const validation = validateCustomerResponseDraft({
-    response: ensureDraftSignOff(
-      input.draftInput.deterministicDraft,
-      input.draftInput,
-    ),
-    assist: fallbackAssist,
-    knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
-    evidenceReadiness: input.draftInput.evidenceReadiness,
-    conversationContext: input.draftInput.conversationContext,
-  });
+  const responseStyle = resolvedResponseStyle(input.draftInput, fallbackAssist);
+  let response = ensureDraftSignOff(
+    input.draftInput.deterministicDraft,
+    input.draftInput,
+  );
+  const validateFallback = () => validateCustomerResponseDraft({
+      response,
+      assist: fallbackAssist,
+      responseStyle,
+      knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
+      evidenceReadiness: input.draftInput.evidenceReadiness,
+      conversationContext: input.draftInput.conversationContext,
+      diagnosisContext: input.draftInput.diagnosisContext,
+      fixContext: input.draftInput.fixContext,
+    });
+  let validation = validateFallback();
+  if (validation.blockingMessages.length > 0) {
+    fallbackAssist = withoutCustomerInformationRequests(fallbackAssist);
+    validation = validateFallback();
+  }
+  if (validation.blockingMessages.length > 0) {
+    fallbackAssist = boundedSafetyFallbackAssist(fallbackAssist);
+    validation = validateFallback();
+  }
+  if (validation.blockingMessages.length > 0) {
+    response = boundedSafetyFallbackResponse(input.draftInput);
+    validation = validateFallback();
+  }
+  if (validation.blockingMessages.length > 0) {
+    throw new Error("Bounded safety fallback failed response guardrails.");
+  }
   const checks: DraftCustomerResponseCheck[] = [
     {
       id: "fallback-used",
       label: "Fallback used",
       status: "warn",
-      message: sanitizeValidationMessage(input.reason),
+      message: input.reason === undefined
+        ? input.fallback.message
+        : sanitizeValidationMessage(input.reason),
     },
+    ...(input.rejectedCandidateChecks ?? []),
     ...validation.checks,
   ];
   return {
+    providerAttempted: input.providerAttempted,
     source: "fallback",
-    response: ensureDraftSignOff(
-      input.draftInput.deterministicDraft,
-      input.draftInput,
-    ),
+    response,
     checks,
     assist: {
       ...fallbackAssist,
       checks,
     },
+    fallback: input.fallback,
+    candidateChecks: input.candidateChecks ?? [],
+    ...(input.telemetry === undefined ? {} : { telemetry: input.telemetry }),
   };
+}
+
+function boundedSafetyFallbackResponse(input: CustomerResponseDraftInput): string {
+  const body = isCustomerConfirmedReadyForClose(input)
+    ? "Thank you for confirming the issue is resolved. This ticket is ready to close."
+    : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
+  return `${body}\n\n${formatDraftSignOff(input)}`;
+}
+
+function boundedSafetyFallbackAssist(assist: GptAssist): GptAssist {
+  return {
+    ...withoutCustomerInformationRequests(assist),
+    investigationSteps: [
+      "Review the ticket context before the next customer update.",
+    ],
+  };
+}
+
+function withoutCustomerInformationRequests(assist: GptAssist): GptAssist {
+  return {
+    ...assist,
+    missingInfoSuggestions: [
+      "No additional customer information is requested in this fallback draft.",
+    ],
+    checks: [],
+  };
+}
+
+function sanitizeDraftTelemetry(
+  telemetry: NonNullable<CustomerResponseDraft["telemetry"]>,
+): CustomerResponseDraft["telemetry"] | undefined {
+  const parsed = DraftTelemetrySchema.safeParse(telemetry);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export class UnavailableOpenAiError extends Error {
+  constructor() {
+    super("OpenAI is not configured.");
+  }
+}
+
+export class OpenAiTimeoutError extends Error {
+  constructor() {
+    super("OpenAI request timed out.");
+  }
+}
+
+export function classifyAiFailure(error: unknown): {
+  category: AiFallbackCategory;
+  message: string;
+} {
+  if (error instanceof UnavailableOpenAiError) {
+    return { category: "not-configured", message: "OpenAI is not configured; deterministic output was used." };
+  }
+  if (error instanceof OpenAiTimeoutError) {
+    return { category: "timeout", message: "OpenAI timed out; deterministic output was used." };
+  }
+  if (error instanceof z.ZodError || error instanceof SyntaxError) {
+    return { category: "invalid-schema", message: "OpenAI returned invalid structured output; deterministic output was used." };
+  }
+  return { category: "provider-error", message: "OpenAI was unavailable; deterministic output was used." };
 }
 
 function validateCustomerResponseDraft(input: {
   response: string;
   assist: GptAssist;
+  responseStyle: DraftCustomerResponseStyle;
   knowledgeArticleIds: readonly string[];
   evidenceReadiness?: EvidenceReadiness;
   conversationContext?: CustomerResponseConversationContext;
-}): { checks: DraftCustomerResponseCheck[]; blockingMessages: string[] } {
+  diagnosisContext?: DiagnosisContext;
+  fixContext?: FixContext;
+}): {
+  checks: DraftCustomerResponseCheck[];
+  blockingMessages: string[];
+  candidateChecks: AiGuardrailCheck[];
+} {
   const response = input.response.trim();
   const checks: DraftCustomerResponseCheck[] = [];
   const blockingMessages: string[] = [];
@@ -458,6 +596,7 @@ function validateCustomerResponseDraft(input: {
     ...input.assist.missingInfoSuggestions,
     ...input.assist.investigationSteps,
   ].join(" ");
+  const customerConfirmedReadyForClose = isCustomerConfirmedReadyForClose(input);
 
   pushCheck({
     checks,
@@ -487,13 +626,9 @@ function validateCustomerResponseDraft(input: {
     blockingMessages,
     id: "no-approval-bypass",
     label: "No approval bypass",
-    passed:
-      !/\b(approved|approval|skip approval|skip review|close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(
-        response,
-      ) &&
-      !/\b(approved|approval|skip approval|skip review|close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(
-        assistText,
-      ),
+    passed: !containsApprovalBypass(`${response} ${assistText}`) &&
+      !containsClosureAction(assistText) &&
+      (customerConfirmedReadyForClose || !containsClosureAction(response)),
     failMessage: "The draft implied approval, closure, or review bypass.",
   });
 
@@ -502,13 +637,9 @@ function validateCustomerResponseDraft(input: {
     blockingMessages,
     id: "no-unsafe-resolution-promise",
     label: "No unsafe resolution promise",
-    passed:
-      !/\b(guarantee|guaranteed|fixed|resolved|sent successfully|will be fixed)\b/i.test(
-        response,
-      ) &&
-      !/\b(guarantee|guaranteed|fixed|resolved|sent successfully|will be fixed)\b/i.test(
-        assistText,
-      ),
+    passed: !containsUnsafeResolutionPromise(`${response} ${assistText}`) &&
+      !containsResolvedClaim(assistText) &&
+      (customerConfirmedReadyForClose || !containsResolvedClaim(response)),
     failMessage: "The draft promised a resolution that has not been verified.",
   });
 
@@ -529,7 +660,9 @@ function validateCustomerResponseDraft(input: {
     blockingMessages,
     id: "customer-addressed-directly",
     label: "Customer addressed directly",
-    passed: !/\bthe customer(?:'s|s)?\b/i.test(response),
+    passed: !/\bthe customer(?:'s|s)?\b(?!\s+(?:account|data|event|profile|record|store|timeline|workspace)\b)/i.test(
+      response,
+    ),
     failMessage:
       "The draft referred to the recipient as the customer instead of addressing them directly.",
   });
@@ -576,7 +709,61 @@ function validateCustomerResponseDraft(input: {
       "The draft repeated a diagnostic evidence request instead of explaining the current suspected problem.",
   });
 
-  return { checks, blockingMessages };
+  const quality = validateDraftQuality({
+    response,
+    style: input.responseStyle,
+    evidenceReadiness: input.evidenceReadiness,
+    diagnosisContext: input.diagnosisContext,
+    fixContext: input.fixContext,
+  });
+  for (const check of quality.checks) {
+    if (check.status === "fail") continue;
+    checks.push({
+      id: check.id,
+      label: check.label,
+      status: check.status,
+      message: check.message,
+    });
+  }
+
+  return {
+    checks,
+    blockingMessages: [...blockingMessages, ...quality.blockingMessages],
+    candidateChecks: quality.checks,
+  };
+}
+
+function isCustomerConfirmedReadyForClose(input: {
+  evidenceReadiness?: EvidenceReadiness;
+  conversationContext?: CustomerResponseConversationContext;
+}): boolean {
+  return input.evidenceReadiness?.supportState === "ready-for-close" &&
+    input.conversationContext?.turnType === "customer-confirmed";
+}
+
+function containsApprovalBypass(text: string): boolean {
+  return /\b(approved|approval|skip approval|skip review)\b/i.test(text);
+}
+
+function containsClosureAction(text: string): boolean {
+  return /\b(close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(text);
+}
+
+function containsUnsafeResolutionPromise(text: string): boolean {
+  return /\b(guarantee|guaranteed|fixed|sent successfully|will be fixed)\b/i.test(text);
+}
+
+function containsResolvedClaim(text: string): boolean {
+  return /\b(?:is|was|has been|looks|appears|now|already|fully)\s+resolved\b|\bresolved\s+(?:it|the issue|the problem)\b/i.test(
+    text,
+  );
+}
+
+function resolvedResponseStyle(
+  input: CustomerResponseDraftInput,
+  assist: GptAssist,
+): DraftCustomerResponseStyle {
+  return input.responseStyle === "auto" ? assist.selectedTone : input.responseStyle;
 }
 
 function containsPlatformFixSecretTroubleshooting(text: string): boolean {
@@ -598,9 +785,9 @@ function containsDiagnosticEvidenceAsk(input: {
 }): boolean {
   const text = input.text.toLowerCase();
   if (
-    /\b(?:please share|to move (?:this )?forward|we still need|still need|share the|send (?:us )?the|provide (?:the )?)\b/i.test(
+    /\b(?:please share|to move (?:this )?forward|we still need|still need|send us the)\b/i.test(
       text,
-    )
+    ) || containsDirectCustomerInformationAsk(text)
   ) {
     return true;
   }
@@ -914,43 +1101,33 @@ function extractResponseText(response: unknown): string {
   return text;
 }
 
+function mapUsage(response: unknown): AiUsage | undefined {
+  const usage = z.object({
+    usage: z.object({
+      input_tokens: z.number().int().nonnegative(),
+      output_tokens: z.number().int().nonnegative(),
+      total_tokens: z.number().int().nonnegative(),
+    }).optional(),
+  }).passthrough().parse(response).usage;
+  if (usage === undefined) return undefined;
+  return AiUsageSchema.parse({
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    totalTokens: usage.total_tokens,
+  });
+}
+
+function containsDirectCustomerInformationAsk(text: string): boolean {
+  const directAsk = /\b(?:share|send|provide)\s+the\b/gi;
+  for (const match of text.matchAll(directAsk)) {
+    const preceding = text.slice(Math.max(0, (match.index ?? 0) - 32), match.index);
+    if (!/\b(?:we|i|our team)\s+(?:will|can|should)\s*$/i.test(preceding)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function sanitizeValidationMessage(message: string): string {
   return message.replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]");
-}
-
-function formatOpenAiErrorDetail(raw: string): string {
-  if (raw.trim() === "") {
-    return "";
-  }
-
-  const parsed = z
-    .object({
-      error: z
-        .object({
-          message: z.string().trim().min(1).optional(),
-          type: z.string().trim().min(1).optional(),
-          code: z.union([z.string().trim().min(1), z.number()]).optional(),
-        })
-        .optional(),
-    })
-    .safeParse(safeJson(raw));
-  if (!parsed.success || parsed.data.error === undefined) {
-    return "";
-  }
-
-  const error = parsed.data.error;
-  const label = error.code ?? error.type;
-  const message = error.message;
-  const labelText = label === undefined ? "" : ` (${String(label)})`;
-  const messageText =
-    message === undefined ? "" : `: ${sanitizeValidationMessage(message)}`;
-  return `${labelText}${messageText}`;
-}
-
-function safeJson(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }

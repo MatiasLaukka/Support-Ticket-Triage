@@ -217,6 +217,7 @@ async function connect(
     service: fixture.service,
     now: () => now,
     minutesPerAcceptedRecommendation: 12,
+    env: {},
   });
   const client = new Client({ name: "server-read-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
@@ -435,6 +436,15 @@ describe("createTriageServer read protocol", () => {
     expectStableJson(textOf(workflow));
     expect(workflow.structuredContent).toMatchObject({
       ticket: expect.objectContaining({ id: "TKT-1001" }),
+      operatorGuidance: {
+        stage: "active",
+        changed: expect.any(String),
+        nextAction: "evaluate-ticket",
+        reason: expect.any(String),
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+        blockers: expect.any(Array),
+      },
       recommendationSummary: {
         latestRecommendationId: "d61bba15-41f4-495b-a794-93696343cc9d",
         latestResolution: "approved",
@@ -465,6 +475,208 @@ describe("createTriageServer read protocol", () => {
     }
   });
 
+  it("returns backend-owned guidance after reply, diagnosis, fix, and closure states", async () => {
+    const replyFixture = await createFixture();
+    await replyFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000001",
+        timestamp: "2026-06-10T09:05:00.000Z",
+        actor: "Maya Chen",
+        action: "customer-reply-received",
+        ticketId: "TKT-1001",
+        before: {},
+        after: { body: "The signing error still occurs." },
+        rationale: "Customer replied with current ticket context.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+    const replied = await callTool(await connect(replyFixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(replied.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "customer-replied",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+      },
+    });
+
+    const diagnosisFixture = await createFixture();
+    await diagnosisFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000002",
+        timestamp: "2026-06-10T09:06:00.000Z",
+        actor: "product-support",
+        action: "diagnosis-completed",
+        ticketId: "TKT-1001",
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "confirmed",
+            owner: "integration-partner",
+          },
+        },
+        rationale: "Confirmed an integration-owned diagnosis.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    const diagnosed = await callTool(await connect(diagnosisFixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(diagnosed.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "fix-ready",
+        nextAction: "mark-fix-available",
+      },
+    });
+
+    const diagnosisRecordedFixture = await createFixture();
+    await diagnosisRecordedFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000006",
+        timestamp: "2026-06-10T09:06:00.000Z",
+        actor: "product-support",
+        action: "diagnosis-completed",
+        ticketId: "TKT-1001",
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "likely",
+            owner: "support",
+          },
+        },
+        rationale: "Recorded a support-owned diagnosis.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    const beforeDiagnosisRead = {
+      ticket: await diagnosisRecordedFixture.tickets.get("TKT-1001"),
+      audits: await diagnosisRecordedFixture.audits.list("TKT-1001"),
+      recommendations: await diagnosisRecordedFixture.recommendations.list(),
+    };
+    const diagnosisRecorded = await callTool(
+      await connect(diagnosisRecordedFixture),
+      {
+        name: "get_ticket_workflow",
+        arguments: { id: "TKT-1001" },
+      },
+    );
+    expect(diagnosisRecorded.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "diagnosis-recorded",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+        customerNextStep: expect.any(String),
+      },
+    });
+    await expect(
+      diagnosisRecordedFixture.tickets.get("TKT-1001"),
+    ).resolves.toEqual(beforeDiagnosisRead.ticket);
+    await expect(
+      diagnosisRecordedFixture.audits.list("TKT-1001"),
+    ).resolves.toEqual(beforeDiagnosisRead.audits);
+    await expect(
+      diagnosisRecordedFixture.recommendations.list(),
+    ).resolves.toEqual(beforeDiagnosisRead.recommendations);
+
+    const fixFixture = await createFixture();
+    await fixFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000003",
+        timestamp: "2026-06-10T09:06:00.000Z",
+        actor: "product-support",
+        action: "diagnosis-completed",
+        ticketId: "TKT-1001",
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "confirmed",
+            owner: "engineering",
+          },
+        },
+        rationale: "Confirmed a platform-owned diagnosis.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    await fixFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000004",
+        timestamp: "2026-06-10T09:07:00.000Z",
+        actor: "product-support",
+        action: "fix-available",
+        ticketId: "TKT-1001",
+        before: {},
+        after: { fix: { status: "available" } },
+        rationale: "Recorded an available integration fix.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    const verification = await callTool(await connect(fixFixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(verification.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "verification",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+        customerNextStep: expect.any(String),
+      },
+    });
+    const approved = await fixFixture.recommendations.get(
+      "d61bba15-41f4-495b-a794-93696343cc9d",
+    );
+    await fixFixture.recommendations.create(
+      TriageRecommendationSchema.parse({
+        ...approved,
+        id: "30000000-0000-4000-8000-000000000005",
+        resolution: "pending",
+        supportState: "ready-for-close",
+        createdAt: "2026-06-10T09:08:00.000Z",
+      }),
+    );
+    const fixed = await callTool(await connect(fixFixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(fixed.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "review",
+        nextAction: "review-recommendation",
+        approval: { required: true },
+      },
+    });
+
+    const closedFixture = await createFixture();
+    await closedFixture.tickets.update("TKT-1001", 2, (current) => ({
+      ...current,
+      status: "resolved",
+      updatedAt: "2026-06-10T09:09:00.000Z",
+    }));
+    const closed = await callTool(await connect(closedFixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(closed.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "closed",
+        nextAction: "none",
+      },
+    });
+  });
+
   it("rejects out-of-bounds and invalid inputs through MCP schemas", async () => {
     const client = await connect(await createFixture());
 
@@ -492,6 +704,10 @@ describe("createTriageServer read protocol", () => {
       {
         name: "get_audit_events",
         arguments: { limit: 51 },
+      },
+      {
+        name: "evaluate_ticket",
+        arguments: { ticketId: "TKT-1001", aiPreference: "required" },
       },
     ]) {
       const result = await callTool(client, request);

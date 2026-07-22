@@ -5,11 +5,53 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
 import { AuditEventSchema } from "../src/domain.js";
+import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
+import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
+
+const parityDraftProvider: CustomerResponseDraftProvider = {
+  async draft() {
+    return {
+      source: "openai",
+      response: "We are checking the campaign editor loading path and will update you shortly.",
+      assist: {
+        source: "openai",
+        missingInfoSuggestions: ["Share a screenshot of the loading state."],
+        investigationSteps: ["Review the campaign editor loading path."],
+        tone: "empathetic",
+        recommendedTone: "empathetic",
+        selectedTone: "empathetic",
+        toneReason: "The customer reports an interrupted campaign workflow.",
+        audience: "merchant-admin",
+        checks: [],
+      },
+    };
+  },
+};
+
+const parityClassificationProvider: ClassificationReasoningProvider = {
+  async reason() {
+    return {
+      reasoning: {
+        issueType: "campaign-editor",
+        candidateCategory: "performance",
+        candidateTeam: "product",
+        candidatePriority: "P2",
+        knowledgeArticleIds: ["campaign-send-failures"],
+        confidence: 0.9,
+        evidence: ["editor never finishes loading"],
+        missingEvidenceThatWouldChangeClassification: [],
+        explanation: "The reply describes a campaign editor loading failure.",
+      },
+      telemetry: { model: "gpt-stub", latencyMs: 1 },
+    };
+  },
+};
 
 afterEach(async () => {
   await Promise.allSettled(
@@ -162,6 +204,57 @@ describe("createApprovalDeskHttpServer", () => {
       createdAt: now.toISOString(),
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
+  });
+
+  it("matches shared AI evaluation with identical providers and conversation input", async () => {
+    const { deps, json } = await startFixture({
+      classificationReasoningProvider: parityClassificationProvider,
+      draftProvider: parityDraftProvider,
+    });
+    const customerReplies = [{
+      id: "parity-campaign-editor",
+      createdAt: "2026-06-10T09:05:00.000Z",
+      body: "The campaign editor content area never finishes loading.",
+    }];
+    const ticket = await deps.tickets.get("TKT-1010");
+    const direct = await evaluateTicketWithAi({
+      ticket,
+      actor: "skill-showcase",
+      allKnowledgeArticles: await deps.knowledge.list(),
+      customerReplies: customerReplies.map((reply) => ({ ...reply, ticketId: ticket.id })),
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      classificationProvider: parityClassificationProvider,
+      draftProvider: parityDraftProvider,
+    });
+
+    const created = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "skill-showcase",
+        customerReplies,
+        aiPreference: "gpt-preferred",
+        responseStyle: "auto",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      category: direct.category,
+      team: direct.team,
+      aiExecutionTrace: direct.aiExecutionTrace,
+    });
+  });
+
+  it("rejects unsupported aiPreference in recommendation requests", async () => {
+    const { json } = await startFixture();
+    const response = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ aiPreference: "required" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain("Invalid option");
   });
 
   it("passes customer reply context into lifecycle-aware recommendation creation", async () => {
@@ -2003,14 +2096,17 @@ describe("createApprovalDeskHttpServer", () => {
       classificationReasoningProvider: {
         async reason() {
           return {
-            issueType: "campaign-editor",
-            candidateCategory: "performance",
-            candidateTeam: "product",
-            knowledgeArticleIds: ["campaign-send-failures"],
-            confidence: 0.9,
-            evidence: ["customer says the campaign editor page stays blank"],
-            missingEvidenceThatWouldChangeClassification: [],
-            explanation: "The reply describes a campaign editor loading failure.",
+            reasoning: {
+              issueType: "campaign-editor",
+              candidateCategory: "performance",
+              candidateTeam: "product",
+              knowledgeArticleIds: ["campaign-send-failures"],
+              confidence: 0.9,
+              evidence: ["customer says the campaign editor page stays blank"],
+              missingEvidenceThatWouldChangeClassification: [],
+              explanation: "The reply describes a campaign editor loading failure.",
+            },
+            telemetry: { model: "gpt-5.6-luna", latencyMs: 1 },
           };
         },
       },

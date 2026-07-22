@@ -1,10 +1,28 @@
 # Skill Evaluation
 
-The official `init_skill.py` could not run because no Python executable was
-available. The official `quick_validate.py` was not executed. Targeted
-TypeScript structural checks in `test/skill.test.ts` cover the documented
-frontmatter, name, and layout rules. These checks are narrower than the
-official validator.
+During the earlier evaluation, the official `init_skill.py` and
+`quick_validate.py` were not executed because a Python runtime had not been
+located; the targeted TypeScript checks were narrower than the official
+validator. For Task 7, the installed Python 3.12 runtime ran the official
+`quick_validate.py` against `.agents/skills/triaging-support-tickets` and
+reported `Skill is valid!`.
+
+## Codex Skill AI Showcase Contract
+
+- Structural tests validate the repository Skill's discovery metadata,
+  reporting template, fallback vocabulary, approval stops, and file layout;
+  they do not demonstrate runtime model behavior.
+- Controlled MCP integration tests exercise `evaluate_ticket` and
+  `get_ticket_workflow` with synthetic provider outputs and assert persisted
+  `aiExecutionTrace` plus backend-owned `operatorGuidance`; they are not live
+  provider or Codex runs.
+- The saved showcase replay demonstrates a reproducible governed workflow from
+  stored local artifacts. Treat its recorded output as historical evidence,
+  never as a live AI trace.
+- A live Codex run is a separate manual end-to-end evaluation. Report it as
+  live only when a fresh run actually loads this Skill, invokes the local MCP,
+  reports both AI stages and both next-step labels, and stops at the first
+  approval gate.
 
 ## Baseline
 

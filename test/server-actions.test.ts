@@ -14,12 +14,16 @@ import {
   type Approval,
   type Ticket,
 } from "../src/domain.js";
+import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { createTriageServer } from "../src/server.js";
 import { TicketRepository } from "../src/ticket-repository.js";
 import {
   TriageService,
+  type DiagnosisContext,
+  type FixContext,
   type RejectRecommendationInput,
   type SubmitRecommendationInput,
 } from "../src/triage-service.js";
@@ -30,6 +34,47 @@ const connections: Array<{ client: Client; server: McpServer }> = [];
 type SubmitToolInput = Omit<SubmitRecommendationInput, "submittedAt">;
 type ApprovalToolInput = Omit<Approval, "approvedAt">;
 type RejectToolInput = Omit<RejectRecommendationInput, "rejectedAt">;
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+
+const acceptedDraftProvider: CustomerResponseDraftProvider = {
+  async draft() {
+    return {
+      source: "openai",
+      response:
+        "Thank you for the details. We are checking why the campaign editor is not loading and will share the next step as soon as possible.",
+      assist: {
+        source: "openai",
+        missingInfoSuggestions: ["Share a screenshot of the loading state."],
+        investigationSteps: ["Review the campaign editor loading path."],
+        tone: "empathetic",
+        recommendedTone: "empathetic",
+        selectedTone: "empathetic",
+        toneReason: "The customer reports an interrupted campaign workflow.",
+        audience: "merchant-admin",
+        checks: [],
+      },
+    };
+  },
+};
+
+const campaignEditorClassificationProvider: ClassificationReasoningProvider = {
+  async reason() {
+    return {
+      reasoning: {
+        issueType: "campaign-editor",
+        candidateCategory: "performance",
+        candidateTeam: "product",
+        candidatePriority: "P2",
+        knowledgeArticleIds: [],
+        confidence: 0.9,
+        evidence: ["editor never finishes loading"],
+        missingEvidenceThatWouldChangeClassification: [],
+        explanation: "The reply describes a campaign editor loading failure.",
+      },
+      telemetry: { model: "gpt-stub", latencyMs: 1 },
+    };
+  },
+};
 
 const triageTicketText = (ticketId: string): string =>
   [
@@ -227,6 +272,11 @@ async function createFixture(): Promise<{
 
 async function connect(
   fixture: Awaited<ReturnType<typeof createFixture>>,
+  providers: Partial<{
+    classificationReasoningProvider: ClassificationReasoningProvider;
+    draftProvider: CustomerResponseDraftProvider;
+    env: NodeJS.ProcessEnv;
+  }> = {},
 ): Promise<Client> {
   const server = createTriageServer({
     tickets: fixture.tickets,
@@ -235,6 +285,8 @@ async function connect(
     audits: fixture.audits,
     service: fixture.service,
     now: () => now,
+    env: {},
+    ...providers,
   });
   const client = new Client({ name: "server-actions-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
@@ -277,6 +329,14 @@ function expectStableStructured(result: CallToolResult): Record<string, unknown>
   return structured;
 }
 
+function deferred() {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 async function submit(
   client: Client,
   overrides: Partial<SubmitRecommendationInput> = {},
@@ -285,6 +345,236 @@ async function submit(
     ...makeSubmitInput(overrides),
   });
 }
+
+function diagnosisContext(
+  overrides: Partial<DiagnosisContext> = {},
+): DiagnosisContext {
+  return {
+    status: "completed",
+    causeType: "configuration",
+    customerSafeSummary: "The trusted support context identifies the cause.",
+    evidenceUsed: ["request trace"],
+    confidence: "confirmed",
+    owner: "engineering",
+    recommendedNextAction: "Apply the governed next action.",
+    doNotSay: ["Do not expose internal-only details."],
+    ...overrides,
+  };
+}
+
+const availableFix: FixContext = {
+  status: "available",
+  customerSafeSummary: "The mitigation is available.",
+  customerAction: "Retry the affected request.",
+  verificationRequest: "Confirm whether the request now succeeds.",
+};
+
+async function seedRecommendation(
+  fixture: Fixture,
+  overrides: Partial<SubmitRecommendationInput> = {},
+) {
+  return fixture.service.submit({
+    ...makeSubmitInput({
+      missingInformation: [],
+      missingEvidence: [],
+      supportState: "diagnosing",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      assignee: "current-owner@example.test",
+      ticketStatus: "triage",
+      tags: ["existing"],
+      outageRisk: "none",
+      securityRisk: "none",
+      slaRisk: "none",
+      ...overrides,
+    }),
+    submittedAt: "2026-06-10T09:00:00.000Z",
+  });
+}
+
+async function approveAndSend(
+  fixture: Fixture,
+  recommendation: Awaited<ReturnType<typeof seedRecommendation>>,
+): Promise<void> {
+  await fixture.service.approve({
+    recommendationId: recommendation.id,
+    ticketId: "TKT-1001",
+    expectedRevision: 2,
+    approvedFields: ["customerResponse"],
+    editedCustomerResponse: recommendation.draftCustomerResponse,
+    actor: "casey",
+    confirm: true,
+    approvedAt: "2026-06-10T09:01:00.000Z",
+  });
+  await fixture.service.markResponseSent({
+    recommendationId: recommendation.id,
+    ticketId: "TKT-1001",
+    actor: "casey",
+    sentAt: "2026-06-10T09:02:00.000Z",
+    customerResponse: recommendation.draftCustomerResponse,
+  });
+}
+
+const lifecycleBlockerCases: Array<{
+  name: string;
+  tool: "record_diagnosis" | "mark_fix_available" | "close_ticket";
+  message: string;
+  setup: (fixture: Fixture) => Promise<void>;
+}> = [
+  {
+    name: "diagnosis requires an evaluation",
+    tool: "record_diagnosis",
+    message: "A completed evaluation is required before diagnosis.",
+    setup: async () => undefined,
+  },
+  {
+    name: "diagnosis requires gathered evidence",
+    tool: "record_diagnosis",
+    message: "Diagnosis requires all required evidence to be gathered.",
+    setup: async (fixture) => {
+      await seedRecommendation(fixture, {
+        missingEvidence: [{
+          id: "request-id",
+          label: "Request ID",
+          customerQuestion: "What is the request ID?",
+          aliases: ["request id"],
+          source: "knowledge",
+        }],
+      });
+    },
+  },
+  {
+    name: "diagnosis requires a diagnosis-ready state",
+    tool: "record_diagnosis",
+    message: "Diagnosis requires a diagnosis-ready ticket state.",
+    setup: async (fixture) => {
+      await seedRecommendation(fixture, { supportState: "needs-information" });
+    },
+  },
+  {
+    name: "diagnosis requires a sent response",
+    tool: "record_diagnosis",
+    message: "The evaluated response must be marked done before diagnosis.",
+    setup: async (fixture) => {
+      await seedRecommendation(fixture);
+    },
+  },
+  {
+    name: "diagnosis requires evaluating a newer reply",
+    tool: "record_diagnosis",
+    message: "Evaluate the latest customer reply before diagnosis.",
+    setup: async (fixture) => {
+      const recommendation = await seedRecommendation(fixture);
+      await approveAndSend(fixture, recommendation);
+      await fixture.service.addCustomerReply({
+        ticketId: "TKT-1001",
+        actor: "Maya Chen",
+        body: "The issue still occurs.",
+        receivedAt: "2026-06-10T09:03:00.000Z",
+      });
+    },
+  },
+  {
+    name: "diagnosis rejects a duplicate latest-context diagnosis",
+    tool: "record_diagnosis",
+    message: "Diagnosis has already been recorded for the latest context.",
+    setup: async (fixture) => {
+      const recommendation = await seedRecommendation(fixture);
+      await approveAndSend(fixture, recommendation);
+      await fixture.service.recordDiagnosis({
+        ticketId: "TKT-1001",
+        actor: "product-support",
+        diagnosedAt: "2026-06-10T09:03:00.000Z",
+        diagnosis: diagnosisContext(),
+        knowledgeArticleIds: [],
+      });
+    },
+  },
+  {
+    name: "fix requires a diagnosis",
+    tool: "mark_fix_available",
+    message: "A completed diagnosis is required before marking a fix available.",
+    setup: async () => undefined,
+  },
+  {
+    name: "fix requires confirmed confidence",
+    tool: "mark_fix_available",
+    message: "A confirmed diagnosis is required before marking a fix available.",
+    setup: async (fixture) => {
+      await fixture.service.recordDiagnosis({
+        ticketId: "TKT-1001",
+        actor: "product-support",
+        diagnosedAt: "2026-06-10T09:03:00.000Z",
+        diagnosis: diagnosisContext({ confidence: "likely" }),
+        knowledgeArticleIds: [],
+      });
+    },
+  },
+  {
+    name: "fix requires an engineering or integration owner",
+    tool: "mark_fix_available",
+    message: "This confirmed diagnosis does not require a platform fix.",
+    setup: async (fixture) => {
+      await fixture.service.recordDiagnosis({
+        ticketId: "TKT-1001",
+        actor: "product-support",
+        diagnosedAt: "2026-06-10T09:03:00.000Z",
+        diagnosis: diagnosisContext({ owner: "support" }),
+        knowledgeArticleIds: [],
+      });
+    },
+  },
+  {
+    name: "fix rejects a newer existing fix",
+    tool: "mark_fix_available",
+    message: "A fix has already been recorded for the latest diagnosis.",
+    setup: async (fixture) => {
+      await fixture.service.recordDiagnosis({
+        ticketId: "TKT-1001",
+        actor: "product-support",
+        diagnosedAt: "2026-06-10T09:03:00.000Z",
+        diagnosis: diagnosisContext(),
+        knowledgeArticleIds: [],
+      });
+      await fixture.service.recordFix({
+        ticketId: "TKT-1001",
+        actor: "product-support",
+        fixedAt: "2026-06-10T09:04:00.000Z",
+        fix: availableFix,
+        knowledgeArticleIds: [],
+      });
+    },
+  },
+  {
+    name: "close rejects an already resolved ticket",
+    tool: "close_ticket",
+    message: "Ticket is already closed.",
+    setup: async (fixture) => {
+      await fixture.tickets.update("TKT-1001", 2, (current) => ({
+        ...current,
+        status: "resolved",
+        updatedAt: "2026-06-10T09:05:00.000Z",
+      }));
+    },
+  },
+  {
+    name: "close requires a ready-to-close recommendation",
+    tool: "close_ticket",
+    message:
+      "Ticket must have a ready-to-close recommendation before it can be closed.",
+    setup: async () => undefined,
+  },
+  {
+    name: "close requires the ready-to-close response to be sent",
+    tool: "close_ticket",
+    message:
+      "The ready-to-close response must be marked done before the ticket can be closed.",
+    setup: async (fixture) => {
+      await seedRecommendation(fixture, { supportState: "ready-for-close" });
+    },
+  },
+];
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -462,6 +752,7 @@ describe("createTriageServer action protocol", () => {
 
     expect(result.isError).not.toBe(true);
     const value = expectStableStructured(result);
+    expect(value).not.toHaveProperty("operatorGuidance");
     const recommendation = TriageRecommendationSchema.parse(
       value.recommendation,
     );
@@ -748,6 +1039,10 @@ describe("createTriageServer action protocol", () => {
         "The API response status is 503. The request ID is req_12345 and the failure timestamp was 2026-06-10 09:15 UTC.",
       source: "manual",
     });
+    const ticketBeforeEvaluation = await fixture.tickets.get("TKT-1001");
+    const ticketReads = vi.spyOn(fixture.tickets, "get");
+    const auditReads = vi.spyOn(fixture.audits, "list");
+    const recommendationReads = vi.spyOn(fixture.recommendations, "list");
 
     const evaluated = await callTool(client, "evaluate_ticket", {
       ticketId: "TKT-1001",
@@ -767,13 +1062,222 @@ describe("createTriageServer action protocol", () => {
     });
     expect(recommendation.draftCustomerResponse).toContain("Kind regards");
     expect(recommendation.classificationSignals?.length ?? 0).toBeGreaterThan(0);
+    expect(evaluated.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "review",
+        nextAction: "review-recommendation",
+        approval: {
+          required: true,
+          fields: ["priority", "tags", "customerResponse"],
+        },
+        unlocksTool: "mark_response_done",
+      },
+    });
+    expect(ticketReads).toHaveBeenCalledTimes(3);
+    expect(auditReads).toHaveBeenCalledTimes(4);
+    expect(recommendationReads).toHaveBeenCalledTimes(1);
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
+      ticketBeforeEvaluation,
+    );
     expect(await fixture.recommendations.get(recommendation.id)).toEqual(
       recommendation,
     );
   });
 
+  it("supersedes an older pending recommendation after a newer reply during evaluate_ticket", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const previous = await seedRecommendation(fixture);
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body:
+        "The API response status is 503. The request ID is req_12345 and the failure timestamp was 2026-06-10 09:15 UTC.",
+      source: "manual",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    const current = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+    expect(await fixture.recommendations.get(previous.id)).toMatchObject({
+      resolution: "superseded",
+    });
+    expect(
+      (await fixture.recommendations.list()).filter(
+        ({ resolution }) => resolution === "pending",
+      ),
+    ).toEqual([expect.objectContaining({ id: current.id })]);
+    expect(
+      (await fixture.audits.list("TKT-1001")).map(({ action }) => action),
+    ).toEqual([
+      "recommendation-submitted",
+      "customer-reply-received",
+      "recommendation-submitted",
+      "recommendation-superseded",
+    ]);
+  });
+
+  it("runs both optional GPT stages through evaluate_ticket", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture, {
+      classificationReasoningProvider: campaignEditorClassificationProvider,
+      draftProvider: acceptedDraftProvider,
+    });
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The campaign editor content area never finishes loading.",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "skill-showcase",
+      responseStyle: "auto",
+      aiPreference: "gpt-preferred",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    expect(evaluated.structuredContent).toMatchObject({
+      recommendation: {
+        aiExecutionTrace: {
+          preference: "gpt-preferred",
+          classification: { status: "used" },
+          drafting: { status: "used", source: "openai" },
+        },
+      },
+    });
+  });
+
+  it("rejects evaluate_ticket when a customer reply arrives during provider work", async () => {
+    const fixture = await createFixture();
+    const providerStarted = deferred();
+    const allowProvider = deferred();
+    const client = await connect(fixture, {
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerStarted.resolve();
+          await allowProvider.promise;
+          return campaignEditorClassificationProvider.reason(input);
+        },
+      },
+    });
+
+    const evaluation = callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "skill-showcase",
+      aiPreference: "gpt-preferred",
+    });
+    await providerStarted.promise;
+    await fixture.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "This first reply arrived while classification was paused.",
+      receivedAt: "2026-06-10T09:59:59.000Z",
+    });
+    allowProvider.resolve();
+    const evaluated = await evaluation;
+
+    expect(evaluated.isError).toBe(true);
+    expect(textOf(evaluated)).toContain(
+      "STALE_APPROVAL: Evaluation customer reply snapshot is stale.",
+    );
+    expect(await fixture.recommendations.list()).toEqual([]);
+    expect(
+      (await fixture.audits.list("TKT-1001")).map(({ action }) => action),
+    ).toEqual(["customer-reply-received"]);
+  });
+
+  it("completes gpt-preferred evaluation without configured providers", async () => {
+    const client = await connect(await createFixture());
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "skill-showcase",
+      aiPreference: "gpt-preferred",
+    });
+
+    expect(evaluated.isError).not.toBe(true);
+    expect(evaluated.structuredContent).toMatchObject({
+      recommendation: {
+        aiExecutionTrace: {
+          classification: {
+            status: "fallback",
+            fallback: { category: "not-configured" },
+          },
+          drafting: {
+            status: "fallback",
+            fallback: { category: "not-configured" },
+          },
+        },
+      },
+    });
+  });
+
+  it("isolates default gpt-preferred evaluation from ambient API credentials", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const fetch = vi.fn(async () => {
+      throw new Error("Ambient fetch must not be called.");
+    });
+    process.env.OPENAI_API_KEY = "ambient-test-key";
+    vi.stubGlobal("fetch", fetch);
+
+    try {
+      const evaluated = await callTool(await connect(await createFixture()), "evaluate_ticket", {
+        ticketId: "TKT-1001",
+        actor: "skill-showcase",
+        aiPreference: "gpt-preferred",
+      });
+
+      expect(evaluated.isError).not.toBe(true);
+      expect(evaluated.structuredContent).toMatchObject({
+        recommendation: {
+          aiExecutionTrace: {
+            classification: {
+              status: "fallback",
+              fallback: { category: "not-configured" },
+            },
+            drafting: {
+              status: "fallback",
+              fallback: { category: "not-configured" },
+            },
+          },
+        },
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects unsupported aiPreference through the evaluate_ticket schema", async () => {
+    const evaluated = await callTool(await connect(await createFixture()), "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      aiPreference: "required",
+    });
+
+    expect(evaluated.isError).toBe(true);
+    expect(textOf(evaluated)).toContain("Input validation error");
+  });
+
   it("marks a reviewed response done by approving named fields and recording sent response", async () => {
     const fixture = await createFixture();
+    const atomicCompletion = vi.spyOn(
+      fixture.service as TriageService & {
+        approveAndMarkResponseSent: TriageService["approveAndMarkResponseSent"];
+      },
+      "approveAndMarkResponseSent",
+    );
+    const separateApproval = vi.spyOn(fixture.service, "approve");
     const client = await connect(fixture);
     const evaluated = await callTool(client, "evaluate_ticket", {
       ticketId: "TKT-1001",
@@ -812,6 +1316,8 @@ describe("createTriageServer action protocol", () => {
         },
       },
     });
+    expect(atomicCompletion).toHaveBeenCalledOnce();
+    expect(separateApproval).not.toHaveBeenCalled();
     const workflow = await callTool(client, "get_ticket_workflow", {
       id: "TKT-1001",
     });
@@ -955,6 +1461,77 @@ describe("createTriageServer action protocol", () => {
     expect(body).not.toMatch(/available for this ticket/i);
   });
 
+  it.each(lifecycleBlockerCases)(
+    "maps $name through the shared first blocker without mutation",
+    async ({ tool, message, setup }) => {
+      const fixture = await createFixture();
+      await setup(fixture);
+      const before = {
+        ticket: await fixture.tickets.get("TKT-1001"),
+        audits: await fixture.audits.list("TKT-1001"),
+        recommendations: await fixture.recommendations.list(),
+      };
+      const client = await connect(fixture);
+
+      const result = await callTool(client, tool, {
+        ticketId: "TKT-1001",
+        actor: "review-verifier",
+      });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe(`INVALID_APPROVAL_FIELDS: ${message}`);
+      await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
+        before.ticket,
+      );
+      await expect(fixture.audits.list("TKT-1001")).resolves.toEqual(
+        before.audits,
+      );
+      await expect(fixture.recommendations.list()).resolves.toEqual(
+        before.recommendations,
+      );
+    },
+  );
+
+  it("guides evaluation after recording a support-owned diagnosis", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture);
+    await approveAndSend(fixture, recommendation);
+    const client = await connect(fixture);
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+    expect(diagnosis.isError).not.toBe(true);
+    const afterDiagnosis = {
+      ticket: await fixture.tickets.get("TKT-1001"),
+      audits: await fixture.audits.list("TKT-1001"),
+      recommendations: await fixture.recommendations.list(),
+    };
+
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
+
+    expect(workflow.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "diagnosis-recorded",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
+      },
+    });
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
+      afterDiagnosis.ticket,
+    );
+    await expect(fixture.audits.list("TKT-1001")).resolves.toEqual(
+      afterDiagnosis.audits,
+    );
+    await expect(fixture.recommendations.list()).resolves.toEqual(
+      afterDiagnosis.recommendations,
+    );
+  });
+
   it("records diagnosis and fix lifecycle events through operator tools", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
@@ -996,6 +1573,9 @@ describe("createTriageServer action protocol", () => {
       ticketId: "TKT-1001",
       actor: "product-support",
     });
+    const workflow = await callTool(client, "get_ticket_workflow", {
+      id: "TKT-1001",
+    });
 
     expect(diagnosis.isError).not.toBe(true);
     expect(diagnosis.structuredContent).toMatchObject({
@@ -1019,6 +1599,14 @@ describe("createTriageServer action protocol", () => {
             status: "available",
           },
         },
+      },
+    });
+    expect(workflow.structuredContent).toMatchObject({
+      operatorGuidance: {
+        stage: "verification",
+        nextAction: "evaluate-ticket",
+        approval: { required: false, fields: [] },
+        unlocksTool: "evaluate_ticket",
       },
     });
   });

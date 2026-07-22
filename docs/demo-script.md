@@ -196,6 +196,60 @@ Expected checkpoints:
   still shows the service action;
 - rejection requires feedback and leaves ticket fields unchanged.
 
+## 2b. Resettable Codex Skill AI Showcase
+
+Build once, then run the default controlled and explicit deterministic modes:
+
+```powershell
+npm run build
+npm run demo:skill-showcase
+npm run demo:skill-showcase -- --deterministic
+```
+
+Controlled-mode checkpoints:
+
+- the report explicitly prints `Mode: controlled`;
+- no API key, provider configuration, or network access is required;
+- provider provenance explicitly identifies classification and drafting as
+  `controlled-local-simulation` and network access as `disabled`;
+- local controlled classification and drafting simulations produce auditable
+  normalized `used` traces while deterministic safety rules retain final
+  authority;
+- all controlled drafting traces identify accepted local deterministic output
+  and do not claim an external model call;
+- the driver reads `get_ticket_workflow` before starting and after every
+  transition, then performs only the named `operatorGuidance.nextAction`;
+- every `review-recommendation` gate visibly discloses the scripted
+  `portfolio-reviewer` simulation and submits exactly the guidance-provided
+  approval fields to `mark_response_done`;
+- the next-action trail passes through diagnosis-ready, diagnosis-recorded,
+  fix-ready, verification, ready-for-close, and closed; and
+- the final ticket status is `resolved`.
+
+Deterministic-mode checkpoints:
+
+- the report explicitly prints `Mode: deterministic`;
+- no classification or drafting provider is passed and no provider call is
+  made;
+- classification and drafting stages are `skipped`, including the valid
+  customer-confirmed closure draft;
+- the same guidance-driven workflow reaches `resolved`; and
+- neither output includes ticket/request/response bodies, raw prompts, raw
+  provider data, credentials, authorization values, or machine paths.
+
+The optional live mode is never selected unless `--live` is present. Its
+prerequisite and command are:
+
+```powershell
+$env:OPENAI_API_KEY = 'set-in-the-shell-only'
+npm run demo:skill-showcase -- --live
+```
+
+If the key is missing, the command fails with
+`OPENAI_API_KEY is required for live showcase mode.` The recorded showcase did
+not run live mode. Unknown arguments, duplicate mode flags, and conflicting
+mode flags also exit nonzero with fixed safe errors.
+
 ## 3. Security Escalation
 
 Send this exact user prompt:

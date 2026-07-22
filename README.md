@@ -113,6 +113,52 @@ I was trying to open the campaign editor, but the page stayed blank. The steps w
 The alternate incident walkthrough still works well with `TKT-1001`, which
 shows correlated event-ingestion delay handling and incident-response routing.
 
+## Resettable Codex Skill AI Showcase
+
+The command-line showcase replays the synthetic `TKT-1010` lifecycle through
+the MCP interface in fresh temporary state. It follows each
+`operatorGuidance.nextAction`, reads the workflow again after every action, and
+cleans the temporary state when it exits. Every report names its selected safe
+mode and the classification, drafting, and network provenance used for that
+mode. The saved controlled transcript is in
+[docs/skill-showcase-example.md](docs/skill-showcase-example.md).
+
+```powershell
+npm run build
+npm run demo:skill-showcase
+npm run demo:skill-showcase -- --deterministic
+```
+
+The default `controlled` mode makes no network request and needs no configured
+external provider. Local controlled simulations exercise both optional AI
+roles: classification reasoning and customer-response drafting. The report
+labels both roles `controlled-local-simulation`, labels network access
+`disabled`, and never attributes their output to an external model adapter.
+Their auditable traces are `used` when their advice or draft is accepted;
+deterministic policy still owns routing, lifecycle, validation, and approval.
+All seven controlled drafting stages are reported as accepted local
+deterministic output with explicit simulation provenance.
+
+The explicit `--deterministic` mode passes no providers and never makes a
+provider call. Its classification traces and normal drafting traces are
+`skipped`, including the valid customer-confirmed closure draft. Both modes
+traverse Diagnose, Fix, verification, ready-for-close, and closed stages.
+Every review step is an explicitly disclosed scripted
+`portfolio-reviewer` simulation using exactly the approval fields supplied by
+the workflow guidance.
+
+Live mode is optional and is never selected implicitly. It requires an API key
+set only in the shell:
+
+```powershell
+$env:OPENAI_API_KEY = 'set-in-the-shell-only'
+npm run demo:skill-showcase -- --live
+```
+
+The recorded portfolio results cover controlled and deterministic modes only;
+no live showcase run is claimed. Unknown arguments and repeated or conflicting
+mode flags fail safely, so a typo cannot silently select controlled mode.
+
 ## Screenshots
 
 The screenshots below are generated from local synthetic data.

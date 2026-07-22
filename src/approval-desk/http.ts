@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
+  AiPreferenceSchema,
   AuditEventSchema,
   CategorySchema,
   DraftCustomerResponseStyleInputSchema,
@@ -21,19 +22,19 @@ import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
+import { customerReplyWatermarkFromAudits } from "../triage-service.js";
 import {
-  advisorySignalsFromGptReasoning,
-  buildApprovalDeskRecommendationInput,
-  buildApprovalDeskRecommendationInputWithDrafting,
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
 import {
   createCustomerResponseDraftProviderFromEnv,
   type CustomerResponseDraftProvider,
-  type GptClassificationReasoningProvider,
 } from "./draft-response-provider.js";
-import { classifyTicketFromContext } from "./classifier.js";
-import { buildConversationContextForTicket } from "./conversation-context.js";
+import {
+  createClassificationReasoningProviderFromEnv,
+  type ClassificationReasoningProvider,
+} from "./classification-reasoning-provider.js";
+import { evaluateTicketWithAi } from "./ai-evaluation.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 import {
@@ -71,6 +72,7 @@ const SubmitBodySchema = z
   .object({
     actor: z.string().trim().min(1).default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
+    aiPreference: AiPreferenceSchema.default("auto"),
     customerReplies: z.array(CustomerReplyBodySchema).max(8).default([]),
   })
   .strict();
@@ -169,7 +171,7 @@ const WorkflowActionBodySchema = z
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
-  classificationReasoningProvider?: GptClassificationReasoningProvider;
+  classificationReasoningProvider?: ClassificationReasoningProvider;
 }
 
 export function createApprovalDeskHttpServer(
@@ -929,48 +931,15 @@ function latestSupportResponseFromAudits(
     .sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0];
 }
 
-async function supersedePendingRecommendationsWithNewerReply(input: {
-  deps: RuntimeDependencies;
-  ticketId: string;
-  actor: string;
-  recommendations: readonly TriageRecommendation[];
-  persistedCustomerReplies: readonly { createdAt: string }[];
-}): Promise<void> {
-  const latestReplyAt = input.persistedCustomerReplies
-    .map((reply) => reply.createdAt)
-    .sort((left, right) => right.localeCompare(left))[0];
-  if (latestReplyAt === undefined) {
-    return;
-  }
-
-  const supersededAt = input.deps.now().toISOString();
-  const pendingRecommendations = input.recommendations.filter(
-    (recommendation) =>
-      recommendation.ticketId === input.ticketId &&
-      recommendation.resolution === "pending" &&
-      latestReplyAt > recommendation.createdAt,
-  );
-  for (const recommendation of pendingRecommendations) {
-    await input.deps.service.supersedeRecommendation({
-      recommendationId: recommendation.id,
-      ticketId: input.ticketId,
-      actor: input.actor,
-      supersededAt,
-      reason: "A newer customer reply requires a fresh recommendation.",
-    });
-  }
-}
-
 async function createRecommendation(
   { deps, options, request }: RouteContext,
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const [ticket, audits, recommendations] = await Promise.all([
+  const [ticket, audits] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
-    deps.recommendations.list(),
   ]);
   const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -988,69 +957,34 @@ async function createRecommendation(
       ? undefined
       : await loadExpectedOutcomes(options.expectedOutcomesPath);
   const outcome = outcomes?.get(ticket.id);
-  const conversationContextForClassification = buildConversationContextForTicket({
-    ticket,
-    customerReplies,
-    previousSupportResponses:
-      previousSupportResponse === undefined ? [] : [previousSupportResponse],
-  });
-  const deterministicClassification = classifyTicketFromContext(
-    conversationContextForClassification,
-  );
-  const gptReasoning =
-    options.classificationReasoningProvider === undefined || outcome !== undefined
-      ? undefined
-      : await options.classificationReasoningProvider.reason({
-          ticket,
-          conversationContext: conversationContextForClassification,
-          deterministicClassification,
-        });
-  const advisoryClassificationSignals =
-    gptReasoning === undefined
-      ? undefined
-      : advisorySignalsFromGptReasoning(gptReasoning);
-  const deterministicInput = buildApprovalDeskRecommendationInput({
+  const input = await evaluateTicketWithAi({
     ticket,
     outcome,
     actor: body.actor,
+    allKnowledgeArticles: await deps.knowledge.list(),
     customerReplies,
     previousSupportResponse,
-    advisoryClassificationSignals,
     diagnosisContext,
     fixContext,
-  });
-  const knowledgeArticles = await Promise.all(
-    deterministicInput.knowledgeArticleIds.map((articleId) =>
-      deps.knowledge.get(articleId),
-    ),
-  );
-  const input = await buildApprovalDeskRecommendationInputWithDrafting({
-    ticket,
-    outcome,
-    actor: body.actor,
-    knowledgeArticles,
+    aiPreference: body.aiPreference,
     responseStyle: body.responseStyle,
-    customerReplies,
-    previousSupportResponse,
-    advisoryClassificationSignals,
-    diagnosisContext,
-    fixContext,
+    classificationProvider:
+      options.classificationReasoningProvider ??
+      createClassificationReasoningProviderFromEnv(process.env, {
+        preferOpenAi: body.aiPreference === "gpt-preferred" ||
+          process.env.APPROVAL_DRAFT_PROVIDER === "openai",
+      }),
     draftProvider:
       options.draftProvider ??
       createCustomerResponseDraftProviderFromEnv(process.env, {
         responseStyle: body.responseStyle,
+        preferOpenAi: body.aiPreference === "gpt-preferred",
       }),
   });
-  const recommendation = await deps.service.submit({
-      ...input,
-      submittedAt: deps.now().toISOString(),
-  });
-  await supersedePendingRecommendationsWithNewerReply({
-    deps,
-    ticketId,
-    actor: body.actor,
-    recommendations,
-    persistedCustomerReplies,
+  const { recommendation } = await deps.service.submitEvaluation({
+    ...input,
+    submittedAt: deps.now().toISOString(),
+    evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
   });
   return { recommendation };
 }

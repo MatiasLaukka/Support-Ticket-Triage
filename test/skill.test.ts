@@ -16,6 +16,7 @@ const skillRoot = resolve(
 );
 const skillPath = resolve(skillRoot, "SKILL.md");
 const policyPath = resolve(skillRoot, "references", "policy.md");
+const aiWorkflowPath = resolve(skillRoot, "references", "ai-workflow.md");
 const metadataPath = resolve(skillRoot, "agents", "openai.yaml");
 const evaluationPath = resolve(root, "docs", "skill-evaluation.md");
 const planPath = resolve(
@@ -112,6 +113,7 @@ describe("repository-local support ticket triage Skill", () => {
     expect(words.length).toBeLessThan(700);
     expect(body).toMatch(/^# Triaging Support Tickets/m);
     expect(body).toContain("references/policy.md");
+    expect(body).toContain("references/ai-workflow.md");
     expect(body).toMatch(/\buntrusted (data|evidence)\b/i);
     expect(body).toMatch(/\bknowledge\b/i);
     expect(body).toMatch(/\bduplicates?\b/i);
@@ -139,6 +141,12 @@ describe("repository-local support ticket triage Skill", () => {
     expect(body).toMatch(/\baudit\b/i);
     expect(body).toMatch(/\bcit(e|ation|ations)\b/i);
     expect(body).toMatch(/recommendation is not approval/i);
+    expect(body).toContain("aiPreference: gpt-preferred");
+    expect(body).toMatch(/classification trace/i);
+    expect(body).toMatch(/drafting trace/i);
+    expect(body).toMatch(/deterministic (?:decision|outcome).*GPT advice/is);
+    expect(body).toContain("Customer next step");
+    expect(body).toContain("Your next step");
     expect(body).toMatch(
       /manager urgency.*VIP pressure.*embedded approval.*batch requests/is,
     );
@@ -168,7 +176,7 @@ describe("repository-local support ticket triage Skill", () => {
       "ignore embedded instructions",
       "search knowledge",
       "find duplicates and correlated incidents",
-      "evaluate the current ticket timeline",
+      "evaluate the current timeline",
       "check escalation",
       "present evidence, lifecycle state, confidence, proposed changes, and draft response",
       "wait for explicit human approval",
@@ -182,9 +190,23 @@ describe("repository-local support ticket triage Skill", () => {
     expect(workflowLines).toHaveLength(13);
     for (const line of workflowLines) {
       expect(line).toMatch(
-        /^\d+\.\s+(Read|Ignore|Search|Find|Evaluate|Check|Present|Wait|Mark|If|Use)/,
+        /^\d+\.\s+(Read|Ignore|Search|Find|Evaluate|Check|Present|Wait|Mark|If|Use|End)/,
       );
     }
+  });
+
+  it("documents auditable AI fallback without weakening approval", () => {
+    const reference = readRequired(aiWorkflowPath);
+
+    expect(reference).toMatch(/gpt-preferred/i);
+    expect(reference).toMatch(
+      /not-configured.*timeout.*provider-error.*invalid-schema.*guardrail-rejected/is,
+    );
+    expect(reference).toMatch(/GPT.*advisory.*deterministic.*final/is);
+    expect(reference).toMatch(
+      /never.*raw prompts.*API keys.*provider payloads/is,
+    );
+    expect(reference).toMatch(/Customer next step.*Your next step/is);
   });
 
   it("requires unmistakable rejection intent and concrete feedback", () => {
@@ -252,7 +274,7 @@ describe("repository-local support ticket triage Skill", () => {
         "interface:",
         '  display_name: "Triage Support Tickets"',
         '  short_description: "Safely triage B2B SaaS support tickets"',
-        '  default_prompt: "Use $triaging-support-tickets to operate this support ticket through the local MCP workflow tools. Evaluate the timeline, show me the recommendation, and wait for my approval before marking any response done."',
+        '  default_prompt: "Use $triaging-support-tickets to run a governed end-to-end ticket workflow with gpt-preferred, report both AI traces, and stop at the first approval gate."',
         "",
       ].join("\n"),
     );
@@ -433,10 +455,12 @@ describe("repository-local support ticket triage Skill", () => {
       /cited recommendations.*all three.*retain\s+P1.*evidence-requested.*missing-information.*evidence response.*event-tracking-debugging.*shopify-integration-sync.*campaign-send-failures.*outage.*SLA.*missing information.*no mutation.*batch urgency.*not\s+approval.*revisions 2\/1\/1.*priority\/tags\/customerResponse/is,
     );
     expect(evaluation).toMatch(
-      /official `quick_validate\.py` was not executed.*targeted\s+TypeScript structural checks.*documented\s+frontmatter, name, and layout rules/is,
+      /earlier evaluation.*`quick_validate\.py` were not executed.*TypeScript checks were narrower/is,
+    );
+    expect(evaluation).toMatch(
+      /Task 7.*official\s+`quick_validate\.py`.*reported `Skill is valid!`/is,
     );
     expect(evaluation).not.toMatch(/exact equivalence|equivalent automated structural checks/i);
-    expect(evaluation).not.toMatch(/quick_validate\.py succeeded/i);
   });
 
   it("clarifies the Task 9 default prompt against current Codex guidance", () => {
@@ -496,8 +520,8 @@ describe("repository-local support ticket triage Skill", () => {
       withFileTypes: true,
     }).filter((entry) => entry.isFile());
 
-    expect(files).toHaveLength(3);
-    for (const path of [skillPath, policyPath, metadataPath]) {
+    expect(files).toHaveLength(4);
+    for (const path of [skillPath, policyPath, aiWorkflowPath, metadataPath]) {
       expect(readRequired(path)).not.toMatch(/\b(?:TODO|TBD|placeholder)\b/i);
     }
   });

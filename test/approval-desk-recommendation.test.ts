@@ -1054,6 +1054,731 @@ describe("Approval Desk recommendation builder", () => {
     },
   );
 
+  it("promotes complete cross-browser campaign-editor failure evidence to the platform-fix diagnosis path", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-campaign-editor-platform-evidence",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain(
+      "frontend loading issue",
+    );
+    expect(input.draftCustomerResponse).not.toContain("event processing");
+    expect(input.nextInvestigationSteps).toEqual([
+      expect.stringMatching(/frontend|ChunkLoadError/i),
+      expect.stringMatching(/browser|session|admin/i),
+    ]);
+    expect(input.gptAssist?.investigationSteps).toEqual(
+      input.nextInvestigationSteps,
+    );
+    const customerSafeContext = JSON.stringify({
+      draftCustomerResponse: input.draftCustomerResponse,
+      nextInvestigationSteps: input.nextInvestigationSteps,
+      gptAssist: input.gptAssist,
+      requiredEvidence: input.requiredEvidence?.map(({ id }) => id),
+      providedEvidence: input.providedEvidence?.map(({ id }) => id),
+      missingEvidence: input.missingEvidence?.map(({ id }) => id),
+    });
+    expect(customerSafeContext).not.toMatch(
+      /event processing|event timing|event.ingestion|ingestion delay|profile (?:activity )?timeline|platform processing/i,
+    );
+  });
+
+  it("accepts explicit all-user impact as the multi-user evidence dimension", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-all-user-campaign-editor-evidence",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "The campaign editor is still blank in a private window and Microsoft Edge for all users. The browser console shows ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it("accepts Edge browser wording after a completed failed reproduction", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-edge-browser-campaign-editor-evidence",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I reproduced the blank campaign editor in an incognito window and the Edge browser. Another admin reproduced the same result, and the console showed ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it("keeps valid completed reproduction when edge case is unrelated browser wording", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-valid-with-unrelated-edge-case",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I tried a private window and Microsoft Edge, and another admin reproduced the same blank campaign editor with ChunkLoadError. We need a mitigation that works for this edge case.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it.each([
+    {
+      boundary: "opened browsers with an explicit editor failure",
+      promotes: true,
+      body:
+        "I opened a private window and Microsoft Edge, and another admin reproduced the same issue. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      boundary: "opened browsers with an explicit editor success",
+      promotes: false,
+      body:
+        "I opened a private window and Microsoft Edge, and another admin reproduced the same issue. The campaign editor now loads normally for all users, although the old console log shows ChunkLoadError.",
+    },
+    {
+      boundary: "asked admin plus an explicit all-user failure",
+      promotes: true,
+      body:
+        "I tried a private window and Microsoft Edge, then asked another admin to open the same campaign. The campaign editor is still blank for all of us and the console shows ChunkLoadError.",
+    },
+    {
+      boundary: "asked admin with only a future result",
+      promotes: false,
+      body:
+        "I tried a private window and Microsoft Edge. I asked another admin to test tomorrow. The campaign editor is still blank for me and the console shows ChunkLoadError.",
+    },
+    {
+      boundary: "private campaign wording after valid completed evidence",
+      promotes: true,
+      body:
+        "I tried a private window and Microsoft Edge, and another admin reproduced the same blank campaign editor with ChunkLoadError. We need a mitigation that works for this private campaign.",
+    },
+    {
+      boundary: "private campaign wording without a private-window result",
+      promotes: false,
+      body:
+        "The private campaign editor is blank in Microsoft Edge for all users and shows ChunkLoadError, but nobody has tried a private or incognito window.",
+    },
+    {
+      boundary: "opened editor that explicitly stayed blank",
+      promotes: true,
+      body:
+        "In a private window, the campaign editor opened but stayed blank; I tested Microsoft Edge and it was also blank for all users. Another admin reproduced the same issue. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before a requester retest",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow; I tested again myself. The campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin check before a requester-only failure",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will check tomorrow; the campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before comma but requester evidence",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow, but I tested again myself and the campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "explicit completed admin clause",
+      promotes: true,
+      body:
+        "I tested a private window and Microsoft Edge and the campaign editor stayed blank. Another admin tried the campaign and saw the same blank editor. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before requester evidence joined by while",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow while I tested again myself. The campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before requester evidence joined by whereas",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow whereas I tested again myself. The campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future admin test before requester evidence joined by and then",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. Another admin will test tomorrow and then I tested again myself. The campaign editor is blank for me. Console showed ChunkLoadError.",
+    },
+    {
+      boundary: "loaded editor that explicitly stayed blank",
+      promotes: true,
+      body:
+        "In a private window, the campaign editor loaded but stayed blank; I tested Microsoft Edge and it was also blank for all users. Another admin reproduced the same issue. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "private-window success beside an Edge failure",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. The campaign editor works normally in a private window, but stays blank in Microsoft Edge for all users. Another admin reproduced the same issue. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "private-window failure beside an Edge success",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. The campaign editor stays blank in a private window for all users, but works normally in Microsoft Edge. Another admin reproduced the same issue. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "future all-user test before a requester-only failure",
+      promotes: false,
+      body:
+        "I tested a private window and Microsoft Edge. All users will test tomorrow, but the campaign editor is blank for me. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "subject-local private and Edge failures with admin reproduction",
+      promotes: true,
+      body:
+        "I tested a private window and the campaign editor stayed blank. I tested Microsoft Edge and the campaign editor stayed blank. Another admin reproduced the same issue. The console showed ChunkLoadError.",
+    },
+    {
+      boundary: "completed private and Edge attempts with a direct all-user failure",
+      promotes: true,
+      body:
+        "I tested a private window and Microsoft Edge. The campaign editor is blank for all users. The console showed ChunkLoadError.",
+    },
+  ])(
+    "separates $boundary",
+    async ({ body, promotes }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-campaign-editor-semantic-boundary",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      if (promotes) {
+        expect(input.supportState).toBe("waiting-on-platform-fix");
+      } else {
+        expect(input.supportState).not.toBe("waiting-on-platform-fix");
+      }
+    },
+  );
+
+  it.each([
+    "Another admin reproduced the same issue.",
+    "Another admin tested it and saw the same blank editor.",
+  ])(
+    "accepts direct completed admin evidence: %s",
+    async (adminEvidence) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-direct-admin-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body:
+              `I tested a private window and Microsoft Edge and the campaign editor stayed blank. ${adminEvidence} Console showed ChunkLoadError.`,
+          },
+        ],
+      });
+
+      expect(input.supportState).toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it.each(["works normally", "loads normally"])(
+    "does not promote when the campaign editor %s in a private window",
+    async (successResult) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-explicit-editor-success",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body:
+              `The campaign editor was blank and the console showed ChunkLoadError. I tested Microsoft Edge and another admin reproduced the issue. In a private window, the campaign editor ${successResult}.`,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it.each([
+    {
+      result: "is not blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "was not blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "isn't blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "wasn't blank",
+      evidenceVariant: "direct admin",
+      resultSuffix: "",
+      multiUserEvidence: "Another admin reproduced the same issue.",
+    },
+    {
+      result: "is not blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+    {
+      result: "was not blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+    {
+      result: "isn't blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+    {
+      result: "wasn't blank",
+      evidenceVariant: "all users",
+      resultSuffix: " for all users",
+      multiUserEvidence: "",
+    },
+  ])(
+    "treats '$result' as explicit editor success with $evidenceVariant evidence",
+    async ({ result, resultSuffix, multiUserEvidence }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-negated-blank-success",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body:
+              `I tested a private window and Microsoft Edge. The campaign editor ${result} in either the private window or Microsoft Edge${resultSuffix}. ${multiUserEvidence} The console showed ChunkLoadError.`,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it("still promotes a true was-blank result with complete evidence", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-affirmative-was-blank",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:50:00.000Z",
+          body:
+            "I tested a private window and Microsoft Edge. The campaign editor was blank in both the private window and Microsoft Edge for all users. The console showed ChunkLoadError.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it.each([
+    {
+      adminResult: "Another admin saw that the editor wasn’t blank.",
+      promotes: false,
+    },
+    {
+      adminResult: "Another admin reported that the editor isn’t blank.",
+      promotes: false,
+    },
+    {
+      adminResult: "Another admin saw the editor was blank.",
+      promotes: true,
+    },
+    {
+      adminResult:
+        "Another admin reproduced it and the editor worked normally.",
+      promotes: false,
+    },
+    {
+      adminResult: "Another admin reproduced the same blank editor.",
+      promotes: true,
+    },
+    {
+      adminResult:
+        "Another admin reproduced the same failure and the editor stayed blank.",
+      promotes: true,
+    },
+  ])(
+    "applies editor polarity to direct admin evidence: $adminResult",
+    async ({ adminResult, promotes }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-direct-admin-polarity",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body:
+              `I tested a private window and the campaign editor stayed blank. I tested Microsoft Edge and the campaign editor stayed blank. ${adminResult} The console showed ChunkLoadError.`,
+          },
+        ],
+      });
+
+      if (promotes) {
+        expect(input.supportState).toBe("waiting-on-platform-fix");
+      } else {
+        expect(input.supportState).not.toBe("waiting-on-platform-fix");
+      }
+    },
+  );
+
+  it.each([
+    {
+      turn: "status follow-up",
+      body: "Any update on when this will be fixed?",
+    },
+    {
+      turn: "explanation request",
+      body: "What is the problem?",
+    },
+  ])(
+    "keeps frontend readiness for a $turn after the frontend response",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = await buildApprovalDeskRecommendationInputWithDrafting({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        knowledgeArticles: [],
+        previousSupportResponse: {
+          sentAt: "2026-06-10T09:55:00.000Z",
+          body:
+            "We are investigating a platform-side frontend loading issue affecting the campaign editor. Frontend engineering is reviewing the ChunkLoadError reproduced across private-window, cross-browser, and multiple-admin checks.",
+        },
+        customerReplies: [
+          {
+            id: "reply-campaign-editor-follow-up",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T10:00:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).toBe("waiting-on-platform-fix");
+      expect(input.requiredEvidence?.map(({ id }) => id)).toEqual([
+        "campaign-editor-failure",
+        "private-window-reproduction",
+        "alternate-browser-reproduction",
+        "multi-user-reproduction",
+        "chunk-load-error",
+      ]);
+      expect(input.missingEvidence).toEqual([]);
+      expect(input.gptAssist?.investigationSteps).toEqual(
+        input.nextInvestigationSteps,
+      );
+      const customerSafeContext = JSON.stringify({
+        draftCustomerResponse: input.draftCustomerResponse,
+        nextInvestigationSteps: input.nextInvestigationSteps,
+        gptAssist: input.gptAssist,
+        requiredEvidence: input.requiredEvidence?.map(({ id }) => id),
+        providedEvidence: input.providedEvidence?.map(({ id }) => id),
+        missingEvidence: input.missingEvidence?.map(({ id }) => id),
+      });
+      expect(customerSafeContext).toMatch(/campaign editor|frontend/i);
+      expect(customerSafeContext).not.toMatch(
+        /event processing|event timing|event.ingestion|ingestion delay|profile (?:activity )?timeline|platform processing/i,
+      );
+    },
+  );
+
+  it.each([
+    {
+      missing: "campaign-editor failure",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same page. It is still blank for all of us. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "private-window reproduction",
+      body:
+        "I tried Microsoft Edge and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "another-browser reproduction",
+      body:
+        "I tried a private window and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "another-admin or multi-user reproduction",
+      body:
+        "I tried a private window and Microsoft Edge. The campaign editor is still blank for me. The browser console shows ChunkLoadError.",
+    },
+    {
+      missing: "ChunkLoadError",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console has no error message.",
+    },
+  ])(
+    "keeps campaign-editor evidence diagnosing without $missing",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-incomplete-campaign-editor-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it.each([
+    {
+      negation: "browser isolation succeeds",
+      body:
+        "The campaign editor was blank and the console showed ChunkLoadError. It now works in a private window and Microsoft Edge for another admin.",
+    },
+    {
+      negation: "ChunkLoadError is explicitly absent",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us, but the console shows no ChunkLoadError.",
+    },
+  ])(
+    "keeps negated campaign-editor platform evidence diagnosing when $negation",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-negated-campaign-editor-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it.each([
+    {
+      evidenceGap: "all isolation checks are explicitly unattempted",
+      body:
+        "We have not tested private mode or Microsoft Edge yet. Another admin has not tried it. The campaign editor is still blank for all users. The console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "private describes the campaign instead of an isolation attempt",
+      body:
+        "The private campaign editor is still blank for all users and the console shows ChunkLoadError. Another admin reproduced it, but we did not use Microsoft Edge or another browser.",
+    },
+    {
+      evidenceGap: "private-window testing is negated",
+      body:
+        "We have not tried a private or incognito window. Microsoft Edge and another admin show the same blank campaign editor with ChunkLoadError.",
+    },
+    {
+      evidenceGap: "alternate-browser testing is negated",
+      body:
+        "The campaign editor is blank in a private window for another admin and shows ChunkLoadError, but we have not tried Edge or a different browser.",
+    },
+    {
+      evidenceGap: "another-admin testing is negated",
+      body:
+        "The campaign editor is still blank for me in a private window and Microsoft Edge with ChunkLoadError. Another admin has not tried it yet.",
+    },
+    {
+      evidenceGap: "private and browser checks are only planned",
+      body:
+        "We will try a private window and Microsoft Edge tomorrow. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "edge is part of an unrelated phrase",
+      body:
+        "The campaign editor remains blank in incognito for all users. This edge case throws ChunkLoadError.",
+    },
+    {
+      evidenceGap: "another-admin testing is only planned",
+      body:
+        "The campaign editor is blank in a private window and Microsoft Edge with ChunkLoadError. We will ask another admin tomorrow.",
+    },
+    {
+      evidenceGap: "another-admin testing is only suggested",
+      body:
+        "The campaign editor is blank in a private window and Microsoft Edge with ChunkLoadError. We should ask another admin.",
+    },
+    {
+      evidenceGap: "another-admin testing is only instructed",
+      body:
+        "The campaign editor is blank in a private window and Microsoft Edge with ChunkLoadError. Please ask another admin to try it.",
+    },
+    {
+      evidenceGap: "private and browser checks are merely possible",
+      body:
+        "We can try a private window and Microsoft Edge tomorrow. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "private and browser checks are going to happen later",
+      body:
+        "We are going to try a private window and Microsoft Edge tomorrow. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+    {
+      evidenceGap: "private and browser checks are only instructed by support",
+      body:
+        "Support asked us to try a private window and Microsoft Edge. The campaign editor is still blank for all users and the console shows ChunkLoadError.",
+    },
+  ])(
+    "does not promote when $evidenceGap",
+    async ({ body }) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1010");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1010")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-adversarial-campaign-editor-evidence",
+            ticketId: "TKT-1010",
+            createdAt: "2026-06-10T09:50:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
   it("uses reply-enriched known-cause evidence when choosing the deterministic draft style", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -1409,6 +2134,49 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponseChecks).toContainEqual(
       expect.objectContaining({
         id: "no-internal-article-ids",
+        status: "pass",
+      }),
+    );
+  });
+
+  it("uses the deterministic draft when an OpenAI concise response exceeds its style limit", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      responseStyle: "concise",
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response: Array.from({ length: 141 }, () => "word").join(" "),
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["Share the ecommerce platform."],
+            investigationSteps: ["Compare the storefront event with the flow setup."],
+            tone: "concise",
+            recommendedTone: "concise",
+            selectedTone: "concise",
+            toneReason: "A short update is appropriate.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "We are checking why Viewed Product events",
+    );
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "style-word-limit",
         status: "pass",
       }),
     );

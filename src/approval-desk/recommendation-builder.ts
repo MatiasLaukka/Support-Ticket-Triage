@@ -5,6 +5,8 @@ import {
   type ClassificationSignal,
   type EvidenceRequirement,
   type KnowledgeArticle,
+  type AiExecutionTrace,
+  type AiPreference,
   type DraftCustomerResponseStyleInput,
   PrioritySchema,
   RequiredEscalationSchema,
@@ -246,6 +248,8 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   advisoryClassificationSignals?: readonly ClassificationSignal[];
   diagnosisContext?: DiagnosisContext;
   fixContext?: FixContext;
+  aiPreference?: AiPreference;
+  classificationTrace?: AiExecutionTrace["classification"];
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const providerOutcome = input.outcome ?? {
@@ -293,6 +297,22 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     },
   });
 
+  const draftingTrace: AiExecutionTrace["drafting"] = {
+    status: draft.source === "openai" ||
+        (draft.source === "deterministic" && draft.providerAttempted)
+      ? "used"
+      : draft.source === "fallback"
+        ? "fallback"
+        : "skipped",
+    source: draft.source,
+    ...(draft.telemetry ?? {}),
+    ...(draft.fallback === undefined ? {} : { fallback: draft.fallback }),
+    requestedStyle: input.responseStyle ?? "auto",
+    recommendedStyle: draft.assist.recommendedTone,
+    selectedStyle: draft.assist.selectedTone,
+    checks: draft.candidateChecks,
+  };
+
   return {
     ...base,
     draftCustomerResponse: draft.response,
@@ -300,6 +320,15 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     draftCustomerResponseStyle: draft.assist.selectedTone,
     draftCustomerResponseChecks: draft.checks,
     gptAssist: draft.assist,
+    ...(input.classificationTrace === undefined
+      ? {}
+      : {
+          aiExecutionTrace: {
+            preference: input.aiPreference ?? "auto",
+            classification: input.classificationTrace,
+            drafting: draftingTrace,
+          },
+        }),
   };
 }
 
@@ -611,6 +640,18 @@ function buildPlatformFixResponse(
   evidenceReadiness: EvidenceReadiness,
   replyStage: CustomerReplyStage,
 ): string {
+  if (hasCampaignEditorPlatformFixContext(ticket.description)) {
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      replyStage,
+      problemSummary:
+        "We are investigating this as a possible platform-side frontend loading issue affecting the campaign editor.",
+      nextStep:
+        "Frontend engineering is reviewing the ChunkLoadError reproduced across private-window, cross-browser, and multiple-admin checks. We will share the next update after confirming mitigation.",
+    });
+  }
+
   return buildStructuredDiagnosticResponse({
     ticket,
     evidenceReadiness,
@@ -940,8 +981,15 @@ function analyzeCustomerReplyLifecycle(input: {
   if (isCustomerStatusFollowUp(latestReply)) {
     const statusEvidenceReadiness =
       input.previousSupportResponse !== undefined &&
-      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)
-        ? platformFixEvidenceReadiness(evidenceReadiness)
+      supportResponseIndicatesCampaignEditorFix(
+        input.previousSupportResponse.body,
+      )
+        ? campaignEditorFixEvidenceReadiness(evidenceReadiness)
+        : input.previousSupportResponse !== undefined &&
+            supportResponseIndicatesPlatformFix(
+              input.previousSupportResponse.body,
+            )
+          ? platformFixEvidenceReadiness(evidenceReadiness)
         : withLifecycleSupportState(
             evidenceReadiness,
             requiresMoreCustomerEvidence(evidenceReadiness)
@@ -965,13 +1013,28 @@ function analyzeCustomerReplyLifecycle(input: {
     };
   }
 
+  if (hasCampaignEditorPlatformFixContext(replyText)) {
+    return {
+      evidenceReadiness: campaignEditorFixEvidenceReadiness(evidenceReadiness),
+      replyStage: "all-evidence",
+      recognizedEvidenceProgress: true,
+    };
+  }
+
   if (
     input.previousSupportResponse !== undefined &&
-    supportResponseIndicatesPlatformFix(input.previousSupportResponse.body) &&
+    (supportResponseIndicatesCampaignEditorFix(
+      input.previousSupportResponse.body,
+    ) ||
+      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)) &&
     isCustomerStatusFollowUp(latestReply)
   ) {
     return {
-      evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
+      evidenceReadiness: supportResponseIndicatesCampaignEditorFix(
+        input.previousSupportResponse.body,
+      )
+        ? campaignEditorFixEvidenceReadiness(evidenceReadiness)
+        : platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "status-follow-up",
       recognizedEvidenceProgress: false,
     };
@@ -979,11 +1042,18 @@ function analyzeCustomerReplyLifecycle(input: {
 
   if (
     input.previousSupportResponse !== undefined &&
-    supportResponseIndicatesPlatformFix(input.previousSupportResponse.body) &&
+    (supportResponseIndicatesCampaignEditorFix(
+      input.previousSupportResponse.body,
+    ) ||
+      supportResponseIndicatesPlatformFix(input.previousSupportResponse.body)) &&
     isCustomerExplanationRequest(latestReply)
   ) {
     return {
-      evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
+      evidenceReadiness: supportResponseIndicatesCampaignEditorFix(
+        input.previousSupportResponse.body,
+      )
+        ? campaignEditorFixEvidenceReadiness(evidenceReadiness)
+        : platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "explanation-request",
       recognizedEvidenceProgress: false,
     };
@@ -1157,10 +1227,266 @@ function hasPlatformFixContext(value: string): boolean {
     /\b(?:api accepted|accepted by the api|platform|incident|processing)\b/i.test(value);
 }
 
+function campaignEditorFixEvidenceReadiness(
+  evidenceReadiness: EvidenceReadiness,
+): EvidenceReadiness {
+  const requiredEvidence: EvidenceRequirement[] = [
+    {
+      id: "campaign-editor-failure",
+      label: "Campaign editor loading failure",
+      customerQuestion: "campaign editor loading result",
+      aliases: ["blank campaign editor", "campaign editor not loading"],
+      source: "policy",
+    },
+    {
+      id: "private-window-reproduction",
+      label: "Private-window reproduction",
+      customerQuestion: "private or incognito window result",
+      aliases: ["private window", "incognito window"],
+      source: "policy",
+    },
+    {
+      id: "alternate-browser-reproduction",
+      label: "Alternate-browser reproduction",
+      customerQuestion: "alternate browser result",
+      aliases: ["different browser", "Microsoft Edge"],
+      source: "policy",
+    },
+    {
+      id: "multi-user-reproduction",
+      label: "Multiple-admin reproduction",
+      customerQuestion: "another admin or affected-user result",
+      aliases: ["another admin", "all users"],
+      source: "policy",
+    },
+    {
+      id: "chunk-load-error",
+      label: "Frontend ChunkLoadError",
+      customerQuestion: "browser console ChunkLoadError",
+      aliases: ["ChunkLoadError", "frontend bundle loading error"],
+      source: "policy",
+    },
+  ];
+
+  return {
+    ...evidenceReadiness,
+    supportState: "waiting-on-platform-fix",
+    knownCause: null,
+    requiredEvidence,
+    providedEvidence: requiredEvidence,
+    missingEvidence: [],
+    nextInvestigationSteps: [
+      "Correlate the campaign editor ChunkLoadError with the frontend bundle and affected campaign.",
+      "Confirm browser-session, cross-browser, and multiple-admin reproduction before engineering mitigation.",
+    ],
+  };
+}
+
+function hasCampaignEditorPlatformFixContext(value: string): boolean {
+  const failureEvidenceValue = withoutNegatedBlankResults(value);
+  const privateWindowExpression =
+    /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?)/i;
+  const alternateBrowser =
+    /(?:another browser|different browser|microsoft edge|edge browser|firefox|safari)/i;
+  const campaignEditorFailure =
+    /\b(?:campaign(?:\s+|-)?editor|editor)\b.{0,80}\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b|\b(?:blank|not loading|won't load|does not load|doesn't load|fails? to load)\b.{0,80}\b(?:campaign(?:\s+|-)?editor|editor)\b/i;
+  const privateWindow = isolationEvidenceFacts(value, privateWindowExpression);
+  const anotherBrowser = isolationEvidenceFacts(value, alternateBrowser);
+  const allUsersFailure = hasDirectAllUserFailure(value);
+  const directAdminFailure = hasDirectAdminFailure(value);
+  const sharedMultiUserFailure = allUsersFailure || directAdminFailure;
+  const chunkLoadError = /\bchunkloaderror\b/i;
+  const negatedChunkLoadError =
+    /\b(?:no|not|never|without)\b.{0,24}\bchunkloaderror\b|\bchunkloaderror\b.{0,24}\b(?:absent|not present|not shown|does not appear|doesn't appear)\b/i;
+
+  return campaignEditorFailure.test(failureEvidenceValue) &&
+    privateWindow.completedAttempt &&
+    anotherBrowser.completedAttempt &&
+    (privateWindow.explicitFailure || allUsersFailure) &&
+    (anotherBrowser.explicitFailure || allUsersFailure) &&
+    sharedMultiUserFailure &&
+    chunkLoadError.test(value) &&
+    !privateWindow.explicitSuccess &&
+    !anotherBrowser.explicitSuccess &&
+    !negatedChunkLoadError.test(value);
+}
+
+interface IsolationEvidenceFacts {
+  completedAttempt: boolean;
+  explicitFailure: boolean;
+  explicitSuccess: boolean;
+}
+
+function isolationEvidenceFacts(
+  value: string,
+  subjectExpression: RegExp,
+): IsolationEvidenceFacts {
+  const subject = new RegExp(
+    String.raw`\b(?:${subjectExpression.source})\b`,
+    "i",
+  );
+  const completedAttempt = new RegExp(
+    String.raw`\b(?:tried|tested|used|opened|checked|reproduced)\b[^.!?;:\n]{0,64}\b(?:${subjectExpression.source})\b|\b(?:${subjectExpression.source})\b[^.!?;:\n]{0,64}\b(?:tried|tested|used|opened|checked|reproduced)\b`,
+    "i",
+  );
+  const facts: IsolationEvidenceFacts = {
+    completedAttempt: false,
+    explicitFailure: false,
+    explicitSuccess: false,
+  };
+
+  for (const clause of evidenceClauses(value)) {
+    if (!subject.test(clause)) continue;
+    const explicitFailure = hasExplicitEditorFailure(clause);
+    const explicitSuccess = hasExplicitEditorSuccess(clause);
+    facts.completedAttempt ||=
+      (!hasNegatedIsolationAttempt(clause, subjectExpression) &&
+        (completedAttempt.test(clause) || explicitFailure || explicitSuccess));
+    facts.explicitFailure ||= explicitFailure;
+    facts.explicitSuccess ||= explicitSuccess;
+  }
+
+  return facts;
+}
+
+function hasNegatedIsolationAttempt(
+  value: string,
+  subjectExpression: RegExp,
+): boolean {
+  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|isn't|wasn't|have\s+not|has\s+not|had\s+not|did\s+not|nobody(?:\s+has)?|without)`;
+  const attempt = String.raw`(?:try|tried|test|tested|use|used|open|opened|check|checked|reproduce|reproduced)`;
+  return new RegExp(
+    String.raw`\b${negation}\b[^.!?;:\n]{0,40}\b${attempt}\b[^.!?;:\n]{0,40}\b(?:${subjectExpression.source})\b|\b(?:${subjectExpression.source})\b[^.!?;:\n]{0,40}\b${negation}\b[^.!?;:\n]{0,24}\b${attempt}\b`,
+    "i",
+  ).test(value);
+}
+
+function hasExplicitEditorFailure(value: string): boolean {
+  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
+  const failure = String.raw`(?:(?:is|was|stays?|stayed|remains?|remained)\s+(?:still\s+|also\s+)?blank|blank|not loading|won't load|does not load|doesn't load|fails? to load)`;
+  return new RegExp(
+    String.raw`\b${editorSubject}\b[^.!?;:\n]{0,48}\b${failure}\b|\b${failure}\b[^.!?;:\n]{0,48}\b${editorSubject}\b`,
+    "i",
+  ).test(withoutNegatedBlankResults(value));
+}
+
+function hasExplicitEditorSuccess(value: string): boolean {
+  const editorSubject = String.raw`(?:campaign(?:\s+|-)?editor|editor|page|it|this)`;
+  const success = String.raw`(?:works?|working|is\s+working|(?:loads?|loaded)\s+(?:normally|successfully)|(?:(?:is|was)\s+not|isn['’]?t|wasn['’]?t)\s+blank)`;
+  return new RegExp(
+    String.raw`\b${editorSubject}\b[^.!?;:\n]{0,48}\b${success}\b|\b${success}\b[^.!?;:\n]{0,48}\b${editorSubject}\b`,
+    "i",
+  ).test(value);
+}
+
+function withoutNegatedBlankResults(value: string): string {
+  return value.replace(
+    /\b(?:(?:is|was)\s+not|isn['’]?t|wasn['’]?t)\s+blank\b/gi,
+    "is available",
+  );
+}
+
+function hasDirectAllUserFailure(value: string): boolean {
+  const failure = String.raw`(?:blank|not loading|won't load|does not load|doesn't load|fails? to load|same (?:issue|result))`;
+  const audience = String.raw`(?:(?:all|multiple|several|both)\s+(?:admins?|users?)|(?:all|both)\s+of\s+us)`;
+  const resultOwnedByAudience = new RegExp(
+    String.raw`\b${failure}\b[^.!?;:\n]{0,80}\b(?:for|across)\s+${audience}\b`,
+    "i",
+  );
+  const audienceReportsResult = new RegExp(
+    String.raw`\b${audience}\b\s+(?:also\s+)?(?:see|saw|report|reported|experience|experienced|encounter|encountered|get|got|have|had)\b[^.!?;:\n]{0,40}\b${failure}\b`,
+    "i",
+  );
+
+  return evidenceClauses(value).some(
+    (clause) => {
+      const failureClause = withoutNegatedBlankResults(clause);
+      return resultOwnedByAudience.test(failureClause) ||
+        audienceReportsResult.test(failureClause);
+    },
+  );
+}
+
+function hasDirectAdminFailure(value: string): boolean {
+  const adminSubject = String.raw`(?:another|other|additional)\s+admins?`;
+  const negation = String.raw`(?:not|never|haven't|hasn't|hadn't|didn't|have\s+not|has\s+not|had\s+not|did\s+not)`;
+  const negatedAdminAttempt = new RegExp(
+    String.raw`\b(?:${adminSubject})\b.{0,32}\b${negation}\b.{0,20}\b(?:try|tried|test|tested|open|opened|check|checked)?\b|\b${negation}\b.{0,32}\b(?:try|tried|test|tested|open|opened|check|checked)?\b.{0,24}\b(?:${adminSubject})\b`,
+    "i",
+  );
+  const reproducedFailure = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?reproduced\b[^.!?;:\n]{0,40}\b(?:(?:the\s+)?same\s+(?:issue|result|failure)|(?:the\s+)?(?:same\s+)?blank\s+(?:campaign(?:\s+|-)?editor|editor|page)|not\s+loading|won't\s+load|does\s+not\s+load|doesn't\s+load|fails?\s+to\s+load)\b`,
+    "i",
+  );
+  const testedAndObservedFailure = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:tried|tested|used|opened|checked)\b[^.!?;:\n]{0,48}\b(?:saw|found|reported|got|experienced)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
+    "i",
+  );
+  const explicitAdminResult = new RegExp(
+    String.raw`\b(?:${adminSubject})\b\s+(?:also\s+)?(?:reported|saw|found|got|experienced)\b[^.!?;:\n]{0,32}\b(?:blank|not loading|same (?:issue|result))\b`,
+    "i",
+  );
+  return evidenceClauses(value).some((clause) => {
+    const failureClause = withoutNegatedBlankResults(clause);
+    return !negatedAdminAttempt.test(failureClause) &&
+      !hasExplicitEditorSuccess(clause) &&
+      (reproducedFailure.test(failureClause) ||
+        testedAndObservedFailure.test(failureClause) ||
+        explicitAdminResult.test(failureClause));
+  });
+}
+
+function evidenceClauses(value: string): string[] {
+  const editorSubject = /\b(?:campaign(?:\s+|-)?editor|editor|page|it|this)\b/i;
+  const isolationSubject =
+    /(?:private\s+(?:window|mode|browsing)|incognito(?:\s+(?:window|mode))?|another browser|different browser|microsoft edge|edge browser|firefox|safari)/gi;
+  const resultFragment =
+    /\b(?:works?|working|loads?|loaded|blank|not loading|won't load|does not load|doesn't load|fails? to load)\b/i;
+  const clauses: string[] = [];
+
+  for (const sentence of value.split(/[.!?;:\n]+/)) {
+    let carriesEditorSubject = false;
+    let carriedIsolationSubjects: string[] = [];
+    const fragments = sentence.split(
+      /,?\s+(?:but|while|whereas|yet)\s+|,?\s+and\s+(?=(?:then\s+)?(?:I|we|all\s+(?:users?|admins?)|another\s+admin)\b)/i,
+    );
+    for (const rawFragment of fragments) {
+      let fragment = rawFragment.trim();
+      if (fragment === "") continue;
+      const hasEditorSubject = editorSubject.test(fragment);
+      const explicitIsolationSubjects = [
+        ...fragment.matchAll(isolationSubject),
+      ].map((match) => match[0]);
+      if (!hasEditorSubject && carriesEditorSubject && resultFragment.test(fragment)) {
+        fragment = `campaign editor ${fragment}`;
+      }
+      if (
+        explicitIsolationSubjects.length === 0 &&
+        carriedIsolationSubjects.length > 0 &&
+        resultFragment.test(fragment)
+      ) {
+        fragment = `${carriedIsolationSubjects.join(" and ")} ${fragment}`;
+      }
+      carriesEditorSubject ||= hasEditorSubject;
+      if (explicitIsolationSubjects.length > 0) {
+        carriedIsolationSubjects = explicitIsolationSubjects;
+      }
+      clauses.push(fragment);
+    }
+  }
+
+  return clauses;
+}
+
 function supportResponseIndicatesPlatformFix(value: string): boolean {
   return /\b(?:platform delay|platform-side|incident review|event-ingestion delay|event processing|processing delay)\b/i.test(
     value,
   );
+}
+
+function supportResponseIndicatesCampaignEditorFix(value: string): boolean {
+  return /\b(?:frontend loading|frontend bundle|chunkloaderror)\b/i.test(value) &&
+    /\bcampaign(?:\s+|-)?editor\b/i.test(value);
 }
 
 function supportResponseIndicatesCloseableSolution(value: string): boolean {
@@ -1268,6 +1594,17 @@ function buildExplanationRequestResponse(
   }
 
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+    if (isCampaignEditorFixReadiness(evidenceReadiness)) {
+      return [
+        `Hi ${ticket.customer.name},`,
+        "",
+        "Thanks for checking in. In plain terms, the completed browser and user checks point to a frontend loading issue in the campaign editor.",
+        "",
+        "The repeated ChunkLoadError indicates that the editor bundle is not loading correctly for the affected campaign. Frontend engineering is checking the mitigation path.",
+        "",
+        "You do not need to repeat the same browser-session checks right now. We will update you when the campaign editor mitigation is ready to verify.",
+      ].join("\n");
+    }
     return [
       `Hi ${ticket.customer.name},`,
       "",
@@ -1351,7 +1688,9 @@ function formatCustomerSafeStatus(
       : `Current status: the ticket matches a documented support path. ${knownCause.problemSummary}`;
   }
   if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
-    return "Current status: this is still being handled as a possible platform delay affecting event processing.";
+    return isCampaignEditorFixReadiness(evidenceReadiness)
+      ? "Current status: frontend engineering is reviewing the campaign editor loading failure and reproduced ChunkLoadError."
+      : "Current status: this is still being handled as a possible platform delay affecting event processing.";
   }
   if (evidenceReadiness.supportState === "waiting-on-customer-action") {
     return "Current status: the next step is on your side before we can confirm the result.";
@@ -1363,6 +1702,14 @@ function formatCustomerSafeStatus(
     return "Current status: we have prepared the next response and are reviewing it before sending.";
   }
   return "Current status: we are still reviewing the latest details for this issue.";
+}
+
+function isCampaignEditorFixReadiness(
+  evidenceReadiness: EvidenceReadiness,
+): boolean {
+  return evidenceReadiness.requiredEvidence.some(
+    (requirement) => requirement.id === "campaign-editor-failure",
+  );
 }
 
 function formatCustomerSafeStatusNextStep(
