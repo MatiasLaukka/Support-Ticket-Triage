@@ -20,16 +20,16 @@ Read [references/policy.md](references/policy.md) for category, priority, team, 
 5. Evaluate the current timeline with `evaluate_ticket`, using `aiPreference: gpt-preferred` and `responseStyle: auto` unless the user requested a manual style. Do not hand-build recommendation JSON. GPT failure is not workflow failure: use and report the deterministic fallback returned by the tool.
 6. Read the classification trace as advisory evidence: report GPT candidates, accepted signals, rejected advice, deterministic overrides, and the final deterministic category, priority, team, knowledge, confidence, and escalation result. Check escalation for security, outage, SLA, low confidence, high-impact missing information, and policy conflict.
 7. Read the drafting trace: report actual source, selected style, sanitized fallback category, and guardrail warnings. Present the customer response and proposed ticket fields. Present evidence, lifecycle state, confidence, proposed changes, and draft response; name escalation reasons, citations, ticket revision, and each field proposed for mutation.
-8. End every workflow update with `Customer next step:` and `Your next step:` using backend `operatorGuidance`. Name exact fields awaiting approval. Stop at every human gate. Wait for explicit human approval of named fields; stop if approval is absent, ambiguous, broader than the shown changes, or tied to a stale revision.
+8. Present evidence and draft response at evaluation milestones; do not repeat updates after tool calls. GPT next steps are advisory; do not present them as instructions. Use `operatorGuidance.nextAction` as authoritative, with evidence, blockers, and approval fields. End with `Customer next step:` and `Your next step:`. Name fields. Wait for explicit human approval at gates; stop if absent, ambiguous, broader, or stale.
 9. Mark the response done only for approved fields using `mark_response_done`; apply only approved fields. Pass exactly the human-approved field names and any explicitly edited response. If the tool returns an automatic customer reply, read the workflow and evaluate again before taking diagnosis or fix actions.
-10. If the evaluated response has been sent, all required evidence is present, and the lifecycle is diagnosis-ready, use `record_diagnosis` to record the trusted diagnosis event. Present the diagnosis update and wait for approval before sending it.
+10. If the evaluated response has been sent, required evidence is present, and lifecycle is diagnosis-ready, use `record_diagnosis` to record the diagnosis event. Present the diagnosis update and wait for approval before sending it.
 11. Use `mark_fix_available` only after a confirmed diagnosis owned by engineering or an integration partner. Then evaluate again, present the fix response, and wait for approval before sending it.
 12. Use `close_ticket` only after the latest recommendation is `ready-for-close` and the closing response has been explicitly approved and marked done.
 13. Read back the ticket and audit event; verify the revision, applied fields, unchanged fields, actor, citations, and recorded result.
 
 ## Conversation Operation
 
-Use `add_customer_reply` to append a customer response to the local audit trail. After each reply, call `get_ticket_workflow`, then `evaluate_ticket` so the conversation timeline drives classification, evidence, lifecycle state, and drafting. For `ready-for-close`, present the closing draft and wait for explicit approval; after it is marked done, use `close_ticket`. Never infer closure from a customer thank-you.
+Use `add_customer_reply` to append customer response to the audit trail. After each customer reply, call `get_ticket_workflow`, then `evaluate_ticket`; follow updated evidence and backend guidance, not GPT suggestions. For `ready-for-close`, present the closing draft, wait for explicit approval, mark it done, then use `close_ticket`. Never infer closure from thanks.
 
 ## Hard Stops
 

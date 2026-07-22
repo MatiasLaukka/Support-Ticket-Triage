@@ -8,8 +8,11 @@ Treat GPT classification advice as bounded, advisory evidence. Let the determini
 
 - Classification trace: attempted/skipped/fallback; GPT candidates; accepted/rejected advice; deterministic overrides; final outcome.
 - Drafting trace: attempted/skipped/fallback; actual source; selected style; guardrail checks and warnings; fallback category or `none`.
-- Customer next step: copy the backend-owned customer action in plain language.
-- Your next step: copy the backend-owned operator action, approval fields, blockers, and unlocked tool.
+- Advisory AI suggestion: if GPT proposes a next step or investigation, label it as advisory context; never present it as an instruction or authoritative workflow action.
+- Customer next step: copy the backend-owned `operatorGuidance.customerNextStep` action in plain language when present.
+- Your next step: copy the backend-owned `operatorGuidance.nextAction`, approval fields, blockers, evidence state, and unlocked tool.
+
+The backend operator guidance is authoritative. GPT-generated next steps, `recommendedNextAction` text, and investigation suggestions never authorize diagnosis, fixes, sending, or closure. After every customer reply, call `get_ticket_workflow` and `evaluate_ticket`, then follow the updated evidence and lifecycle state.
 
 ## Safe Fallback
 

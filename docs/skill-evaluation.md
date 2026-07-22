@@ -7,6 +7,31 @@ validator. For Task 7, the installed Python 3.12 runtime ran the official
 `quick_validate.py` against `.agents/skills/triaging-support-tickets` and
 reported `Skill is valid!`.
 
+## Current Contract Rerun
+
+The Skill contract was rerun after separating advisory AI suggestions from
+authoritative Approval Desk workflow guidance.
+
+- Official validator: `quick_validate.py` reported `Skill is valid!`.
+- Focused Skill and MCP integration evaluation: **114/114 tests passed** across
+  the Skill, showcase, server-action, workflow-guidance, and AI-evaluation
+  suites.
+- The Skill now presents customer-facing updates at evaluation milestones or
+  meaningful lifecycle changes, not after every low-level tool call.
+- GPT-generated next steps and investigation suggestions are explicitly
+  advisory. The backend `operatorGuidance.nextAction`, evidence state,
+  blockers, and approval fields are authoritative.
+- After every customer reply, the Skill calls `get_ticket_workflow` and then
+  `evaluate_ticket`, following the updated evidence and lifecycle state.
+- Controlled and deterministic showcases both completed the full 37-call,
+  Diagnose/Fix/verification/closure journey with a final `resolved` status.
+
+The showcase approvals are deliberately scripted portfolio-reviewer decisions;
+they validate that the backend approval gate is used with the exact fields
+returned by `operatorGuidance`, but they do not pause for an interactive human.
+The live Codex contract still requires stopping at the first approval gate and
+waiting for actual human confirmation.
+
 ## Codex Skill AI Showcase Contract
 
 - Structural tests validate the repository Skill's discovery metadata,

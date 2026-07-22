@@ -2,6 +2,7 @@
 
 - Mode: controlled
 - Provider provenance: classification=controlled-local-simulation; drafting=controlled-local-simulation; network=disabled.
+- Human approval: scripted portfolio-reviewer simulation; no interactive pause.
 - Final ticket status: resolved
 
 ## Governed MCP tool calls

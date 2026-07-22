@@ -419,6 +419,7 @@ function serializeReport(
     "",
     `- Mode: ${report.mode}`,
     `- Provider provenance: classification=${report.providerProvenance.classification}; drafting=${report.providerProvenance.drafting}; network=${report.providerProvenance.networkPolicy}.`,
+    "- Human approval: scripted portfolio-reviewer simulation; no interactive pause.",
     `- Final ticket status: ${report.finalTicketStatus}`,
     "",
     "## Governed MCP tool calls",
