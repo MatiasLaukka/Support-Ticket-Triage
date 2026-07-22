@@ -21,6 +21,11 @@ authoritative Approval Desk workflow guidance.
 - GPT-generated next steps and investigation suggestions are explicitly
   advisory. The backend `operatorGuidance.nextAction`, evidence state,
   blockers, and approval fields are authoritative.
+- When `aiExecutionTrace.safety.promptInjectionDetected` is true, both GPT
+  stages are skipped while deterministic classification, drafting, and normal
+  escalation continue. Its sanitized warning and matched rule IDs are
+  operator/audit-only: they are persisted in the submission audit and omitted
+  from the customer draft.
 - After every customer reply, the Skill calls `get_ticket_workflow` and then
   `evaluate_ticket`, following the updated evidence and lifecycle state.
 - Controlled and deterministic showcases both completed the full 37-call,

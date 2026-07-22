@@ -525,6 +525,9 @@ export class TriageService {
         escalationReasons: recommendation.escalationReasons,
         classificationSignalCount:
           recommendation.classificationSignals?.length ?? 0,
+        ...(recommendation.aiExecutionTrace?.safety === undefined
+          ? {}
+          : { safety: recommendation.aiExecutionTrace.safety }),
       },
       rationale: recommendation.rationale,
       knowledgeArticleIds: recommendation.knowledgeArticleIds,
