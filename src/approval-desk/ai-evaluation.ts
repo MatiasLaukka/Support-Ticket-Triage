@@ -24,6 +24,10 @@ import type { ClassificationReasoningProvider } from "./classification-reasoning
 import { classifyTicketFromContext, type TicketClassification } from "./classifier.js";
 import { buildConversationContextForTicket } from "./conversation-context.js";
 import { classifyAiFailure } from "./draft-response-provider.js";
+import {
+  assessPromptInjection,
+  type PromptInjectionAssessment,
+} from "./prompt-injection-safety.js";
 import type {
   CustomerResponseDraftProvider,
   GptClassificationReasoning,
@@ -63,10 +67,12 @@ export async function evaluateTicketWithAi(input: {
       : [input.previousSupportResponse],
   });
   const baseline = classifyTicketFromContext(conversationContext);
+  const safety = assessPromptInjection(conversationContext.combinedText);
   const classificationExecution = await runClassificationStage({
     ...input,
     conversationContext,
     baseline,
+    safety,
   });
   const base = buildApprovalDeskRecommendationInput({
     ticket: input.ticket,
@@ -92,10 +98,11 @@ export async function evaluateTicketWithAi(input: {
     advisoryClassificationSignals: classificationExecution.acceptedSignals,
     diagnosisContext: input.diagnosisContext,
     fixContext: input.fixContext,
-    draftProvider: input.aiPreference === "deterministic"
+    draftProvider: input.aiPreference === "deterministic" || safety.detected
       ? undefined
       : input.draftProvider,
     aiPreference: input.aiPreference,
+    safety,
     classificationTrace: {
       ...classificationExecution.trace,
       finalOutcome: finalOutcomeFromRecommendation(base),
@@ -111,6 +118,7 @@ async function runClassificationStage(input: {
   classificationProvider?: ClassificationReasoningProvider;
   conversationContext: ReturnType<typeof buildConversationContextForTicket>;
   baseline: TicketClassification;
+  safety: PromptInjectionAssessment;
 }): Promise<{
   acceptedSignals: ClassificationSignal[];
   trace: AiExecutionTrace["classification"];
@@ -127,7 +135,11 @@ async function runClassificationStage(input: {
     },
   });
 
-  if (input.aiPreference === "deterministic" || input.outcome !== undefined) {
+  if (
+    input.safety.detected ||
+    input.aiPreference === "deterministic" ||
+    input.outcome !== undefined
+  ) {
     return skipped("skipped");
   }
   if (input.classificationProvider === undefined) {

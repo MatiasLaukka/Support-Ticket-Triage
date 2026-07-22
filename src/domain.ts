@@ -230,8 +230,16 @@ const AiFinalClassificationSchema = z.object({
   escalationReasons: z.array(RequiredEscalationSchema),
 }).strict();
 
+export const AiSafetyTraceSchema = z.object({
+  promptInjectionDetected: z.boolean(),
+  matchedRules: z.array(SlugSchema),
+  action: z.literal("gpt-stages-skipped"),
+  warning: SanitizedAiMessageSchema,
+}).strict();
+
 export const AiExecutionTraceSchema = z.object({
   preference: AiPreferenceSchema,
+  safety: AiSafetyTraceSchema.optional(),
   classification: z.object({
     status: z.enum(["skipped", "used", "fallback"]),
     model: AiModelSchema.optional(),
@@ -592,6 +600,7 @@ export type AiPreference = z.infer<typeof AiPreferenceSchema>;
 export type AiFallbackCategory = z.infer<typeof AiFallbackCategorySchema>;
 export type AiUsage = z.infer<typeof AiUsageSchema>;
 export type AiGuardrailCheck = z.infer<typeof AiGuardrailCheckSchema>;
+export type AiSafetyTrace = z.infer<typeof AiSafetyTraceSchema>;
 export type AiExecutionTrace = z.infer<typeof AiExecutionTraceSchema>;
 export type Customer = z.infer<typeof CustomerSchema>;
 export type RequesterTechnicalLevel = z.infer<
