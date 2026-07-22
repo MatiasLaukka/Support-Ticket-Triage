@@ -142,6 +142,20 @@ describe("TriageService", () => {
     expect(harness.recommendations.values).toHaveLength(1);
   });
 
+  it("persists an explicit policy-conflict escalation from the recommendation input", async () => {
+    const harness = makeHarness();
+
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        escalationReasons: ["policy-conflict"],
+        escalationRequired: true,
+      }),
+    );
+
+    expect(recommendation.escalationRequired).toBe(true);
+    expect(recommendation.escalationReasons).toContain("policy-conflict");
+  });
+
   it("preserves GPT assist material on submitted recommendations", async () => {
     const harness = makeHarness();
     const aiExecutionTrace = makeAiExecutionTrace();

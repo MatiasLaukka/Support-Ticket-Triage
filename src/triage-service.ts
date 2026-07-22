@@ -493,8 +493,11 @@ export class TriageService {
       rationale: parsed.rationale,
       confidence: parsed.confidence,
       recommendedNextAction: parsed.recommendedNextAction,
-      escalationRequired: false,
-      escalationReasons: [],
+      // Preserve classifier/policy signals while recomputing derived escalation
+      // reasons. `evaluateEscalation` deduplicates and adds independent signals
+      // such as SLA or missing-information risk.
+      escalationRequired: (parsed.escalationReasons ?? []).length > 0,
+      escalationReasons: parsed.escalationReasons ?? [],
       resolution: "pending",
       createdAt: parsed.submittedAt,
     });
