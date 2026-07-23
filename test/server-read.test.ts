@@ -692,6 +692,100 @@ describe("createTriageServer read protocol", () => {
     });
   });
 
+  it("exposes specialist-review guidance for an escalated recommendation", async () => {
+    const fixture = await createFixture();
+    const current = (await fixture.recommendations.list()).find(
+      (recommendation) => recommendation.ticketId === "TKT-1001",
+    );
+    expect(current).toBeDefined();
+    const escalation = TriageRecommendationSchema.parse({
+      ...current,
+      id: "30000000-0000-4000-8000-000000000010",
+      supportState: "escalated",
+      ticketStatus: "in-progress",
+      team: "product",
+      escalationRequired: true,
+      escalationReasons: ["diagnostic-ambiguity"],
+      resolution: "approved",
+      createdAt: "2026-06-10T09:03:00.000Z",
+    });
+    await fixture.recommendations.create(escalation);
+    await fixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000011",
+        timestamp: "2026-06-10T09:03:00.000Z",
+        actor: "casey",
+        action: "recommendation-submitted",
+        ticketId: "TKT-1001",
+        recommendationId: escalation.id,
+        before: {},
+        after: {},
+        rationale: "Escalated recommendation submitted for approval.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+    await fixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000012",
+        timestamp: "2026-06-10T09:04:00.000Z",
+        actor: "casey",
+        action: "customer-response-sent",
+        ticketId: "TKT-1001",
+        recommendationId: escalation.id,
+        before: {},
+        after: { sentAt: "2026-06-10T09:04:00.000Z" },
+        rationale: "Sent the approved specialist escalation response.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+    await fixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000013",
+        timestamp: "2026-06-10T09:05:00.000Z",
+        actor: "casey",
+        action: "diagnostic-escalated",
+        ticketId: "TKT-1001",
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "likely",
+            owner: "engineering",
+            diagnosticState: {
+              state: "escalated",
+              diagnosticAttempts: 2,
+              escalationReason: "diagnostic-ambiguity",
+              specialistTeam: "product",
+              hypotheses: [],
+              evidenceToRequest: ["No further automated questions."],
+            },
+          },
+        },
+        rationale: "Escalated for specialist review.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+
+    const result = await callTool(await connect(fixture), {
+      name: "get_ticket_workflow",
+      arguments: { id: "TKT-1001" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      latestRecommendation: {
+        supportState: "escalated",
+        team: "product",
+        ticketStatus: "in-progress",
+      },
+      operatorGuidance: {
+        stage: "escalated",
+        nextAction: "specialist-review",
+      },
+    });
+  });
+
   it("rejects out-of-bounds and invalid inputs through MCP schemas", async () => {
     const client = await connect(await createFixture());
 

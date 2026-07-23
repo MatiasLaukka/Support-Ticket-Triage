@@ -48,6 +48,7 @@ import {
 import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 import {
+  buildOperatorGuidance,
   closeBlockers,
   diagnosisBlockers,
   fixBlockers,
@@ -404,6 +405,11 @@ async function getTicketDetail(
     recommendationHistory: recommendation.history,
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
+    operatorGuidance: buildOperatorGuidance({
+      ticket,
+      recommendations,
+      audits: ticketAudits,
+    }),
   };
 }
 

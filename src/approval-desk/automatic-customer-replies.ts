@@ -49,14 +49,14 @@ function automaticDiagnosticFollowUpReply(input: {
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
 }): string | undefined {
-  const diagnosisEvent = latestAuditByAction(
-    input.auditsBeforeSent,
-    "diagnosis-completed",
-  );
+  const diagnosisEvent = latestDiagnosticAudit(input.auditsBeforeSent);
   if (
     diagnosisEvent === undefined ||
     input.recommendation.createdAt < diagnosisEvent.timestamp
   ) {
+    return undefined;
+  }
+  if (diagnosisEvent.action === "diagnostic-escalated") {
     return undefined;
   }
 
@@ -278,6 +278,18 @@ function latestAuditByAction(
 ): AuditEvent | undefined {
   return audits
     .filter((event) => event.action === action)
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+}
+
+function latestDiagnosticAudit(
+  audits: readonly AuditEvent[],
+): AuditEvent | undefined {
+  return audits
+    .filter(
+      (event) =>
+        event.action === "diagnosis-completed" ||
+        event.action === "diagnostic-escalated",
+    )
     .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
 }
 

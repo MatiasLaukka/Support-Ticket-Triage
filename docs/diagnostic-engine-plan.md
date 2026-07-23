@@ -13,7 +13,8 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Complete first increment: persisted `diagnosticState` snapshots for ambiguous campaign-editor diagnoses (`276e667`).
 - Complete first increment: Skill wording now treats backend workflow guidance as the only operational instruction (`d3ab333`; official validator passes).
 - Complete increment: the shared workflow authority now uses persisted diagnostic state to block ambiguous fixes, requires the approved diagnosis response before fix availability, and surfaces targeted evidence requests to both UI and MCP read models.
-- Next: use diagnostic state to enforce escalation for unresolvable ambiguity and add the multi-turn evaluation harness.
+- Complete increment: bounded diagnostic ambiguity escalation is enforced with deterministic specialist routing, explicit escalation audits, safe customer messaging, and shared UI/MCP gates.
+- Next: add the risk-sensitive multi-turn evaluation harness.
 
 ## Current audit
 
@@ -23,18 +24,18 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Missing required evidence blocks diagnosis except for deterministic known-cause paths.
 - `likely` and `confirmed` diagnosis confidence are distinct. The shared diagnostic playbook keeps platform and campaign-editor diagnoses `likely` until confirming reply evidence exists.
 - Fix availability requires a recorded `confirmed` diagnosis owned by engineering or an integration partner.
-- Fix availability also requires that the diagnosis response has been sent and that no newer customer reply is awaiting evaluation. An `ambiguous` diagnostic state remains a permissible working diagnosis for evidence gathering, but it cannot unlock a fix.
+- Fix availability also requires that the diagnosis response has been sent and that no newer customer reply is awaiting evaluation. An `ambiguous` diagnostic state remains a permissible working diagnosis for evidence gathering, but it cannot unlock a fix. After two non-discriminating cycles, or contradictory evidence, the state becomes `escalated`; escalated diagnoses cannot unlock fixes or closure.
 - Close actions require a `ready-for-close` recommendation and an explicitly approved/sent closing response.
 - Approval is a hard boundary in both HTTP and MCP paths. Only explicitly approved fields can be applied or sent.
 - Prompt-injection detection is a deterministic preflight. GPT classification/drafting is skipped for affected tickets, the operator/audit warning is retained, and the customer response does not expose the internal detection.
-- HTTP and MCP now call the same shared `diagnosisContextForTicket` and `fixContextForTicket` functions. MCP passes the accumulated customer-reply audits into diagnosis.
+- HTTP and MCP now call the same shared `diagnosisContextForTicket`, `fixContextForTicket`, `latestDiagnosisAudit`, operator-guidance, and gate functions. MCP passes the accumulated customer-reply audits into diagnosis. Escalated recommendations remain `in-progress`, carry `supportState: "escalated"`, route deterministically to a specialist team, and wait at `specialist-review` after the approved response is sent.
 
 ### Partially enforced
 
-- Evidence readiness is separate from confidence in the current `DiagnosisContext`, and the first persisted `diagnosticState` snapshot now represents multiple plausible campaign-editor candidates and evidence requests. The broader candidate/refutation/escalation model is still incomplete.
-- The workflow exposes `diagnosis-ready`, `diagnosis-recorded`, `fix-ready`, and `verification` stages. Ambiguity is now a first-class fix blocker and targeted evidence is shown as the customer next step; a broad fallback can still produce a `likely` working diagnosis so the workflow can ask the customer for discriminating evidence.
+- Evidence readiness is separate from confidence in the current `DiagnosisContext`, and persisted `diagnosticState` snapshots represent multiple plausible campaign-editor candidates, bounded attempts, evidence requests, and specialist routing. The broader candidate/refutation model still needs more diagnostic families.
+- The workflow exposes `diagnosis-ready`, `diagnosis-recorded`, `fix-ready`, `verification`, and `escalated` stages. Ambiguity is a first-class fix/close blocker; targeted evidence is shown while ambiguity is bounded, then specialist review becomes a stop/handoff state with no new autonomous question.
 - Fix verification re-enters evaluation through the workflow, but the terminal conditions are encoded mainly through recommendation lifecycle rules rather than a dedicated verification state/result.
-- The triaging Skill now requires workflow reads, full conversation evaluation, approval, and stopping while waiting without exposing GPT next-step text as agent instructions. `operatorGuidance.nextAction`, evidence, blockers, and approval fields remain the only operational authority.
+- The triaging Skill now requires workflow reads, full conversation evaluation, approval, and stopping at specialist handoff without using GPT next-step text as agent instructions. `operatorGuidance.nextAction`, evidence, blockers, and approval fields remain the only operational authority.
 
 ### Missing or unsafe
 
@@ -72,15 +73,15 @@ npm test -- --run test/server-actions.test.ts test/approval-desk-http.test.ts
 
 Expected result: all selected lifecycle tests pass, including the existing TKT-1010 UI coverage and the changed-ID MCP regression.
 
-### Phase 2 — Explicit diagnostic state and ambiguity (snapshot increment complete; enforcement remains)
+### Phase 2 — Explicit diagnostic state, ambiguity, and bounded escalation (complete)
 
-Introduce a small deterministic diagnostic result behind the current `DiagnosisContext` projection. The result must distinguish `not-started`, `insufficient-evidence`, `ambiguous`, `working-diagnosis`, `confirmed`, and `escalated`, and must carry candidate hypotheses with confidence, confirming/refuting evidence, and the smallest useful discriminating request. `missingEvidence` remains evidence readiness; it must not be used as a diagnosis-complete flag.
+Introduce a small deterministic diagnostic result behind the current `DiagnosisContext` projection. The result distinguishes ambiguous, confirmed, and escalated outcomes and carries candidate hypotheses, bounded attempts, confirming evidence, specialist routing, and targeted requests. `missingEvidence` remains evidence readiness; it is not a diagnosis-complete flag.
 
 Files:
 
 - Create `src/approval-desk/diagnostic-state.ts` with Zod-validated candidate/state types and deterministic helpers.
 - Extend `src/approval-desk/diagnostic-playbooks.ts` to return candidate state and evidence discrimination metadata while preserving the existing `DiagnosisContext` projection for audit compatibility.
-- Modify `src/approval-desk/workflow-guidance.ts` so ambiguous states block fix availability/closure, require the diagnosis response to be sent before fix work, and surface targeted evidence requests. Keep a `likely`/ambiguous result recordable as a working diagnosis so the customer can supply the evidence needed to discriminate hypotheses.
+- Modify `src/approval-desk/workflow-guidance.ts` so ambiguous states block fix availability/closure, require the diagnosis response to be sent before fix work, and surface targeted evidence requests. Escalated states block diagnosis/fix/closure continuation and surface `specialist-review` after the approved escalation response is sent.
 - Modify `src/approval-desk/recommendation-builder.ts` and deterministic drafting helpers so likely/ambiguous wording cannot claim a final root cause or fix.
 - Modify `src/triage-service.ts` schemas only when the projected audit needs persisted diagnostic-state fields.
 
@@ -88,12 +89,12 @@ Required tests (one behavior per test, only where not already covered):
 
 - Complete evidence with two plausible causes stays ambiguous.
 - A high-value discriminating reply moves one candidate to confirmed and another to ruled out.
-- Unresolvable ambiguity escalates instead of generating infinite questions.
+- Unresolvable ambiguity escalates after the bounded attempt limit instead of generating infinite questions.
 - A likely diagnosis cannot unlock `mark_fix_available` or closure.
 
-### Phase 3 — Skill and authoritative context alignment (wording increment complete)
+### Phase 3 — Skill and authoritative context alignment (complete)
 
-Update `.agents/skills/triaging-support-tickets/SKILL.md` to describe the iterative lifecycle without presenting GPT next steps as instructions. The agent must read `get_ticket_workflow`, evaluate the full accumulated conversation, follow `operatorGuidance.nextAction`, present evidence/blockers/approval fields, stop at human gates, and re-evaluate after every customer reply or fix verification result.
+Update `.agents/skills/triaging-support-tickets/SKILL.md` to describe the iterative lifecycle without using GPT next steps as instructions. The agent must read `get_ticket_workflow`, evaluate the full accumulated conversation, follow `operatorGuidance.nextAction`, present evidence/blockers/approval fields, stop at human gates and specialist handoff, and re-evaluate after every customer reply or fix verification result.
 
 Files:
 
@@ -106,9 +107,9 @@ Verification:
 - Run the official Skill validator.
 - Run the existing skill evaluation and inspect the captured customer responses, operator guidance, audit fields, stale-context blockers, and approval stops.
 
-### Phase 4 — Multi-turn diagnostic evaluation harness
+### Phase 4 — Multi-turn diagnostic evaluation harness (next)
 
-Build a deterministic evaluation harness around diagnostic families rather than around one fixture. Scenarios must cover vague-to-evidence, partial evidence, misleading/contradictory evidence, ambiguity, specialist escalation, failed fixes, customer confirmation, stale recommendations, and adversarial text. Simulated customer replies may reveal hidden evidence only in response to the active diagnostic question; they must not bypass approval or policy.
+Build a deterministic evaluation harness around diagnostic families rather than around one fixture. Scenarios must cover vague-to-evidence, partial evidence, misleading/contradictory evidence, the now-enforced specialist escalation handoff, failed fixes, customer confirmation, stale recommendations, and adversarial text. Simulated customer replies may reveal hidden evidence only in response to the active diagnostic question; they must not bypass approval or policy.
 
 Files:
 
