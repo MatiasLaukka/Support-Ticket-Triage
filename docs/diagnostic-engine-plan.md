@@ -1,6 +1,6 @@
 # Diagnostic Engine Implementation Plan
 
-> This plan is the architectural reference for the next diagnostic-engine phases. It is adjusted to the repository state after commit `6b53236` (`refactor shared diagnostic workflow authority`).
+> This plan is the architectural reference for the diagnostic-engine phases. It reflects the merged repository state at commit `dd4d40a` (`feat: add known event correlation and diagnostic harness`).
 
 ## Goal
 
@@ -40,11 +40,10 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Fix verification re-enters evaluation through the workflow, but the terminal conditions are encoded mainly through recommendation lifecycle rules rather than a dedicated verification state/result.
 - The triaging Skill now requires workflow reads, full conversation evaluation, approval, and stopping at specialist handoff without using GPT next-step text as agent instructions. `operatorGuidance.nextAction`, evidence, blockers, and approval fields remain the only operational authority.
 
-### Missing or unsafe
+### Remaining opportunities
 
-- Production diagnostic, fix, and simulated-reply branches no longer depend on a fixture ID. A changed-ID MCP regression proves the campaign-editor behavior is selected from semantic recommendation/diagnosis context.
-- The diagnostic engine does not yet ask for the smallest evidence that distinguishes remaining hypotheses. Evidence requests are primarily checklist-derived.
-- There is no risk-sensitive multi-turn evaluation harness for premature diagnosis, premature resolution, unnecessary questions, ambiguity escalation, or failed-fix reopening.
+- The diagnostic engine does not yet ask for the smallest evidence that distinguishes every remaining hypothesis. Evidence requests are still primarily checklist-derived; this is a future refinement, not a gap in the current safety gates.
+- The candidate/refutation model has deeper coverage for campaign-editor ambiguity than for other diagnostic families. Extending that model is future work; the current harness already covers ambiguity, escalation, failed-fix recheck, stale replies, and adversarial text.
 
 ## Architectural decisions
 
