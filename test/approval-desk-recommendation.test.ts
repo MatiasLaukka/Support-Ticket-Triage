@@ -130,6 +130,67 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("projects unresolved diagnostic ambiguity into specialist escalation", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1010")!,
+      actor: "approval-desk",
+      diagnosisContext: {
+        status: "completed",
+        causeType: "performance",
+        customerSafeSummary:
+          "The campaign editor remains ambiguous after the requested checks.",
+        evidenceUsed: ["blank editor", "cross-browser checks"],
+        confidence: "likely",
+        owner: "engineering",
+        recommendedNextAction: "Specialist review is required.",
+        doNotSay: ["Do not claim a final root cause."],
+        diagnosticState: {
+          state: "escalated",
+          diagnosticAttempts: 2,
+          escalationReason: "diagnostic-ambiguity",
+          specialistTeam: "product",
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser/session issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Private window works"],
+            },
+            {
+              id: "frontend-loading",
+              label: "Frontend loading issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Console error persists"],
+            },
+          ],
+          evidenceToRequest: ["No further automated questions."],
+        },
+      },
+    });
+
+    expect(input).toMatchObject({
+      supportState: "escalated",
+      ticketStatus: "in-progress",
+      team: "product",
+      escalationRequired: true,
+      escalationReasons: expect.arrayContaining(["diagnostic-ambiguity"]),
+    });
+    expect(input.draftCustomerResponse).toMatch(/sorry|apolog/i);
+    expect(input.draftCustomerResponse).toMatch(/escalat/i);
+    expect(input.draftCustomerResponse).toMatch(/specialist/i);
+    expect(input.draftCustomerResponse).not.toMatch(
+      /diagnosticState|hypothesis|audit|prompt|provider|secret/i,
+    );
+  });
+
   it("uses known-cause guidance in webhook secret rotation draft responses", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

@@ -291,6 +291,43 @@ function diagnosisAudit(input: {
   });
 }
 
+function escalatedDiagnosisAudit(
+  timestamp = "2026-06-10T09:02:00.000Z",
+): AuditEvent {
+  return audit("diagnostic-escalated", timestamp, {
+    after: {
+      diagnosis: {
+        status: "completed",
+        confidence: "likely",
+        owner: "engineering",
+        diagnosticState: {
+          state: "escalated",
+          diagnosticAttempts: 2,
+          escalationReason: "diagnostic-ambiguity",
+          specialistTeam: "product",
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser/session issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Private window works"],
+            },
+            {
+              id: "frontend-loading",
+              label: "Frontend loading issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Console error persists"],
+            },
+          ],
+          evidenceToRequest: ["No further automated questions."],
+        },
+      },
+    },
+  });
+}
+
 describe("buildOperatorGuidance", () => {
   it.each([
     {
@@ -879,6 +916,18 @@ describe("shared lifecycle blockers", () => {
     ]);
   });
 
+  it("blocks fixes after diagnostic ambiguity is escalated", () => {
+    const diagnosis = escalatedDiagnosisAudit();
+    expect(
+      fixBlockers({
+        audits: [
+          diagnosis,
+          sentAudit("2026-06-10T09:03:00.000Z"),
+        ],
+      }),
+    ).toContain("An escalated diagnosis cannot unlock a fix.");
+  });
+
   it("returns exact close blocker arrays in enforced order", () => {
     expect(
       closeBlockers({
@@ -954,5 +1003,48 @@ describe("shared lifecycle blockers", () => {
         audits: input.audits,
       }),
     ).toContain("An ambiguous diagnosis cannot unlock ticket closure.");
+  });
+
+  it("blocks closure after diagnostic ambiguity is escalated", () => {
+    const input = closingResponseSentWorkflow();
+    input.audits = [
+      ...input.audits,
+      escalatedDiagnosisAudit(),
+    ];
+
+    expect(
+      closeBlockers({
+        ticket: input.ticket,
+        recommendation: input.recommendations[0],
+        audits: input.audits,
+      }),
+    ).toContain("An escalated diagnosis cannot unlock ticket closure.");
+  });
+
+  it("stops at specialist review after an escalated diagnosis", () => {
+    const input: WorkflowInput = {
+      ticket: ticket(),
+      recommendations: [
+        recommendation({
+          team: "product",
+          ticketStatus: "in-progress",
+          supportState: "escalated",
+          escalationRequired: true,
+          escalationReasons: ["diagnostic-ambiguity"],
+        }),
+      ],
+      audits: [
+        sentAudit("2026-06-10T09:01:00.000Z"),
+        escalatedDiagnosisAudit("2026-06-10T09:02:00.000Z"),
+      ],
+    };
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "escalated",
+      nextAction: "specialist-review",
+      approval: { required: false, fields: [] },
+      customerNextStep:
+        "No further diagnostic action is required from you right now; support will update you after specialist review.",
+    });
   });
 });

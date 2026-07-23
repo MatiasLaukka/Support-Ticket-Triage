@@ -706,18 +706,21 @@ export class TriageService {
   async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
     const diagnosis = RecordDiagnosisInputSchema.parse(input);
     await this.dependencies.tickets.get(diagnosis.ticketId);
+    const escalated = diagnosis.diagnosis.diagnosticState?.state === "escalated";
 
     const auditEvent = AuditEventSchema.parse({
       id: this.uuid(),
       timestamp: diagnosis.diagnosedAt,
       actor: diagnosis.actor,
-      action: "diagnosis-completed",
+      action: escalated ? "diagnostic-escalated" : "diagnosis-completed",
       ticketId: diagnosis.ticketId,
       before: {},
       after: {
         diagnosis: diagnosis.diagnosis,
       },
-      rationale: "Diagnosis completed from trusted support context.",
+      rationale: escalated
+        ? "Diagnosis reached a bounded ambiguity limit and was escalated for specialist review."
+        : "Diagnosis completed from trusted support context.",
       knowledgeArticleIds: diagnosis.knowledgeArticleIds,
       result: "success",
     });

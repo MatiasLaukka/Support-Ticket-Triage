@@ -73,6 +73,11 @@ export function diagnosisBlockers(
   }
 
   const blockers: string[] = [];
+  if (recommendation.supportState === "escalated") {
+    blockers.push(
+      "Specialist review must complete before automated diagnosis continues.",
+    );
+  }
   const knownCauseReady = recommendation.supportState === "known-cause";
   if (!knownCauseReady && (recommendation.missingEvidence?.length ?? 0) > 0) {
     blockers.push("Diagnosis requires all required evidence to be gathered.");
@@ -136,6 +141,9 @@ export function fixBlockers(input: { audits: readonly AuditEvent[] }): string[] 
       "A diagnosis with unresolved plausible causes cannot unlock a fix.",
     );
   }
+  if (diagnosticState?.state === "escalated") {
+    blockers.push("An escalated diagnosis cannot unlock a fix.");
+  }
   const latestFixAt = latestAuditTimestamp(input.audits, "fix-available");
   if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
     blockers.push("A fix has already been recorded for the latest diagnosis.");
@@ -169,6 +177,9 @@ export function closeBlockers(input: {
   );
   if (diagnosticState?.state === "ambiguous") {
     blockers.push("An ambiguous diagnosis cannot unlock ticket closure.");
+  }
+  if (diagnosticState?.state === "escalated") {
+    blockers.push("An escalated diagnosis cannot unlock ticket closure.");
   }
   if (input.recommendation?.supportState !== "ready-for-close") {
     blockers.push(
@@ -260,6 +271,23 @@ export function buildOperatorGuidance(input: {
       },
       unlocksTool: "mark_response_done",
       blockers: [],
+    });
+  }
+
+  if (
+    latest?.supportState === "escalated" ||
+    latestDiagnosticContext?.diagnosticState?.state === "escalated"
+  ) {
+    return OperatorGuidanceSchema.parse({
+      stage: "escalated",
+      changed: "The ticket was escalated for specialist review.",
+      nextAction: "specialist-review",
+      reason:
+        "Specialist review is required before further diagnostic or fix work.",
+      approval: noApproval,
+      blockers: [],
+      customerNextStep:
+        "No further diagnostic action is required from you right now; support will update you after specialist review.",
     });
   }
 
@@ -451,7 +479,8 @@ export function latestDiagnosisAudit(
     .map((event, index) => ({ event, index }))
     .filter(
       ({ event }) =>
-        event.action === "diagnosis-completed" &&
+        (event.action === "diagnosis-completed" ||
+          event.action === "diagnostic-escalated") &&
         typeof event.after.diagnosis === "object" &&
         event.after.diagnosis !== null,
     )

@@ -792,6 +792,46 @@ describe("createTriageServer action protocol", () => {
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(before);
   });
 
+  it("records an explicit diagnostic-escalated audit action", async () => {
+    const fixture = await createFixture();
+
+    const event = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "product-support",
+      diagnosedAt: "2026-06-10T09:03:00.000Z",
+      diagnosis: diagnosisContext({
+        confidence: "likely",
+        diagnosticState: {
+          state: "escalated",
+          diagnosticAttempts: 2,
+          escalationReason: "diagnostic-ambiguity",
+          specialistTeam: "product",
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser/session issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Private window works"],
+            },
+            {
+              id: "frontend-loading",
+              label: "Frontend loading issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Console error persists"],
+            },
+          ],
+          evidenceToRequest: ["No further automated questions."],
+        },
+      }),
+      knowledgeArticleIds: [],
+    });
+
+    expect(event.action).toBe("diagnostic-escalated");
+    expect(event.rationale).toContain("specialist");
+  });
+
   it("rejects duplicate submission tags during MCP input validation", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
