@@ -6,6 +6,14 @@
 
 Evolve support handling from checklist-driven, one-pass triage into an evidence-aware iterative diagnostic lifecycle. Every evaluation uses the accumulated conversation and authoritative workflow context; a recommendation remains a proposal behind explicit human approval; diagnosis, fixes, verification, and closure advance only when their evidence and lifecycle preconditions are satisfied.
 
+## Implementation status
+
+- Complete: shared UI/MCP diagnostic and fix authority (`6b53236`).
+- Complete: semantic fixture-independent playbook, fix, and simulated-reply routing (`799c498`).
+- Complete first increment: persisted `diagnosticState` snapshots for ambiguous campaign-editor diagnoses (`276e667`).
+- Complete first increment: Skill wording now treats backend workflow guidance as the only operational instruction (`d3ab333`; official validator passes).
+- Next: use diagnostic state to enforce ambiguity blockers, targeted questions, and specialist escalation.
+
 ## Current audit
 
 ### Already enforced
@@ -21,17 +29,14 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 
 ### Partially enforced
 
-- Evidence readiness is separate from confidence in the current `DiagnosisContext`, but the model has only one completed diagnosis shape. It cannot yet represent multiple active candidates, explicitly ruled-out candidates, or a discriminating question.
+- Evidence readiness is separate from confidence in the current `DiagnosisContext`, and the first persisted `diagnosticState` snapshot now represents multiple plausible campaign-editor candidates and evidence requests. The broader candidate/refutation/escalation model is still incomplete.
 - The workflow exposes `diagnosis-ready`, `diagnosis-recorded`, `fix-ready`, and `verification` stages, but diagnostic ambiguity is not a first-class blocker. A broad fallback can still produce a `likely` completed context instead of an explicit ambiguous/escalated state.
 - Fix verification re-enters evaluation through the workflow, but the terminal conditions are encoded mainly through recommendation lifecycle rules rather than a dedicated verification state/result.
-- The triaging Skill correctly requires workflow reads, full conversation evaluation, approval, and stopping while waiting, but it still mentions GPT advisory next steps in a way that can distract from backend authority. `operatorGuidance.nextAction`, evidence, blockers, and approval fields must remain the only operational authority.
+- The triaging Skill now requires workflow reads, full conversation evaluation, approval, and stopping while waiting without exposing GPT next-step text as agent instructions. `operatorGuidance.nextAction`, evidence, blockers, and approval fields remain the only operational authority.
 
 ### Missing or unsafe
 
-- Production diagnostics still contain fixture-specific branches:
-  - `src/approval-desk/diagnostic-playbooks.ts` selects the campaign-editor playbook for `ticket.id === "TKT-1010"`.
-  - `src/approval-desk/diagnostic-workflow.ts` selects a campaign-editor fix for `ticket.id === "TKT-1010"`.
-  - `src/approval-desk/automatic-customer-replies.ts` emits campaign-editor replies for `ticket.id === "TKT-1010"`.
+- Production diagnostic, fix, and simulated-reply branches no longer depend on a fixture ID. A changed-ID MCP regression proves the campaign-editor behavior is selected from semantic recommendation/diagnosis context.
 - The diagnostic engine does not yet ask for the smallest evidence that distinguishes remaining hypotheses. Evidence requests are primarily checklist-derived.
 - There is no risk-sensitive multi-turn evaluation harness for premature diagnosis, premature resolution, unnecessary questions, ambiguity escalation, or failed-fix reopening.
 
@@ -45,7 +50,7 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 
 ## Phased implementation
 
-### Phase 1 — Semantic diagnostic authority (current)
+### Phase 1 — Semantic diagnostic authority (complete)
 
 Remove all diagnostic/fix/customer-reply production branches keyed to a fixture ID. Keep the campaign-editor behavior by recognizing semantic context such as `performance-troubleshooting`, campaign-editor symptoms, and the recorded diagnosis summary. Change the MCP regression fixture ID while preserving its content and assert that diagnosis/fix behavior is unchanged.
 
@@ -65,7 +70,7 @@ npm test -- --run test/server-actions.test.ts test/approval-desk-http.test.ts
 
 Expected result: all selected lifecycle tests pass, including the existing TKT-1010 UI coverage and the changed-ID MCP regression.
 
-### Phase 2 — Explicit diagnostic state and ambiguity
+### Phase 2 — Explicit diagnostic state and ambiguity (snapshot increment complete; enforcement remains)
 
 Introduce a small deterministic diagnostic result behind the current `DiagnosisContext` projection. The result must distinguish `not-started`, `insufficient-evidence`, `ambiguous`, `working-diagnosis`, `confirmed`, and `escalated`, and must carry candidate hypotheses with confidence, confirming/refuting evidence, and the smallest useful discriminating request. `missingEvidence` remains evidence readiness; it must not be used as a diagnosis-complete flag.
 
@@ -84,7 +89,7 @@ Required tests (one behavior per test, only where not already covered):
 - Unresolvable ambiguity escalates instead of generating infinite questions.
 - A likely diagnosis cannot unlock `mark_fix_available` or closure.
 
-### Phase 3 — Skill and authoritative context alignment
+### Phase 3 — Skill and authoritative context alignment (wording increment complete)
 
 Update `.agents/skills/triaging-support-tickets/SKILL.md` to describe the iterative lifecycle without presenting GPT next steps as instructions. The agent must read `get_ticket_workflow`, evaluate the full accumulated conversation, follow `operatorGuidance.nextAction`, present evidence/blockers/approval fields, stop at human gates, and re-evaluate after every customer reply or fix verification result.
 
