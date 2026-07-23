@@ -8,6 +8,7 @@ import type {
 } from "../domain.js";
 import type { ConversationContext } from "./conversation-context.js";
 import { detectKnownCause } from "./known-cause-catalog.js";
+import { detectKnownEvent } from "./known-event-catalog.js";
 
 export interface TicketClassification {
   category: Category;
@@ -17,6 +18,9 @@ export interface TicketClassification {
   requiredEscalations: RequiredEscalation[];
   confidence: number;
   signals: ClassificationSignal[];
+  knownCause?: string | null;
+  knownEventId?: string | null;
+  knownEventMatchReasons?: string[];
 }
 
 type ScoreTarget =
@@ -26,6 +30,7 @@ type ScoreTarget =
   | `knowledge:${string}`
   | `escalation:${RequiredEscalation}`
   | `knownCause:${string}`
+  | `knownEvent:${string}`
   | `risk:${"security" | "outage" | "sla"}`
   | `disagreement:${"category" | "priority" | "team"}`;
 
@@ -168,12 +173,34 @@ function classifyTicketWithContent(input: {
     );
   }
 
-  return resolveClassification(
+  const knownEvent = detectKnownEvent({
+    ticket: input.ticket,
+    content: input.content,
+    knownCause: knownCause?.id,
+  });
+  if (knownEvent !== undefined) {
+    signals.push(
+      signal(
+        `known-event-${knownEvent.eventId.toLowerCase()}`,
+        `knownEvent:${knownEvent.eventId}`,
+        5,
+        `Matched deterministic known event: ${knownEvent.label} (${knownEvent.matchReasons.join(", ")}).`,
+      ),
+    );
+  }
+
+  const classification = resolveClassification(
     input.ticket,
     signals,
     matches,
     knownCause?.knowledgeArticleIds ?? [],
   );
+  return {
+    ...classification,
+    knownCause: knownCause?.id ?? null,
+    knownEventId: knownEvent?.eventId ?? null,
+    knownEventMatchReasons: knownEvent?.matchReasons ?? [],
+  };
 }
 
 function ticketContent(ticket: Ticket): string {

@@ -156,6 +156,101 @@ describe("createApprovalDeskHttpServer", () => {
     ]);
   });
 
+  it("exposes the same specialist-review guidance as MCP reads", async () => {
+    const { deps, json } = await startFixture();
+    await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const current = (await deps.recommendations.list()).find(
+      (recommendation) => recommendation.ticketId === "TKT-1001",
+    );
+    expect(current).toBeDefined();
+    const escalation = {
+      ...current!,
+      id: "40000000-0000-4000-8000-000000000010",
+      supportState: "escalated" as const,
+      ticketStatus: "in-progress" as const,
+      team: "product" as const,
+      escalationRequired: true,
+      escalationReasons: ["diagnostic-ambiguity" as const],
+      resolution: "approved" as const,
+      createdAt: "2026-06-10T09:03:00.000Z",
+    };
+    await deps.recommendations.create(escalation);
+    await deps.audits.append(
+      AuditEventSchema.parse({
+        id: "40000000-0000-4000-8000-000000000011",
+        timestamp: "2026-06-10T09:03:00.000Z",
+        actor: "casey",
+        action: "recommendation-submitted",
+        ticketId: "TKT-1001",
+        recommendationId: escalation.id,
+        before: {},
+        after: {},
+        rationale: "Escalated recommendation submitted for approval.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+    await deps.audits.append(
+      AuditEventSchema.parse({
+        id: "40000000-0000-4000-8000-000000000012",
+        timestamp: "2026-06-10T09:04:00.000Z",
+        actor: "casey",
+        action: "customer-response-sent",
+        ticketId: "TKT-1001",
+        recommendationId: escalation.id,
+        before: {},
+        after: { sentAt: "2026-06-10T09:04:00.000Z" },
+        rationale: "Sent the approved specialist escalation response.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+    await deps.audits.append(
+      AuditEventSchema.parse({
+        id: "40000000-0000-4000-8000-000000000013",
+        timestamp: "2026-06-10T09:05:00.000Z",
+        actor: "casey",
+        action: "diagnostic-escalated",
+        ticketId: "TKT-1001",
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "likely",
+            owner: "engineering",
+            diagnosticState: {
+              state: "escalated",
+              diagnosticAttempts: 2,
+              escalationReason: "diagnostic-ambiguity",
+              specialistTeam: "product",
+              hypotheses: [],
+              evidenceToRequest: ["No further automated questions."],
+            },
+          },
+        },
+        rationale: "Escalated for specialist review.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+
+    const detail = await json("/api/tickets/TKT-1001");
+    expect(detail.body).toMatchObject({
+      latestRecommendation: {
+        supportState: "escalated",
+        team: "product",
+        ticketStatus: "in-progress",
+      },
+      operatorGuidance: {
+        stage: "escalated",
+        nextAction: "specialist-review",
+      },
+    });
+  });
+
   it("maps missing tickets to 404", async () => {
     const { json } = await startFixture();
 
@@ -514,9 +609,22 @@ describe("createApprovalDeskHttpServer", () => {
         actor: "matias-reviewer",
       }),
     });
-    await json("/api/tickets/TKT-1010/diagnosis", {
+    const likelyDiagnosis = await json("/api/tickets/TKT-1010/diagnosis", {
       method: "POST",
       body: JSON.stringify({ actor: "product-support" }),
+    });
+    expect(likelyDiagnosis.body.auditEvent.after.diagnosis).toMatchObject({
+      confidence: "likely",
+      diagnosticState: {
+        state: "ambiguous",
+        hypotheses: expect.arrayContaining([
+          expect.objectContaining({ id: "browser-session", status: "plausible" }),
+          expect.objectContaining({ id: "frontend-loading", status: "plausible" }),
+        ]),
+        evidenceToRequest: expect.arrayContaining([
+          expect.stringMatching(/private|incognito/i),
+        ]),
+      },
     });
 
     const afterDiagnosis = await json("/api/tickets/TKT-1010/recommendations", {

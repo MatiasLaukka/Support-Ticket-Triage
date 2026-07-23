@@ -13,6 +13,7 @@ import {
   EvidenceRequirementSchema,
   GptAssistSchema,
   IsoTimestampSchema,
+  KnownEventIdSchema,
   PrioritySchema,
   RequiredEscalationSchema,
   RiskSchema,
@@ -42,6 +43,10 @@ import {
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 import { evaluateEscalation, validateApprovedFields } from "./policy.js";
+import {
+  DiagnosticStateSnapshotSchema,
+  type DiagnosticStateSnapshot,
+} from "./approval-desk/diagnostic-state.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
@@ -66,6 +71,8 @@ const SubmitRecommendationInputSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     supportState: SupportStateSchema.optional(),
     knownCause: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).nullable().optional(),
+    knownEventId: KnownEventIdSchema.nullable().optional(),
+    knownEventMatchReasons: z.array(NonBlankStringSchema).optional(),
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),
@@ -168,6 +175,9 @@ const DiagnosisContextSchema = z
     ]),
     recommendedNextAction: NonBlankStringSchema,
     doNotSay: z.array(NonBlankStringSchema),
+    knownEventId: KnownEventIdSchema.optional(),
+    knownEventMatchReasons: z.array(NonBlankStringSchema).optional(),
+    diagnosticState: DiagnosticStateSnapshotSchema.optional(),
   })
   .strict();
 const FixContextSchema = z
@@ -227,6 +237,8 @@ export interface SubmitRecommendationInput {
   missingInformation: string[];
   supportState?: SupportState;
   knownCause?: string | null;
+  knownEventId?: string | null;
+  knownEventMatchReasons?: string[];
   requiredEvidence?: EvidenceRequirement[];
   providedEvidence?: EvidenceRequirement[];
   missingEvidence?: EvidenceRequirement[];
@@ -314,6 +326,9 @@ export interface DiagnosisContext {
   owner: "support" | "engineering" | "customer" | "integration-partner";
   recommendedNextAction: string;
   doNotSay: string[];
+  knownEventId?: string;
+  knownEventMatchReasons?: string[];
+  diagnosticState?: DiagnosticStateSnapshot;
 }
 
 export interface FixContext {
@@ -460,6 +475,12 @@ export class TriageService {
       ...(parsed.knownCause === undefined
         ? {}
         : { knownCause: parsed.knownCause }),
+      ...(parsed.knownEventId === undefined
+        ? {}
+        : { knownEventId: parsed.knownEventId }),
+      ...(parsed.knownEventMatchReasons === undefined
+        ? {}
+        : { knownEventMatchReasons: parsed.knownEventMatchReasons }),
       ...(parsed.requiredEvidence === undefined
         ? {}
         : { requiredEvidence: parsed.requiredEvidence }),
@@ -521,6 +542,12 @@ export class TriageService {
         category: recommendation.category,
         priority: recommendation.priority,
         team: recommendation.team,
+        ...(recommendation.knownEventId === undefined
+          ? {}
+          : { knownEventId: recommendation.knownEventId }),
+        ...(recommendation.knownEventMatchReasons === undefined
+          ? {}
+          : { knownEventMatchReasons: recommendation.knownEventMatchReasons }),
         escalationRequired: recommendation.escalationRequired,
         escalationReasons: recommendation.escalationReasons,
         classificationSignalCount:
@@ -700,18 +727,21 @@ export class TriageService {
   async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
     const diagnosis = RecordDiagnosisInputSchema.parse(input);
     await this.dependencies.tickets.get(diagnosis.ticketId);
+    const escalated = diagnosis.diagnosis.diagnosticState?.state === "escalated";
 
     const auditEvent = AuditEventSchema.parse({
       id: this.uuid(),
       timestamp: diagnosis.diagnosedAt,
       actor: diagnosis.actor,
-      action: "diagnosis-completed",
+      action: escalated ? "diagnostic-escalated" : "diagnosis-completed",
       ticketId: diagnosis.ticketId,
       before: {},
       after: {
         diagnosis: diagnosis.diagnosis,
       },
-      rationale: "Diagnosis completed from trusted support context.",
+      rationale: escalated
+        ? "Diagnosis reached a bounded ambiguity limit and was escalated for specialist review."
+        : "Diagnosis completed from trusted support context.",
       knowledgeArticleIds: diagnosis.knowledgeArticleIds,
       result: "success",
     });

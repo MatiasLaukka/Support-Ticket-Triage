@@ -13,6 +13,8 @@ import {
   TeamSchema,
   TicketIdSchema,
   type ExpectedOutcome,
+  type RequiredEscalation,
+  type Team,
   type Ticket,
 } from "../domain.js";
 import type { SubmitRecommendationInput } from "../triage-service.js";
@@ -129,6 +131,14 @@ export function buildApprovalDeskRecommendationInput(input: {
   }
 
   const escalationReasons = resolvedOutcome.requiredEscalations;
+  const diagnosticEscalation = escalationProjectionForDiagnosis(
+    ticket,
+    input.diagnosisContext,
+  );
+  const projectedEscalationReasons: RequiredEscalation[] = diagnosticEscalation === undefined
+    ? escalationReasons
+    : unique([...escalationReasons, ...diagnosticEscalation.reasons]) as RequiredEscalation[];
+  const projectedTeam = diagnosticEscalation?.team ?? resolvedOutcome.team;
   const knowledgeArticleIds = resolvedOutcome.knowledgeArticleIds;
   const lifecycle = analyzeCustomerReplyLifecycle({
     ticket,
@@ -158,6 +168,7 @@ export function buildApprovalDeskRecommendationInput(input: {
     replyStage: lifecycle.replyStage,
     diagnosisContext: input.diagnosisContext,
     fixContext: input.fixContext,
+    diagnosticEscalation,
   });
   const signedDraftCustomerResponse = ensureDraftSignOff(draftCustomerResponse, {
     actor,
@@ -195,17 +206,22 @@ export function buildApprovalDeskRecommendationInput(input: {
     sourceRevision: ticket.revision,
     category: resolvedOutcome.category,
     priority: resolvedOutcome.acceptablePriorities[0],
-    team: resolvedOutcome.team,
+    team: projectedTeam,
+    ...(diagnosticEscalation === undefined
+      ? {}
+      : { ticketStatus: "in-progress" as const }),
     tags: buildTags(ticket, resolvedOutcome),
     duplicateCandidates: [],
-    outageRisk: escalationReasons.includes("outage") ? "likely" : "none",
-    securityRisk: escalationReasons.includes("security") ? "possible" : "none",
-    slaRisk: escalationReasons.includes("sla") ? "likely" : "none",
+    outageRisk: projectedEscalationReasons.includes("outage") ? "likely" : "none",
+    securityRisk: projectedEscalationReasons.includes("security") ? "possible" : "none",
+    slaRisk: projectedEscalationReasons.includes("sla") ? "likely" : "none",
     missingInformation: evidenceReadiness.missingEvidence.map(
       (requirement) => requirement.customerQuestion,
     ),
-    supportState: evidenceReadiness.supportState,
+    supportState: diagnosticEscalation?.supportState ?? evidenceReadiness.supportState,
     knownCause: evidenceReadiness.knownCause,
+    knownEventId: evidenceReadiness.knownEventId,
+    knownEventMatchReasons: evidenceReadiness.knownEventMatchReasons,
     requiredEvidence: evidenceReadiness.requiredEvidence,
     providedEvidence: evidenceReadiness.providedEvidence,
     missingEvidence: evidenceReadiness.missingEvidence,
@@ -218,7 +234,7 @@ export function buildApprovalDeskRecommendationInput(input: {
     gptAssist: deterministicAssist,
     ...(classification === undefined
       ? {
-          rationale: `${ticket.id} matches expected ${resolvedOutcome.category} routing to ${resolvedOutcome.team} with knowledge ${knowledgeArticleIds.join(
+          rationale: `${ticket.id} matches expected ${resolvedOutcome.category} routing to ${projectedTeam} with knowledge ${knowledgeArticleIds.join(
             ", ",
           )}.`,
           confidence: 0.95,
@@ -226,13 +242,14 @@ export function buildApprovalDeskRecommendationInput(input: {
       : {
           classificationSignals: classification.signals,
           confidence: classification.confidence,
-          rationale: `${ticket.id} was classified by the deterministic classifier as ${resolvedOutcome.category} routing to ${resolvedOutcome.team} with knowledge ${resolvedOutcome.knowledgeArticleIds.join(
+          rationale: `${ticket.id} was classified by the deterministic classifier as ${resolvedOutcome.category} routing to ${projectedTeam} with knowledge ${resolvedOutcome.knowledgeArticleIds.join(
             ", ",
           )}.`,
         }),
-    recommendedNextAction: formatRecommendedNextAction(evidenceReadiness),
-    escalationRequired: escalationReasons.length > 0,
-    escalationReasons,
+    recommendedNextAction:
+      diagnosticEscalation?.nextAction ?? formatRecommendedNextAction(evidenceReadiness),
+    escalationRequired: projectedEscalationReasons.length > 0,
+    escalationReasons: projectedEscalationReasons,
     actor,
   };
 }
@@ -268,9 +285,14 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     customerReplies: input.customerReplies ?? [],
     previousSupportResponse: input.previousSupportResponse,
   });
+  const diagnosticEscalated =
+    input.diagnosisContext?.diagnosticState?.state === "escalated";
 
   const draft = await draftCustomerResponseWithFallback({
-    provider: input.safety?.detected ? undefined : input.draftProvider,
+    provider:
+      input.safety?.detected || diagnosticEscalated
+        ? undefined
+        : input.draftProvider,
     draftInput: {
       ticket: input.ticket,
       outcome: providerOutcome,
@@ -453,9 +475,13 @@ function buildDraftCustomerResponse(input: {
   replyStage: CustomerReplyStage;
   diagnosisContext?: DiagnosisContext;
   fixContext?: FixContext;
+  diagnosticEscalation?: DiagnosticEscalationProjection;
 }): string {
   const { ticket, knowledgeArticleIds, escalationReasons, evidenceReadiness } =
     input;
+  if (input.diagnosticEscalation !== undefined) {
+    return buildDiagnosticEscalationResponse(ticket, input.diagnosticEscalation);
+  }
   if (
     input.replyStage === "status-follow-up" &&
     input.fixContext !== undefined
@@ -566,6 +592,63 @@ function buildDraftCustomerResponse(input: {
       ? "We will compare the examples with the relevant account setup and share the next recommended action."
       : "Once we have those details, we will compare the examples with the relevant account setup and share the next recommended action.",
   });
+}
+
+type DiagnosticEscalationProjection = {
+  supportState: "escalated";
+  team: Team;
+  reasons: RequiredEscalation[];
+  nextAction: string;
+};
+
+function escalationProjectionForDiagnosis(
+  ticket: Ticket,
+  diagnosis: DiagnosisContext | undefined,
+): DiagnosticEscalationProjection | undefined {
+  if (diagnosis?.diagnosticState?.state !== "escalated") {
+    return undefined;
+  }
+
+  return {
+    supportState: "escalated",
+    team: diagnosis.diagnosticState.specialistTeam ?? teamForEscalation(ticket),
+    reasons: ["diagnostic-ambiguity"],
+    nextAction:
+      "Hand off to the specialist team, then share the next update after its review.",
+  };
+}
+
+function teamForEscalation(ticket: Ticket): Team {
+  const text = ticketText(ticket);
+  if (/campaign editor|frontend|blank page|not loading|browser/i.test(text)) {
+    return "product";
+  }
+  if (/integration|webhook|event|api|endpoint/i.test(text)) {
+    return "integrations";
+  }
+  return "support";
+}
+
+function buildDiagnosticEscalationResponse(
+  ticket: Ticket,
+  escalation: DiagnosticEscalationProjection,
+): string {
+  const specialistLabel = escalation.team === "integrations"
+    ? "integration"
+    : escalation.team === "product"
+      ? "product"
+      : escalation.team === "security"
+        ? "security"
+        : "specialist";
+  return [
+    `Hi ${ticket.customer.name},`,
+    "",
+    "I’m sorry this has taken longer than expected.",
+    "",
+    `We’ve escalated the reported issue to our ${specialistLabel} specialist team for a deeper review of the checks already completed.`,
+    "",
+    "You do not need to repeat those checks right now. We will share an update as soon as the specialist review determines the safest next step.",
+  ].join("\n");
 }
 
 function classifyResponseStyle(
@@ -953,7 +1036,9 @@ function analyzeCustomerReplyLifecycle(input: {
     return {
       evidenceReadiness: withLifecycleSupportState(
         evidenceBeforeReplies,
-        requiresMoreCustomerEvidence(evidenceBeforeReplies)
+        evidenceBeforeReplies.supportState === "waiting-on-platform-fix"
+          ? evidenceBeforeReplies.supportState
+          : requiresMoreCustomerEvidence(evidenceBeforeReplies)
           ? "needs-information"
           : evidenceBeforeReplies.supportState,
       ),

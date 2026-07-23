@@ -41,9 +41,19 @@ import {
   buildConversationHistory,
   buildConversationTimeline,
 } from "./conversation-history.js";
-import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
-import { getKnownCause } from "./known-cause-catalog.js";
+import {
+  diagnosisContextForTicket,
+  fixContextForTicket,
+} from "./diagnostic-workflow.js";
+import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
+import {
+  buildOperatorGuidance,
+  closeBlockers,
+  diagnosisBlockers,
+  fixBlockers,
+  latestDiagnosisAudit,
+} from "./workflow-guidance.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -395,6 +405,11 @@ async function getTicketDetail(
     recommendationHistory: recommendation.history,
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
+    operatorGuidance: buildOperatorGuidance({
+      ticket,
+      recommendations,
+      audits: ticketAudits,
+    }),
   };
 }
 
@@ -548,22 +563,6 @@ function latestCurrentRecommendation(
     .sort(compareRecommendationsNewestFirst(audits))[0];
 }
 
-function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(
-      ({ event }) =>
-        event.action === "diagnosis-completed" &&
-        typeof event.after.diagnosis === "object" &&
-        event.after.diagnosis !== null,
-    )
-    .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
-    )[0]?.event;
-}
-
 function latestDiagnosisContext(
   audits: readonly AuditEvent[],
 ): DiagnosisContext | undefined {
@@ -684,6 +683,13 @@ function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
     doNotSay: context.doNotSay.filter(
       (item): item is string => typeof item === "string",
     ),
+    ...(DiagnosticStateSnapshotSchema.safeParse(context.diagnosticState).success
+      ? {
+          diagnosticState: DiagnosticStateSnapshotSchema.parse(
+            context.diagnosticState,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -705,150 +711,6 @@ function parseFixContext(value: unknown): FixContext | undefined {
     customerSafeSummary: context.customerSafeSummary,
     customerAction: context.customerAction,
     verificationRequest: context.verificationRequest,
-  };
-}
-
-function diagnosisContextForTicket(
-  ticket: Ticket,
-  recommendation: TriageRecommendation,
-  audits: readonly AuditEvent[] = [],
-): DiagnosisContext {
-  const playbookDiagnosis = diagnoseFromPlaybook({
-    ticket,
-    recommendation,
-    customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
-  });
-  if (playbookDiagnosis !== undefined) {
-    return playbookDiagnosis;
-  }
-
-  if (
-    recommendation.supportState === "known-cause" &&
-    recommendation.knownCause !== undefined &&
-    recommendation.knownCause !== null
-  ) {
-    const knownCause = getKnownCause(recommendation.knownCause);
-    if (knownCause !== undefined) {
-      return {
-        status: "completed",
-        causeType: recommendation.category === "integration" ? "integration" : "configuration",
-        customerSafeSummary: knownCause.problemSummary,
-        evidenceUsed: providedEvidenceLabels(recommendation, knownCause.label),
-        confidence: "confirmed",
-        owner: recommendation.team === "integrations" ? "integration-partner" : "support",
-        recommendedNextAction: knownCause.nextStep,
-        doNotSay: [
-          "Do not ask for unrelated diagnostics after a known cause is confirmed.",
-        ],
-      };
-    }
-  }
-
-  if (recommendation.supportState === "waiting-on-platform-fix") {
-    return {
-      status: "completed",
-      causeType: "platform-delay",
-      customerSafeSummary:
-        "The evidence points to a platform-side processing delay affecting checkout event processing and profile timeline updates.",
-      evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
-      confidence: "likely",
-      owner: "engineering",
-      recommendedNextAction:
-        "Complete platform mitigation before asking the customer to verify the affected examples.",
-      doNotSay: ["Do not claim a final root cause until mitigation is available."],
-    };
-  }
-
-  return {
-    status: "completed",
-    causeType: recommendation.category === "security" ? "security" : "configuration",
-    customerSafeSummary:
-      "The support team has completed the investigation and identified the most likely cause from the provided evidence.",
-    evidenceUsed: providedEvidenceLabels(
-      recommendation,
-      recommendation.knownCause === undefined || recommendation.knownCause === null
-        ? "provided customer evidence"
-        : "known cause match",
-    ),
-    confidence: "likely",
-    owner: recommendation.category === "integration" ? "integration-partner" : "support",
-    recommendedNextAction:
-      "Share the diagnosis with the customer and explain the next safe action.",
-    doNotSay: ["Do not claim a fix until a fix event is recorded."],
-  };
-}
-
-function providedEvidenceLabels(
-  recommendation: TriageRecommendation,
-  fallback: string,
-): string[] {
-  const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
-  return labels.length > 0 ? labels : [fallback];
-}
-
-function customerReplyTextFromAudits(
-  ticketId: string,
-  audits: readonly AuditEvent[],
-): string {
-  return audits
-    .filter(
-      (event) =>
-        event.ticketId === ticketId &&
-        event.action === "customer-reply-received" &&
-        typeof event.after.body === "string",
-    )
-    .map((event) => event.after.body as string)
-    .join("\n\n");
-}
-
-function fixContextForTicket(
-  ticket: Ticket,
-  diagnosisEvent: AuditEvent,
-): FixContext {
-  if (ticket.id === "TKT-1010") {
-    return {
-      status: "available",
-      customerSafeSummary:
-        "The campaign editor loading mitigation has been applied for the affected campaign.",
-      customerAction:
-        "Please reopen the Summer Flash Sale campaign editor in Chrome and try editing the campaign again.",
-      verificationRequest:
-        "Let us know whether the editor now loads normally or if the blank page still appears.",
-    };
-  }
-
-  if (
-    typeof diagnosisEvent.after.diagnosis === "object" &&
-    diagnosisEvent.after.diagnosis !== null &&
-    "causeType" in diagnosisEvent.after.diagnosis &&
-    diagnosisEvent.after.diagnosis.causeType === "platform-delay"
-  ) {
-    return {
-      status: "available",
-      customerSafeSummary:
-        "The event-processing delay mitigation has been applied for the affected store events.",
-      customerAction:
-        "Please check the affected profile timelines again using the same store URL, profile, and event example you shared with us.",
-      verificationRequest:
-        "Let us know whether the delayed checkout events now appear correctly or if any examples are still missing.",
-    };
-  }
-
-  const diagnosis =
-    typeof diagnosisEvent.after.diagnosis === "object" &&
-    diagnosisEvent.after.diagnosis !== null &&
-    "customerSafeSummary" in diagnosisEvent.after.diagnosis &&
-    typeof diagnosisEvent.after.diagnosis.customerSafeSummary === "string"
-      ? diagnosisEvent.after.diagnosis.customerSafeSummary
-      : "the diagnosed issue";
-
-  return {
-    status: "available",
-    customerSafeSummary: `A fix or mitigation is now available for ${diagnosis}`,
-    customerAction:
-      "Please retry the affected workflow using the same example you shared with us.",
-    verificationRequest:
-      "Let us know whether the issue is resolved or if you still see the same behavior.",
   };
 }
 
@@ -1016,44 +878,24 @@ async function recordDiagnosis(
     deps.recommendations.list(),
   ]);
   const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
-  if (latest === undefined) {
-    throw invalidRequest("A completed evaluation is required before diagnosis.");
+  const [diagnosisBlocker] = diagnosisBlockers({
+    recommendation: latest,
+    audits,
+  });
+  if (diagnosisBlocker !== undefined) {
+    throw invalidRequest(diagnosisBlocker);
   }
-  const knownCauseReady = latest.supportState === "known-cause";
-  if (!knownCauseReady && (latest.missingEvidence?.length ?? 0) > 0) {
-    throw invalidRequest("Diagnosis requires all required evidence to be gathered.");
-  }
-  if (
-    !knownCauseReady &&
-    !["diagnosing", "waiting-on-platform-fix"].includes(latest.supportState ?? "")
-  ) {
-    throw invalidRequest("Diagnosis requires a diagnosis-ready ticket state.");
-  }
-  const sentAt = latestSentAtForRecommendation(audits, latest.id);
-  if (sentAt === undefined) {
-    throw invalidRequest("The evaluated response must be marked done before diagnosis.");
-  }
-  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
-  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
-    throw invalidRequest("Evaluate the latest customer reply before diagnosis.");
-  }
-  const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
-  if (
-    latestDiagnosisAt !== undefined &&
-    (latestReplyAt === undefined || latestDiagnosisAt > latestReplyAt)
-  ) {
-    throw invalidRequest("Diagnosis has already been recorded for the latest context.");
-  }
+  const diagnosisContext = diagnosisContextForTicket(ticket, latest!, audits);
 
   return {
     auditEvent: await deps.service.recordDiagnosis({
       ticketId,
       actor: body.actor,
       diagnosedAt: deps.now().toISOString(),
-      diagnosis: diagnosisContextForTicket(ticket, latest, audits),
-      knowledgeArticleIds: latest.knowledgeArticleIds.length > 0
-        ? latest.knowledgeArticleIds
-        : [latest.knownCause ?? "known-cause"],
+      diagnosis: diagnosisContext,
+      knowledgeArticleIds: latest!.knowledgeArticleIds.length > 0
+        ? latest!.knowledgeArticleIds
+        : [latest!.knownCause ?? "known-cause"],
     }),
   };
 }
@@ -1069,29 +911,11 @@ async function recordFix(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const latestDiagnosis = latestDiagnosisAudit(audits);
-  if (latestDiagnosis === undefined) {
-    throw invalidRequest("A completed diagnosis is required before marking a fix available.");
+  const [fixBlocker] = fixBlockers({ audits });
+  if (fixBlocker !== undefined) {
+    throw invalidRequest(fixBlocker);
   }
-  const diagnosisContext = parseDiagnosisContext(latestDiagnosis.after.diagnosis);
-  if (diagnosisContext?.confidence !== "confirmed") {
-    throw invalidRequest("A confirmed diagnosis is required before marking a fix available.");
-  }
-  if (!["engineering", "integration-partner"].includes(diagnosisContext.owner)) {
-    throw invalidRequest("This confirmed diagnosis does not require a platform fix.");
-  }
-  const latestFixAt = latestAuditTimestamp(audits, "fix-available");
-  if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
-    throw invalidRequest("A fix has already been recorded for the latest diagnosis.");
-  }
-  const sentAt = latestAuditTimestamp(audits, "customer-response-sent");
-  if (sentAt === undefined || sentAt < latestDiagnosis.timestamp) {
-    throw invalidRequest("Send the diagnosis response before marking a fix available.");
-  }
-  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
-  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
-    throw invalidRequest("Evaluate the latest customer reply before marking a fix available.");
-  }
+  const latestDiagnosis = latestDiagnosisAudit(audits)!;
   const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
 
   return {
@@ -1116,26 +940,19 @@ async function closeTicket(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  if (ticket.status === "resolved") {
-    throw invalidRequest("Ticket is already closed.");
-  }
-
   const summary = summarizeRecommendationsForTicket(
     ticket,
     recommendations,
     audits,
   );
   const latest = summary.latest;
-  if (latest?.supportState !== "ready-for-close") {
-    throw invalidRequest(
-      "Ticket must have a ready-to-close recommendation before it can be closed.",
-    );
-  }
-  const sentAt = latestSentAtForRecommendation(audits, latest.id);
-  if (sentAt === undefined) {
-    throw invalidRequest(
-      "The ready-to-close response must be marked done before the ticket can be closed.",
-    );
+  const [closeBlocker] = closeBlockers({
+    ticket,
+    recommendation: latest,
+    audits,
+  });
+  if (closeBlocker !== undefined) {
+    throw invalidRequest(closeBlocker);
   }
 
   const closedAt = deps.now().toISOString();
@@ -1155,7 +972,7 @@ async function closeTicket(
           actor: body.actor,
           action: "ticket-updated",
           ticketId,
-          recommendationId: latest.id,
+          recommendationId: latest!.id,
           before: {
             status: previousTicket.status,
             revision: previousTicket.revision,
@@ -1167,7 +984,7 @@ async function closeTicket(
           },
           rationale:
             "Ticket closed after the customer confirmed resolution and the closing response was sent.",
-          knowledgeArticleIds: latest.knowledgeArticleIds,
+          knowledgeArticleIds: latest!.knowledgeArticleIds,
           result: "success",
         });
         await deps.audits.append(event);

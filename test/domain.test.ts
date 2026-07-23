@@ -846,6 +846,37 @@ describe("domain contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts diagnostic ambiguity escalation records", () => {
+    expect(RequiredEscalationSchema.parse("diagnostic-ambiguity")).toBe(
+      "diagnostic-ambiguity",
+    );
+    expect(
+      TriageRecommendationSchema.parse({
+        ...recommendation,
+        supportState: "escalated",
+        escalationRequired: true,
+        escalationReasons: ["diagnostic-ambiguity"],
+      }),
+    ).toMatchObject({
+      supportState: "escalated",
+      escalationReasons: ["diagnostic-ambiguity"],
+    });
+    expect(
+      AuditEventSchema.parse({
+        id: "d61bba15-41f4-495b-a794-93696343cc9e",
+        timestamp: "2026-06-10T08:36:00.000Z",
+        actor: "product-support",
+        action: "diagnostic-escalated",
+        ticketId: "TKT-1001",
+        before: {},
+        after: { diagnosticState: { state: "escalated" } },
+        rationale: "Diagnostic ambiguity requires specialist review.",
+        knowledgeArticleIds: ["api-outage-response"],
+        result: "success",
+      }),
+    ).toMatchObject({ action: "diagnostic-escalated" });
+  });
+
   it.each([
     ["ticket createdAt", { ...ticket, createdAt: "2026-06-10T08:00:00" }],
     ["ticket updatedAt", { ...ticket, updatedAt: "2026-06-10T08:30:00" }],

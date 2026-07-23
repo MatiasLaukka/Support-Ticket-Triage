@@ -5,6 +5,7 @@ const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 export const IsoTimestampSchema = z.iso.datetime({ offset: true });
 export const TicketIdSchema = z.string().regex(/^TKT-\d{4}$/);
+export const KnownEventIdSchema = z.string().regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/);
 
 export const CategorySchema = z.enum([
   "account-access",
@@ -111,6 +112,7 @@ export const RequiredEscalationSchema = z.enum([
   "low-confidence",
   "sla",
   "missing-information",
+  "diagnostic-ambiguity",
   "policy-conflict",
 ]);
 
@@ -119,6 +121,7 @@ export const SupportStateSchema = z.enum([
   "information-received",
   "diagnosing",
   "known-cause",
+  "escalated",
   "no-known-cause",
   "waiting-on-platform-fix",
   "waiting-on-customer-action",
@@ -386,6 +389,8 @@ export const TriageRecommendationSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     supportState: SupportStateSchema.optional(),
     knownCause: SlugSchema.nullable().optional(),
+    knownEventId: KnownEventIdSchema.nullable().optional(),
+    knownEventMatchReasons: UniqueNonBlankStringsSchema.optional(),
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),
@@ -511,10 +516,11 @@ export const AuditActionSchema = z.enum([
   "recommendation-rejected",
   "recommendation-canceled",
   "recommendation-superseded",
-  "customer-response-sent",
-  "customer-reply-received",
-  "diagnosis-completed",
-  "fix-available",
+    "customer-response-sent",
+    "customer-reply-received",
+    "diagnosis-completed",
+    "diagnostic-escalated",
+    "fix-available",
   "ticket-updated",
   "approval-rejected",
 ]);

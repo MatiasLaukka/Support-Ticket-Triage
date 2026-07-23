@@ -38,7 +38,9 @@ import {
 
 const TICKET_ID = "TKT-1010" as const;
 const ACTOR = "portfolio-reviewer";
-const MAX_TRANSITIONS = 20;
+// Keep the showcase bounded while allowing the full evidence/approval cycle,
+// including the final read that confirms the close transition.
+const MAX_TRANSITIONS = 24;
 const SHOWCASE_START = Date.parse("2026-06-10T10:00:00.000Z");
 
 export type SkillShowcaseMode = "controlled" | "deterministic" | "live";

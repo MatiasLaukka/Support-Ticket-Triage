@@ -145,10 +145,11 @@ describe("repository-local support ticket triage Skill", () => {
     expect(body).toMatch(/classification trace/i);
     expect(body).toMatch(/drafting trace/i);
     expect(body).toMatch(/deterministic (?:decision|outcome).*GPT advice/is);
-    expect(body).toMatch(/GPT.*(?:next step|investigation).*advisory.*(?:never|not).*instruction/is);
+    expect(body).toMatch(/backend workflow guidance.*only operational instruction/is);
+    expect(body).toMatch(/ignore GPT-generated next-step and investigation text entirely/i);
     expect(body).toMatch(/operatorGuidance\.nextAction.*authoritative/is);
+    expect(body).toMatch(/specialist-review.*stop autonomous/i);
     expect(body).toMatch(/after each customer reply.*get_ticket_workflow.*evaluate_ticket/is);
-    expect(body).toMatch(/do not.*present.*GPT.*(?:next step|suggestion).*as.*instruction/is);
     expect(body).toContain("Customer next step");
     expect(body).toContain("Your next step");
     expect(body).toMatch(
@@ -211,7 +212,7 @@ describe("repository-local support ticket triage Skill", () => {
       /never.*raw prompts.*API keys.*provider payloads/is,
     );
     expect(reference).toMatch(/Customer next step.*Your next step/is);
-    expect(reference).toMatch(/GPT.*next step.*advisory.*(?:never|not).*instruction/is);
+    expect(reference).toMatch(/ignore GPT-generated next steps.*do not repeat.*choose an action/is);
     expect(reference).toMatch(/operatorGuidance\.nextAction.*authoritative/is);
   });
 

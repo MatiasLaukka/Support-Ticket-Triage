@@ -792,6 +792,46 @@ describe("createTriageServer action protocol", () => {
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(before);
   });
 
+  it("records an explicit diagnostic-escalated audit action", async () => {
+    const fixture = await createFixture();
+
+    const event = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "product-support",
+      diagnosedAt: "2026-06-10T09:03:00.000Z",
+      diagnosis: diagnosisContext({
+        confidence: "likely",
+        diagnosticState: {
+          state: "escalated",
+          diagnosticAttempts: 2,
+          escalationReason: "diagnostic-ambiguity",
+          specialistTeam: "product",
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser/session issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Private window works"],
+            },
+            {
+              id: "frontend-loading",
+              label: "Frontend loading issue",
+              status: "plausible",
+              evidenceUsed: ["blank editor"],
+              evidenceToConfirm: ["Console error persists"],
+            },
+          ],
+          evidenceToRequest: ["No further automated questions."],
+        },
+      }),
+      knowledgeArticleIds: [],
+    });
+
+    expect(event.action).toBe("diagnostic-escalated");
+    expect(event.rationale).toContain("specialist");
+  });
+
   it("rejects duplicate submission tags during MCP input validation", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
@@ -1539,6 +1579,99 @@ describe("createTriageServer action protocol", () => {
     );
   });
 
+  it("uses the shared diagnostic playbook for MCP diagnosis", async () => {
+    const fixture = await createFixture(
+      makeTicket({
+        id: "TKT-2010",
+        subject: "Problem",
+        description: "It does not work.",
+      }),
+    );
+    await fixture.service.addCustomerReply({
+      ticketId: "TKT-2010",
+      actor: "Jamie Lee",
+      body:
+        "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
+      receivedAt: "2026-06-10T09:50:00.000Z",
+      source: "manual",
+    });
+    const recommendation = await fixture.service.submit({
+      ...makeSubmitInput({
+        ticketId: "TKT-2010",
+        category: "performance",
+        priority: "P3",
+        team: "product",
+        outageRisk: "none",
+        securityRisk: "none",
+        slaRisk: "none",
+        supportState: "diagnosing",
+        missingInformation: [],
+        requiredEvidence: [],
+        providedEvidence: [],
+        missingEvidence: [],
+        knowledgeArticleIds: ["performance-troubleshooting"],
+        draftCustomerResponse: "We are investigating the campaign editor.",
+        actor: "approval-desk",
+      }),
+      submittedAt: now.toISOString(),
+    });
+    await fixture.service.approve({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-2010",
+      expectedRevision: 2,
+      approvedFields: ["team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "casey",
+      confirm: true,
+      approvedAt: now.toISOString(),
+    });
+    await fixture.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-2010",
+      actor: "casey",
+      sentAt: now.toISOString(),
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+
+    const diagnosis = await callTool(
+      await connect(fixture),
+      "record_diagnosis",
+      { ticketId: "TKT-2010", actor: "product-support" },
+    );
+    const fix = await callTool(await connect(fixture), "mark_fix_available", {
+      ticketId: "TKT-2010",
+      actor: "product-support",
+    });
+
+    expect(diagnosis.isError).not.toBe(true);
+    expect(diagnosis.structuredContent).toMatchObject({
+      auditEvent: {
+        action: "diagnosis-completed",
+        after: {
+          diagnosis: {
+            causeType: "performance",
+            confidence: "confirmed",
+            owner: "engineering",
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(diagnosis.structuredContent)).toContain(
+      "frontend loading issue",
+    );
+    expect(fix.isError).not.toBe(true);
+    expect(fix.structuredContent).toMatchObject({
+      auditEvent: {
+        after: {
+          fix: {
+            customerSafeSummary:
+              "The campaign editor loading mitigation has been applied for the affected campaign.",
+          },
+        },
+      },
+    });
+  });
+
   it("records diagnosis and fix lifecycle events through operator tools", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
@@ -1554,6 +1687,13 @@ describe("createTriageServer action protocol", () => {
         submittedAt: now.toISOString(),
       },
     );
+    await fixture.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body:
+        "This affects multiple EU stores. The tracking calls were accepted successfully by the API, but the checkout events are still missing from the profile timelines.",
+      receivedAt: "2026-06-10T09:59:00.000Z",
+    });
     await fixture.service.approve({
       recommendationId: recommendation.id,
       ticketId: "TKT-1001",

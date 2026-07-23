@@ -6,12 +6,18 @@ import type {
 } from "../domain.js";
 import { extractAccountFacts, type AccountFacts } from "./account-facts.js";
 import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
+import {
+  detectKnownEvent,
+  type KnownEventStatus,
+} from "./known-event-catalog.js";
 
 type EvidenceSource = EvidenceRequirement["source"];
 
 export interface EvidenceReadiness {
   supportState: SupportState;
   knownCause?: string | null;
+  knownEventId?: string | null;
+  knownEventMatchReasons?: string[];
   requiredEvidence: EvidenceRequirement[];
   providedEvidence: EvidenceRequirement[];
   missingEvidence: EvidenceRequirement[];
@@ -473,6 +479,10 @@ export function analyzeEvidenceReadiness(input: {
 }): EvidenceReadiness {
   const knownCauseDefinition = detectKnownCause(input);
   const knownCause = knownCauseDefinition?.id ?? null;
+  const knownEvent = detectKnownEvent({
+    ticket: input.ticket,
+    knownCause,
+  });
   const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =
     knownCauseDefinition !== undefined
@@ -493,15 +503,19 @@ export function analyzeEvidenceReadiness(input: {
   return {
     supportState: chooseSupportState({
       knownCause,
+      knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
     knownCause,
+    knownEventId: knownEvent?.eventId ?? null,
+    knownEventMatchReasons: knownEvent?.matchReasons ?? [],
     requiredEvidence,
     providedEvidence,
     missingEvidence,
     nextInvestigationSteps: buildNextInvestigationSteps({
       knownCause,
+      knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
@@ -620,9 +634,16 @@ function evidenceRequirement(id: string, source: EvidenceSource): EvidenceRequir
 
 function chooseSupportState(input: {
   knownCause: string | null;
+  knownEventStatus: KnownEventStatus | null;
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): SupportState {
+  if (input.knownEventStatus === "active") {
+    return "waiting-on-platform-fix";
+  }
+  if (input.knownEventStatus === "investigating") {
+    return "diagnosing";
+  }
   if (input.knownCause !== null) {
     return "known-cause";
   }
@@ -637,9 +658,22 @@ function chooseSupportState(input: {
 
 function buildNextInvestigationSteps(input: {
   knownCause: string | null;
+  knownEventStatus: KnownEventStatus | null;
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): string[] {
+  if (input.knownEventStatus === "active") {
+    return [
+      "Continue platform-impact review and share the next customer update after mitigation status changes.",
+      "Compare the affected delivery timestamps against the known event window before requesting unrelated diagnostics.",
+    ];
+  }
+  if (input.knownEventStatus === "investigating") {
+    return [
+      "Keep the ticket in diagnostic review until the possible event is confirmed or ruled out.",
+      "Collect only evidence that distinguishes the event window from a customer-specific configuration issue.",
+    ];
+  }
   const knownCause = getKnownCause(input.knownCause);
   if (knownCause !== undefined) {
     return [...knownCause.investigationSteps];
