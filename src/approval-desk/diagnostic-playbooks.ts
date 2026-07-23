@@ -14,10 +14,7 @@ export function diagnoseFromPlaybook(input: {
       return eventProcessingDiagnosis;
     }
   }
-  if (
-    input.ticket.id === "TKT-1010" ||
-    input.recommendation.knowledgeArticleIds.includes("performance-troubleshooting")
-  ) {
+  if (input.recommendation.knowledgeArticleIds.includes("performance-troubleshooting")) {
     return diagnoseCampaignEditorLoading(input.customerReplyText);
   }
   return undefined;

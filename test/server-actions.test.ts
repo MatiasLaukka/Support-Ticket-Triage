@@ -1542,13 +1542,13 @@ describe("createTriageServer action protocol", () => {
   it("uses the shared diagnostic playbook for MCP diagnosis", async () => {
     const fixture = await createFixture(
       makeTicket({
-        id: "TKT-1010",
+        id: "TKT-2010",
         subject: "Problem",
         description: "It does not work.",
       }),
     );
     await fixture.service.addCustomerReply({
-      ticketId: "TKT-1010",
+      ticketId: "TKT-2010",
       actor: "Jamie Lee",
       body:
         "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign. The campaign editor is still blank for all of us. The browser console shows ChunkLoadError.",
@@ -1557,7 +1557,7 @@ describe("createTriageServer action protocol", () => {
     });
     const recommendation = await fixture.service.submit({
       ...makeSubmitInput({
-        ticketId: "TKT-1010",
+        ticketId: "TKT-2010",
         category: "performance",
         priority: "P3",
         team: "product",
@@ -1577,7 +1577,7 @@ describe("createTriageServer action protocol", () => {
     });
     await fixture.service.approve({
       recommendationId: recommendation.id,
-      ticketId: "TKT-1010",
+      ticketId: "TKT-2010",
       expectedRevision: 2,
       approvedFields: ["team", "customerResponse"],
       editedCustomerResponse: recommendation.draftCustomerResponse,
@@ -1587,7 +1587,7 @@ describe("createTriageServer action protocol", () => {
     });
     await fixture.service.markResponseSent({
       recommendationId: recommendation.id,
-      ticketId: "TKT-1010",
+      ticketId: "TKT-2010",
       actor: "casey",
       sentAt: now.toISOString(),
       customerResponse: recommendation.draftCustomerResponse,
@@ -1596,8 +1596,12 @@ describe("createTriageServer action protocol", () => {
     const diagnosis = await callTool(
       await connect(fixture),
       "record_diagnosis",
-      { ticketId: "TKT-1010", actor: "product-support" },
+      { ticketId: "TKT-2010", actor: "product-support" },
     );
+    const fix = await callTool(await connect(fixture), "mark_fix_available", {
+      ticketId: "TKT-2010",
+      actor: "product-support",
+    });
 
     expect(diagnosis.isError).not.toBe(true);
     expect(diagnosis.structuredContent).toMatchObject({
@@ -1615,6 +1619,17 @@ describe("createTriageServer action protocol", () => {
     expect(JSON.stringify(diagnosis.structuredContent)).toContain(
       "frontend loading issue",
     );
+    expect(fix.isError).not.toBe(true);
+    expect(fix.structuredContent).toMatchObject({
+      auditEvent: {
+        after: {
+          fix: {
+            customerSafeSummary:
+              "The campaign editor loading mitigation has been applied for the affected campaign.",
+          },
+        },
+      },
+    });
   });
 
   it("records diagnosis and fix lifecycle events through operator tools", async () => {

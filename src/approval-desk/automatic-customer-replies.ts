@@ -38,7 +38,7 @@ export function automaticReplyForTicket(input: {
 }
 
 function automaticResolvedReply(ticket: Ticket): string {
-  if (ticket.id === "TKT-1010") {
+  if (/\bcampaign editor\b/i.test(ticketText(ticket))) {
     return "It works now. The campaign editor loads normally again. Thanks for the help!";
   }
   return "It works now. Thanks for the help!";
@@ -73,7 +73,7 @@ function automaticDiagnosticFollowUpReply(input: {
     return undefined;
   }
 
-  if (input.ticket.id === "TKT-1010") {
+  if (isCampaignEditorRecommendation(input)) {
     return [
       "I tried a private window, Microsoft Edge, and asked another admin to open the same campaign.",
       "The editor is still blank for all of us.",
@@ -82,6 +82,18 @@ function automaticDiagnosticFollowUpReply(input: {
   }
 
   return undefined;
+}
+
+function isCampaignEditorRecommendation(input: {
+  ticket: Ticket;
+  recommendation: TriageRecommendation;
+}): boolean {
+  return (
+    input.recommendation.category === "performance" &&
+    input.recommendation.team === "product" &&
+    (input.recommendation.knowledgeArticleIds.includes("performance-troubleshooting") ||
+      /\bcampaign editor\b/i.test(ticketText(input.ticket)))
+  );
 }
 
 function automaticEvidenceReply(input: {

@@ -77,7 +77,8 @@ export function fixContextForTicket(
   ticket: Ticket,
   diagnosisEvent: AuditEvent,
 ): FixContext {
-  if (ticket.id === "TKT-1010") {
+  const diagnosis = diagnosisFromAudit(diagnosisEvent);
+  if (isCampaignEditorDiagnosis(diagnosis)) {
     return {
       status: "available",
       customerSafeSummary:
@@ -106,22 +107,36 @@ export function fixContextForTicket(
     };
   }
 
-  const diagnosis =
-    typeof diagnosisEvent.after.diagnosis === "object" &&
-    diagnosisEvent.after.diagnosis !== null &&
-    "customerSafeSummary" in diagnosisEvent.after.diagnosis &&
-    typeof diagnosisEvent.after.diagnosis.customerSafeSummary === "string"
-      ? diagnosisEvent.after.diagnosis.customerSafeSummary
+  const diagnosisSummary =
+    diagnosis !== undefined && typeof diagnosis.customerSafeSummary === "string"
+      ? diagnosis.customerSafeSummary
       : "the diagnosed issue";
 
   return {
     status: "available",
-    customerSafeSummary: `A fix or mitigation is now available for ${diagnosis}`,
+    customerSafeSummary: `A fix or mitigation is now available for ${diagnosisSummary}`,
     customerAction:
       "Please retry the affected workflow using the same example you shared with us.",
     verificationRequest:
       "Let us know whether the issue is resolved or if you still see the same behavior.",
   };
+}
+
+function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {
+  return typeof event.after.diagnosis === "object" && event.after.diagnosis !== null
+    ? event.after.diagnosis as Record<string, unknown>
+    : undefined;
+}
+
+function isCampaignEditorDiagnosis(
+  diagnosis: Record<string, unknown> | undefined,
+): boolean {
+  return (
+    diagnosis?.causeType === "performance" &&
+    diagnosis?.owner === "engineering" &&
+    typeof diagnosis.customerSafeSummary === "string" &&
+    /\bcampaign editor\b/i.test(diagnosis.customerSafeSummary)
+  );
 }
 
 function providedEvidenceLabels(
