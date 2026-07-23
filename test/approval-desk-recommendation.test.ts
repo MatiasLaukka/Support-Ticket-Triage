@@ -96,6 +96,30 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
+  it("persists a known event link alongside the known cause", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1028");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1028")!,
+      actor: "approval-desk",
+    });
+
+    expect(input).toMatchObject({
+      knownCause: "webhook-delivery-latency",
+      knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      knownEventMatchReasons: expect.arrayContaining([
+        "known-cause",
+        "service",
+        "symptom",
+        "time-window",
+      ]),
+    });
+  });
+
   it("treats confirmed but ambiguous diagnosis context as diagnostic narrowing", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

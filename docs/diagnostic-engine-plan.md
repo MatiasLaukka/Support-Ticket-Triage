@@ -14,7 +14,9 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Complete first increment: Skill wording now treats backend workflow guidance as the only operational instruction (`d3ab333`; official validator passes).
 - Complete increment: the shared workflow authority now uses persisted diagnostic state to block ambiguous fixes, requires the approved diagnosis response before fix availability, and surfaces targeted evidence requests to both UI and MCP read models.
 - Complete increment: bounded diagnostic ambiguity escalation is enforced with deterministic specialist routing, explicit escalation audits, safe customer messaging, and shared UI/MCP gates.
-- Next: add the risk-sensitive multi-turn evaluation harness.
+- Complete increment: bounded deterministic known-event correlation links in-window tickets to local, auditable incident records without changing the shared diagnostic authority.
+- Complete increment: the broad deterministic multi-turn evaluation harness covers ordinary triage, known causes/events, evidence, ambiguity, escalation, fixes, stale replies, and adversarial text.
+- Next: review the workflow/read model and portfolio presentation using the harness results.
 
 ## Current audit
 
@@ -28,6 +30,7 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Close actions require a `ready-for-close` recommendation and an explicitly approved/sent closing response.
 - Approval is a hard boundary in both HTTP and MCP paths. Only explicitly approved fields can be applied or sent.
 - Prompt-injection detection is a deterministic preflight. GPT classification/drafting is skipped for affected tickets, the operator/audit warning is retained, and the customer response does not expose the internal detection.
+- Known causes and known events are separate concepts. The deterministic event catalog links only scoped, time-bounded service symptoms to an active, investigating, or resolved event; recommendations persist the event ID and match reasons for operator/audit use.
 - HTTP and MCP now call the same shared `diagnosisContextForTicket`, `fixContextForTicket`, `latestDiagnosisAudit`, operator-guidance, and gate functions. MCP passes the accumulated customer-reply audits into diagnosis. Escalated recommendations remain `in-progress`, carry `supportState: "escalated"`, route deterministically to a specialist team, and wait at `specialist-review` after the approved response is sent.
 
 ### Partially enforced
@@ -107,13 +110,24 @@ Verification:
 - Run the official Skill validator.
 - Run the existing skill evaluation and inspect the captured customer responses, operator guidance, audit fields, stale-context blockers, and approval stops.
 
-### Phase 4 — Multi-turn diagnostic evaluation harness (next)
+### Phase 4 — Bounded known-event correlation (complete)
 
-Build a deterministic evaluation harness around diagnostic families rather than around one fixture. Scenarios must cover vague-to-evidence, partial evidence, misleading/contradictory evidence, the now-enforced specialist escalation handoff, failed fixes, customer confirmation, stale recommendations, and adversarial text. Simulated customer replies may reveal hidden evidence only in response to the active diagnostic question; they must not bypass approval or policy.
+Add a local deterministic known-event catalog on top of the existing known-cause catalog. Known-event matching requires a related known cause, service and symptom matches, and a ticket creation timestamp inside the event window. Active events project to the existing `waiting-on-platform-fix` state; resolved events retain confirmed known-cause guidance; investigating events remain non-confirmed. No event link bypasses diagnosis, approval, fix, verification, or closure gates.
 
 Files:
 
-- Create `test/diagnostic-evaluation.test.ts` or an equivalent existing evaluation module after Phase 2 makes the state contract stable.
+- `src/approval-desk/known-event-catalog.ts` owns event definitions and matching.
+- `src/approval-desk/classifier.ts`, `evidence-readiness.ts`, and `recommendation-builder.ts` persist event IDs and match reasons.
+- `diagnostic-workflow.ts`, `triage-service.ts`, and the MCP read path expose event metadata without leaking it into customer drafts.
+- `test/known-event-catalog.test.ts` and focused classifier/evidence/diagnostic tests cover positive, negative, active, investigating, and resolved event behavior.
+
+### Phase 5 — Multi-turn diagnostic evaluation harness (complete)
+
+Build a deterministic evaluation harness around diagnostic families rather than around one fixture. The initial runner covers eleven scenarios across eight families: ordinary triage, known causes, active/out-of-window known events, partial evidence, ambiguity, bounded specialist escalation, failed-fix recheck, customer confirmation, stale replies, and adversarial prompt-injection text. Simulated customer replies may reveal hidden evidence only in response to the active diagnostic question; they must not bypass approval or policy.
+
+Files:
+
+- Create `src/approval-desk/diagnostic-evaluation.ts` and `test/diagnostic-evaluation.test.ts` after the event/state contract is stable.
 - Reuse `src/approval-desk/diagnostic-playbooks.ts`, `workflow-guidance.ts`, and the existing repositories rather than creating a parallel fake engine.
 - Extend `docs/skill-evaluation.md` with risk-sensitive metrics and scenario results.
 
@@ -126,10 +140,11 @@ Metrics:
 - diagnostic escalation correctness;
 - stale-context action rate;
 - approval bypass and unsafe autonomous action rate;
+- known-event precision and recall;
 - turns to diagnosis and resolution;
 - human intervention and GPT token/cost telemetry where available.
 
-### Phase 5 — Workflow/read-model review and portfolio presentation
+### Phase 6 — Workflow/read-model review and portfolio presentation (next)
 
 After the diagnostic state is stable, verify whether `get_ticket_workflow` already provides ticket, conversation, recommendation, workflow, evidence, diagnosis, and fix/verification state. Only add a tool if a concrete missing read capability is demonstrated. Then refresh the case study/demo to show multi-turn evidence, ambiguity, approval, verification, and legitimate closure without relying primarily on TKT-1010.
 

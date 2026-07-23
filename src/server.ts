@@ -1034,6 +1034,16 @@ function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
     doNotSay: context.doNotSay.filter(
       (item): item is string => typeof item === "string",
     ),
+    ...(typeof context.knownEventId === "string"
+      ? { knownEventId: context.knownEventId }
+      : {}),
+    ...(Array.isArray(context.knownEventMatchReasons)
+      ? {
+          knownEventMatchReasons: context.knownEventMatchReasons.filter(
+            (item): item is string => typeof item === "string",
+          ),
+        }
+      : {}),
     ...(DiagnosticStateSnapshotSchema.safeParse(context.diagnosticState).success
       ? {
           diagnosticState: DiagnosticStateSnapshotSchema.parse(

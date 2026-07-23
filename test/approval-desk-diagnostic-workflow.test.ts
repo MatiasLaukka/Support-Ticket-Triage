@@ -133,6 +133,74 @@ const ambiguousState = {
 };
 
 describe("diagnosisContextForTicket", () => {
+  it("projects an active known event into the existing platform-delay diagnosis", () => {
+    const eventTicket = TicketSchema.parse({
+      ...ticket,
+      id: "TKT-1028",
+      createdAt: "2026-06-10T06:35:00.000Z",
+      updatedAt: "2026-06-10T07:45:00.000Z",
+      subject: "Webhook deliveries delayed by ten minutes",
+      description: "Order webhooks arrive late after the source event.",
+      category: "integration",
+      priority: "P2",
+      team: "integrations",
+      tags: ["webhook", "delivery", "latency"],
+      sla: { ...ticket.sla, responseDueAt: "2026-06-10T11:50:00.000Z" },
+    });
+    const eventRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      ticketId: "TKT-1028",
+      supportState: "known-cause",
+      knownCause: "webhook-delivery-latency",
+      knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      knownEventMatchReasons: ["known-cause", "service", "symptom", "time-window"],
+      category: "integration",
+      priority: "P2",
+      team: "integrations",
+      knowledgeArticleIds: ["webhook-signature-validation"],
+    });
+
+    expect(diagnosisContextForTicket(eventTicket, eventRecommendation)).toMatchObject({
+      causeType: "platform-delay",
+      confidence: "likely",
+      owner: "engineering",
+      knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      knownEventMatchReasons: expect.arrayContaining(["time-window"]),
+    });
+  });
+
+  it("uses a resolved known event as confirmed known-cause guidance", () => {
+    const eventTicket = TicketSchema.parse({
+      ...ticket,
+      id: "TKT-1030",
+      createdAt: "2026-06-10T06:15:00.000Z",
+      updatedAt: "2026-06-10T07:25:00.000Z",
+      subject: "SMS opt-out not reflected on profile",
+      description: "A subscriber replied STOP but remains eligible.",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: ["sms", "opt-out", "consent"],
+      sla: { ...ticket.sla, responseDueAt: "2026-06-10T13:40:00.000Z" },
+    });
+    const eventRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      ticketId: "TKT-1030",
+      supportState: "known-cause",
+      knownCause: "sms-stop-sync-delay",
+      knownEventId: "EVT-2026-06-10-SMS-CONSENT-SYNC",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      knowledgeArticleIds: ["sms-compliance", "profile-sync-issues"],
+    });
+
+    expect(diagnosisContextForTicket(eventTicket, eventRecommendation)).toMatchObject({
+      confidence: "confirmed",
+      customerSafeSummary: expect.stringContaining("consent-state sync issue"),
+    });
+  });
+
   it("escalates after two persisted non-discriminating diagnostic cycles", () => {
     const first = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);
     const firstReply = customerReply(

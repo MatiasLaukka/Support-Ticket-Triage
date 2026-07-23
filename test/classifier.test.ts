@@ -363,6 +363,23 @@ describe("classifyTicket", () => {
     );
   });
 
+  it("links a known-cause classification to a matching known event", () => {
+    const result = classifyTicket(
+      makeTicket({
+        createdAt: "2026-06-10T06:35:00.000Z",
+        subject: "Webhook deliveries delayed by ten minutes",
+        description:
+          "Order webhooks eventually succeed, but delivery timestamps lag event creation.",
+        category: "integration",
+        team: "integrations",
+        tags: ["webhook", "delivery", "latency"],
+      }),
+    );
+
+    expect(result.knownCause).toBe("webhook-delivery-latency");
+    expect(result.knownEventId).toBe("EVT-2026-06-10-WEBHOOK-LATENCY");
+  });
+
   it("does not let submitted tags complete a known-cause match", () => {
     const result = classifyTicket(
       makeTicket({

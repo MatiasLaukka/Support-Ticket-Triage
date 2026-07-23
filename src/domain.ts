@@ -5,6 +5,7 @@ const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 export const IsoTimestampSchema = z.iso.datetime({ offset: true });
 export const TicketIdSchema = z.string().regex(/^TKT-\d{4}$/);
+export const KnownEventIdSchema = z.string().regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/);
 
 export const CategorySchema = z.enum([
   "account-access",
@@ -388,6 +389,8 @@ export const TriageRecommendationSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     supportState: SupportStateSchema.optional(),
     knownCause: SlugSchema.nullable().optional(),
+    knownEventId: KnownEventIdSchema.nullable().optional(),
+    knownEventMatchReasons: UniqueNonBlankStringsSchema.optional(),
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),

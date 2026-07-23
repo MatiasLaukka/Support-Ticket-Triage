@@ -81,6 +81,51 @@ describe("analyzeEvidenceReadiness", () => {
     );
   });
 
+  it("records the matching known event for an in-window webhook latency ticket", async () => {
+    const ticket = await loadSeedTicket("TKT-1028");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1028",
+        category: "integration",
+        acceptablePriorities: ["P2", "P3"],
+        team: "integrations",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+    });
+
+    expect(readiness.knownCause).toBe("webhook-delivery-latency");
+    expect(readiness.knownEventId).toBe("EVT-2026-06-10-WEBHOOK-LATENCY");
+    expect(readiness.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it("does not treat an investigating event as a confirmed platform fix state", async () => {
+    const seed = await loadSeedTicket("TKT-1028");
+    const ticket = TicketSchema.parse({
+      ...seed,
+      createdAt: "2026-06-10T08:30:00.000Z",
+      updatedAt: "2026-06-10T08:45:00.000Z",
+      sla: { ...seed.sla, responseDueAt: "2026-06-10T12:00:00.000Z" },
+    });
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1028",
+        category: "integration",
+        acceptablePriorities: ["P2", "P3"],
+        team: "integrations",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+    });
+
+    expect(readiness.knownEventId).toBe(
+      "EVT-2026-06-10-WEBHOOK-LATENCY-INVESTIGATION",
+    );
+    expect(readiness.supportState).toBe("diagnosing");
+  });
+
   it("recognizes provided platform, email, event, and URL evidence", async () => {
     const ticket = TicketSchema.parse({
       ...(await loadSeedTicket("TKT-1005")),

@@ -220,6 +220,8 @@ export function buildApprovalDeskRecommendationInput(input: {
     ),
     supportState: diagnosticEscalation?.supportState ?? evidenceReadiness.supportState,
     knownCause: evidenceReadiness.knownCause,
+    knownEventId: evidenceReadiness.knownEventId,
+    knownEventMatchReasons: evidenceReadiness.knownEventMatchReasons,
     requiredEvidence: evidenceReadiness.requiredEvidence,
     providedEvidence: evidenceReadiness.providedEvidence,
     missingEvidence: evidenceReadiness.missingEvidence,
@@ -1034,7 +1036,9 @@ function analyzeCustomerReplyLifecycle(input: {
     return {
       evidenceReadiness: withLifecycleSupportState(
         evidenceBeforeReplies,
-        requiresMoreCustomerEvidence(evidenceBeforeReplies)
+        evidenceBeforeReplies.supportState === "waiting-on-platform-fix"
+          ? evidenceBeforeReplies.supportState
+          : requiresMoreCustomerEvidence(evidenceBeforeReplies)
           ? "needs-information"
           : evidenceBeforeReplies.supportState,
       ),

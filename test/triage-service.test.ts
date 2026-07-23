@@ -156,6 +156,30 @@ describe("TriageService", () => {
     expect(recommendation.escalationReasons).toContain("policy-conflict");
   });
 
+  it("persists known event identity and match reasons in the recommendation audit", async () => {
+    const harness = makeHarness();
+
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+        knownEventMatchReasons: ["known-cause", "service", "symptom", "time-window"],
+      }),
+    );
+
+    expect(recommendation).toMatchObject({
+      knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      knownEventMatchReasons: ["known-cause", "service", "symptom", "time-window"],
+      resolution: "pending",
+    });
+    expect(harness.audit.events.at(-1)).toMatchObject({
+      action: "recommendation-submitted",
+      after: {
+        knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+        knownEventMatchReasons: ["known-cause", "service", "symptom", "time-window"],
+      },
+    });
+  });
+
   it("preserves GPT assist material on submitted recommendations", async () => {
     const harness = makeHarness();
     const aiExecutionTrace = makeAiExecutionTrace();

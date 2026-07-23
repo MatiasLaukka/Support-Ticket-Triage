@@ -2,6 +2,7 @@ import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
 import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
 import { getKnownCause } from "./known-cause-catalog.js";
+import { getKnownEvent } from "./known-event-catalog.js";
 import {
   advanceDiagnosticState,
   DiagnosticStateSnapshotSchema,
@@ -22,6 +23,42 @@ export function diagnosisContextForTicket(
     return applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
   }
 
+  const knownEvent = getKnownEvent(recommendation.knownEventId);
+  if (knownEvent?.status === "active") {
+    return {
+      status: "completed",
+      causeType: "platform-delay",
+      customerSafeSummary: knownEvent.customerSafeSummary,
+      evidenceUsed: providedEvidenceLabels(recommendation, knownEvent.label),
+      confidence: "likely",
+      owner: "engineering",
+      knownEventId: knownEvent.id,
+      knownEventMatchReasons: recommendation.knownEventMatchReasons,
+      recommendedNextAction:
+        "Continue platform mitigation, then ask the customer to verify the affected webhook deliveries.",
+      doNotSay: [
+        "Do not claim the incident is resolved until the event status changes and the customer verifies recovery.",
+      ],
+    };
+  }
+  if (knownEvent?.status === "investigating") {
+    return {
+      status: "completed",
+      causeType: "platform-delay",
+      customerSafeSummary: knownEvent.customerSafeSummary,
+      evidenceUsed: providedEvidenceLabels(recommendation, knownEvent.label),
+      confidence: "likely",
+      owner: "engineering",
+      knownEventId: knownEvent.id,
+      knownEventMatchReasons: recommendation.knownEventMatchReasons,
+      recommendedNextAction:
+        "Keep the ticket in diagnostic review while the possible event is confirmed or ruled out.",
+      doNotSay: [
+        "Do not present the investigating event as a confirmed root cause.",
+      ],
+    };
+  }
+
   if (
     recommendation.supportState === "known-cause" &&
     recommendation.knownCause !== undefined &&
@@ -36,6 +73,13 @@ export function diagnosisContextForTicket(
         evidenceUsed: providedEvidenceLabels(recommendation, knownCause.label),
         confidence: "confirmed",
         owner: recommendation.team === "integrations" ? "integration-partner" : "support",
+        ...(recommendation.knownEventId === undefined ||
+        recommendation.knownEventId === null
+          ? {}
+          : {
+              knownEventId: recommendation.knownEventId,
+              knownEventMatchReasons: recommendation.knownEventMatchReasons,
+            }),
         recommendedNextAction: knownCause.nextStep,
         doNotSay: [
           "Do not ask for unrelated diagnostics after a known cause is confirmed.",

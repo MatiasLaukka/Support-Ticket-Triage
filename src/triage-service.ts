@@ -13,6 +13,7 @@ import {
   EvidenceRequirementSchema,
   GptAssistSchema,
   IsoTimestampSchema,
+  KnownEventIdSchema,
   PrioritySchema,
   RequiredEscalationSchema,
   RiskSchema,
@@ -70,6 +71,8 @@ const SubmitRecommendationInputSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     supportState: SupportStateSchema.optional(),
     knownCause: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).nullable().optional(),
+    knownEventId: KnownEventIdSchema.nullable().optional(),
+    knownEventMatchReasons: z.array(NonBlankStringSchema).optional(),
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),
@@ -172,6 +175,8 @@ const DiagnosisContextSchema = z
     ]),
     recommendedNextAction: NonBlankStringSchema,
     doNotSay: z.array(NonBlankStringSchema),
+    knownEventId: KnownEventIdSchema.optional(),
+    knownEventMatchReasons: z.array(NonBlankStringSchema).optional(),
     diagnosticState: DiagnosticStateSnapshotSchema.optional(),
   })
   .strict();
@@ -232,6 +237,8 @@ export interface SubmitRecommendationInput {
   missingInformation: string[];
   supportState?: SupportState;
   knownCause?: string | null;
+  knownEventId?: string | null;
+  knownEventMatchReasons?: string[];
   requiredEvidence?: EvidenceRequirement[];
   providedEvidence?: EvidenceRequirement[];
   missingEvidence?: EvidenceRequirement[];
@@ -319,6 +326,8 @@ export interface DiagnosisContext {
   owner: "support" | "engineering" | "customer" | "integration-partner";
   recommendedNextAction: string;
   doNotSay: string[];
+  knownEventId?: string;
+  knownEventMatchReasons?: string[];
   diagnosticState?: DiagnosticStateSnapshot;
 }
 
@@ -466,6 +475,12 @@ export class TriageService {
       ...(parsed.knownCause === undefined
         ? {}
         : { knownCause: parsed.knownCause }),
+      ...(parsed.knownEventId === undefined
+        ? {}
+        : { knownEventId: parsed.knownEventId }),
+      ...(parsed.knownEventMatchReasons === undefined
+        ? {}
+        : { knownEventMatchReasons: parsed.knownEventMatchReasons }),
       ...(parsed.requiredEvidence === undefined
         ? {}
         : { requiredEvidence: parsed.requiredEvidence }),
@@ -527,6 +542,12 @@ export class TriageService {
         category: recommendation.category,
         priority: recommendation.priority,
         team: recommendation.team,
+        ...(recommendation.knownEventId === undefined
+          ? {}
+          : { knownEventId: recommendation.knownEventId }),
+        ...(recommendation.knownEventMatchReasons === undefined
+          ? {}
+          : { knownEventMatchReasons: recommendation.knownEventMatchReasons }),
         escalationRequired: recommendation.escalationRequired,
         escalationReasons: recommendation.escalationReasons,
         classificationSignalCount:
