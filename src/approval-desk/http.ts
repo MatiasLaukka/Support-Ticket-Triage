@@ -45,6 +45,7 @@ import {
   diagnosisContextForTicket,
   fixContextForTicket,
 } from "./diagnostic-workflow.js";
+import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
@@ -686,6 +687,13 @@ function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
     doNotSay: context.doNotSay.filter(
       (item): item is string => typeof item === "string",
     ),
+    ...(DiagnosticStateSnapshotSchema.safeParse(context.diagnosticState).success
+      ? {
+          diagnosticState: DiagnosticStateSnapshotSchema.parse(
+            context.diagnosticState,
+          ),
+        }
+      : {}),
   };
 }
 

@@ -108,6 +108,34 @@ function diagnoseCampaignEditorLoading(customerReplyText: string): DiagnosisCont
       "Do not ask for another screenshot of the blank page.",
       "Do not claim this is a confirmed frontend issue until browser/session checks fail.",
     ],
+    diagnosticState: {
+      state: "ambiguous",
+      hypotheses: [
+        {
+          id: "browser-session",
+          label: "Browser/session issue",
+          status: "plausible",
+          evidenceUsed: ["campaign editor loading symptoms"],
+          evidenceToConfirm: [
+            "The editor works in a private window, another browser, or after clearing site data.",
+          ],
+        },
+        {
+          id: "frontend-loading",
+          label: "Frontend loading issue",
+          status: "plausible",
+          evidenceUsed: ["campaign editor loading symptoms"],
+          evidenceToConfirm: [
+            "The editor fails across browser sessions and admins with a browser console loading error.",
+          ],
+        },
+      ],
+      evidenceToRequest: [
+        "Try the editor in a private or incognito window.",
+        "Try another browser and ask another admin to open the same campaign.",
+        "Share any browser console loading error and retry time if it remains blank.",
+      ],
+    },
   };
 }
 

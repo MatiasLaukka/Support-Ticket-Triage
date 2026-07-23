@@ -514,9 +514,22 @@ describe("createApprovalDeskHttpServer", () => {
         actor: "matias-reviewer",
       }),
     });
-    await json("/api/tickets/TKT-1010/diagnosis", {
+    const likelyDiagnosis = await json("/api/tickets/TKT-1010/diagnosis", {
       method: "POST",
       body: JSON.stringify({ actor: "product-support" }),
+    });
+    expect(likelyDiagnosis.body.auditEvent.after.diagnosis).toMatchObject({
+      confidence: "likely",
+      diagnosticState: {
+        state: "ambiguous",
+        hypotheses: expect.arrayContaining([
+          expect.objectContaining({ id: "browser-session", status: "plausible" }),
+          expect.objectContaining({ id: "frontend-loading", status: "plausible" }),
+        ]),
+        evidenceToRequest: expect.arrayContaining([
+          expect.stringMatching(/private|incognito/i),
+        ]),
+      },
     });
 
     const afterDiagnosis = await json("/api/tickets/TKT-1010/recommendations", {

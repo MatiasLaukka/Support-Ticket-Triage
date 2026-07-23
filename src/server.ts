@@ -60,6 +60,7 @@ import {
   diagnosisContextForTicket,
   fixContextForTicket,
 } from "./approval-desk/diagnostic-workflow.js";
+import { DiagnosticStateSnapshotSchema } from "./approval-desk/diagnostic-state.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
   DiagnosisContext,
@@ -1048,6 +1049,13 @@ function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
     doNotSay: context.doNotSay.filter(
       (item): item is string => typeof item === "string",
     ),
+    ...(DiagnosticStateSnapshotSchema.safeParse(context.diagnosticState).success
+      ? {
+          diagnosticState: DiagnosticStateSnapshotSchema.parse(
+            context.diagnosticState,
+          ),
+        }
+      : {}),
   };
 }
 

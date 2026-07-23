@@ -42,6 +42,10 @@ import {
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 import { evaluateEscalation, validateApprovedFields } from "./policy.js";
+import {
+  DiagnosticStateSnapshotSchema,
+  type DiagnosticStateSnapshot,
+} from "./approval-desk/diagnostic-state.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
@@ -168,6 +172,7 @@ const DiagnosisContextSchema = z
     ]),
     recommendedNextAction: NonBlankStringSchema,
     doNotSay: z.array(NonBlankStringSchema),
+    diagnosticState: DiagnosticStateSnapshotSchema.optional(),
   })
   .strict();
 const FixContextSchema = z
@@ -314,6 +319,7 @@ export interface DiagnosisContext {
   owner: "support" | "engineering" | "customer" | "integration-partner";
   recommendedNextAction: string;
   doNotSay: string[];
+  diagnosticState?: DiagnosticStateSnapshot;
 }
 
 export interface FixContext {
