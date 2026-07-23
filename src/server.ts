@@ -56,6 +56,10 @@ import {
   fixBlockers,
 } from "./approval-desk/workflow-guidance.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
+import {
+  diagnosisContextForTicket,
+  fixContextForTicket,
+} from "./approval-desk/diagnostic-workflow.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
   DiagnosisContext,
@@ -778,7 +782,7 @@ async function recordDiagnosis(
     ticketId: input.ticketId,
     actor: input.actor,
     diagnosedAt: deps.now().toISOString(),
-    diagnosis: diagnosisContextForTicket(ticket, diagnosisRecommendation),
+    diagnosis: diagnosisContextForTicket(ticket, diagnosisRecommendation, audits),
     knowledgeArticleIds:
       diagnosisRecommendation.knowledgeArticleIds.length > 0
         ? diagnosisRecommendation.knowledgeArticleIds
@@ -909,93 +913,6 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
     receivedAt: plusMilliseconds(input.sentAt, 1),
     source: "demo-auto-reply",
   });
-}
-
-function diagnosisContextForTicket(
-  ticket: Ticket,
-  recommendation: TriageRecommendation,
-) {
-  if (recommendation.supportState === "waiting-on-platform-fix") {
-    return {
-      status: "completed" as const,
-      causeType: "platform-delay" as const,
-      customerSafeSummary:
-        "The evidence points to a platform-side processing delay affecting the customer's expected results.",
-      evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
-      confidence: "confirmed" as const,
-      owner: "engineering" as const,
-      recommendedNextAction:
-        "Apply the platform mitigation and ask the customer to verify the affected example.",
-      doNotSay: ["Do not reveal internal incident operations."],
-    };
-  }
-  if (recommendation.supportState === "known-cause") {
-    return {
-      status: "completed" as const,
-      causeType: recommendation.category === "integration" ? "integration" as const : "configuration" as const,
-      customerSafeSummary:
-        "The ticket matches a known cause from the support knowledge base.",
-      evidenceUsed: providedEvidenceLabels(recommendation, "known cause match"),
-      confidence: "confirmed" as const,
-      owner: recommendation.team === "integrations" ? "integration-partner" as const : "support" as const,
-      recommendedNextAction:
-        "Share the known-cause resolution or workaround with the customer.",
-      doNotSay: ["Do not ask for unrelated diagnostics after a known cause is confirmed."],
-    };
-  }
-  return {
-    status: "completed" as const,
-    causeType: recommendation.category === "security" ? "security" as const : "configuration" as const,
-    customerSafeSummary:
-      "The support team has narrowed the issue from the provided evidence.",
-    evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
-    confidence: "likely" as const,
-    owner: "support" as const,
-    recommendedNextAction:
-      "Share the diagnosis with the customer and explain the next safe action.",
-    doNotSay: ["Do not claim a fix until a fix event is recorded."],
-  };
-}
-
-function providedEvidenceLabels(
-  recommendation: TriageRecommendation,
-  fallback: string,
-): string[] {
-  const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
-  return labels.length > 0 ? labels : [fallback];
-}
-
-function fixContextForTicket(ticket: Ticket, diagnosisEvent: AuditEvent) {
-  const diagnosis = diagnosisFromAudit(diagnosisEvent);
-  if (ticket.id === "TKT-1010") {
-    return {
-      status: "available" as const,
-      customerSafeSummary:
-        "The campaign editor loading mitigation has been applied for the affected campaign.",
-      customerAction:
-        "Please reopen the campaign editor and try editing the campaign again.",
-      verificationRequest:
-        "Let us know whether the editor now loads normally or if the blank page still appears.",
-    };
-  }
-  if (diagnosis?.causeType === "platform-delay") {
-    return {
-      status: "available" as const,
-      customerSafeSummary:
-        "The platform-side processing mitigation has been applied.",
-      customerAction:
-        "Please retry the affected workflow using the same example you shared with us.",
-      verificationRequest:
-        "Let us know whether the issue is resolved or if you still see the same behavior.",
-    };
-  }
-  return {
-    status: "available" as const,
-    customerSafeSummary: "A fix or mitigation is now available.",
-    customerAction: "Please retry the affected workflow.",
-    verificationRequest:
-      "Let us know whether the issue is resolved or still visible.",
-  };
 }
 
 function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
@@ -1153,12 +1070,6 @@ function parseFixContext(value: unknown): FixContext | undefined {
     customerAction: context.customerAction,
     verificationRequest: context.verificationRequest,
   };
-}
-
-function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {
-  return typeof event.after.diagnosis === "object" && event.after.diagnosis !== null
-    ? event.after.diagnosis as Record<string, unknown>
-    : undefined;
 }
 
 function latestAuditTimestamp(
