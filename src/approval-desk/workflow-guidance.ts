@@ -6,6 +6,9 @@ import {
   type Ticket,
   type TriageRecommendation,
 } from "../domain.js";
+import type { DiagnosisContext } from "../triage-service.js";
+import { diagnosisContextForTicket } from "./diagnostic-workflow.js";
+import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 
 export const OperatorGuidanceSchema = z
   .object({
@@ -125,9 +128,26 @@ export function fixBlockers(input: { audits: readonly AuditEvent[] }): string[] 
   ) {
     blockers.push("This confirmed diagnosis does not require a platform fix.");
   }
+  const diagnosticState = diagnosticStateFromDiagnosis(diagnosis);
+  if (diagnosticState?.state === "ambiguous") {
+    blockers.push(
+      "A diagnosis with unresolved plausible causes cannot unlock a fix.",
+    );
+  }
   const latestFixAt = latestAuditTimestamp(input.audits, "fix-available");
   if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
     blockers.push("A fix has already been recorded for the latest diagnosis.");
+  }
+  const sentAt = latestAuditTimestamp(input.audits, "customer-response-sent");
+  if (sentAt === undefined || sentAt < latestDiagnosis.timestamp) {
+    blockers.push("Send the diagnosis response before marking a fix available.");
+  }
+  const latestReplyAt = latestAuditTimestamp(
+    input.audits,
+    "customer-reply-received",
+  );
+  if (sentAt !== undefined && latestReplyAt !== undefined && latestReplyAt > sentAt) {
+    blockers.push("Evaluate the latest customer reply before marking a fix available.");
   }
   return blockers;
 }
@@ -140,6 +160,13 @@ export function closeBlockers(input: {
   const blockers: string[] = [];
   if (input.ticket.status === "resolved") {
     blockers.push("Ticket is already closed.");
+  }
+  const latestDiagnosis = latestDiagnosisAudit(input.audits);
+  const diagnosticState = diagnosticStateFromDiagnosis(
+    latestDiagnosis === undefined ? undefined : diagnosisFromAudit(latestDiagnosis),
+  );
+  if (diagnosticState?.state === "ambiguous") {
+    blockers.push("An ambiguous diagnosis cannot unlock ticket closure.");
   }
   if (input.recommendation?.supportState !== "ready-for-close") {
     blockers.push(
@@ -164,6 +191,10 @@ export function buildOperatorGuidance(input: {
   audits: readonly AuditEvent[];
 }): OperatorGuidance {
   const latest = latestCurrentRecommendation(input);
+  const latestDiagnosticContext =
+    latest === undefined
+      ? undefined
+      : diagnosisContextForTicket(input.ticket, latest, input.audits);
   const noApproval = { required: false as const, fields: [] as ApprovedField[] };
 
   if (input.ticket.status === "resolved") {
@@ -317,8 +348,7 @@ export function buildOperatorGuidance(input: {
       reason: "No newer customer reply is available to evaluate.",
       approval: noApproval,
       blockers: diagnosingBlockers,
-      customerNextStep:
-        "Reply with the requested information or verification result.",
+      customerNextStep: customerNextStepForGuidance(latestDiagnosticContext),
     });
   }
 
@@ -331,6 +361,19 @@ export function buildOperatorGuidance(input: {
     unlocksTool: "evaluate_ticket",
     blockers: diagnosingBlockers,
   });
+}
+
+function customerNextStepForGuidance(
+  diagnosis: DiagnosisContext | undefined,
+): string {
+  const evidenceToRequest =
+    diagnosis?.diagnosticState?.state === "ambiguous"
+      ? diagnosis.diagnosticState.evidenceToRequest
+      : [];
+  if (evidenceToRequest.length > 0) {
+    return `Reply with the targeted diagnostic details: ${evidenceToRequest.join(" ")}`;
+  }
+  return "Reply with the requested information or verification result.";
 }
 
 function changedApprovalFields(
@@ -399,7 +442,7 @@ function latestCurrentRecommendation(input: {
     )[0];
 }
 
-function latestDiagnosisAudit(
+export function latestDiagnosisAudit(
   audits: readonly AuditEvent[],
 ): AuditEvent | undefined {
   return audits
@@ -515,6 +558,14 @@ function diagnosisFromAudit(
     event.after.diagnosis !== null
     ? (event.after.diagnosis as Record<string, unknown>)
     : undefined;
+}
+
+function diagnosticStateFromDiagnosis(
+  diagnosis: Record<string, unknown> | undefined,
+) {
+  return DiagnosticStateSnapshotSchema.safeParse(
+    diagnosis?.diagnosticState,
+  ).data;
 }
 
 function latestSentAtForRecommendation(

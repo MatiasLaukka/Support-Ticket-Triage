@@ -147,19 +147,17 @@ function diagnosisReadyWorkflow(): WorkflowInput {
 
 function confirmedEngineeringDiagnosisWorkflow(): WorkflowInput {
   const input = diagnosisReadyWorkflow();
+  const diagnosis = diagnosisAudit({
+    timestamp: "2026-06-10T09:02:00.000Z",
+    confidence: "confirmed",
+    owner: "engineering",
+  });
   return {
     ...input,
     audits: [
       ...input.audits,
-      audit("diagnosis-completed", "2026-06-10T09:02:00.000Z", {
-        after: {
-          diagnosis: {
-            status: "completed",
-            confidence: "confirmed",
-            owner: "engineering",
-          },
-        },
-      }),
+      diagnosis,
+      sentAudit("2026-06-10T09:03:00.000Z"),
     ],
   };
 }
@@ -682,6 +680,7 @@ describe("buildOperatorGuidance", () => {
         confidence: "confirmed",
         owner: "engineering",
       }),
+      sentAudit("2026-06-10T09:03:00.000Z"),
     ];
 
     expect(buildOperatorGuidance(input).stage).toBe("fix-ready");
@@ -721,6 +720,25 @@ describe("buildOperatorGuidance", () => {
       }),
     ];
     expect(buildOperatorGuidance(fixEqual).stage).toBe("verification");
+  });
+
+  it("surfaces targeted evidence for an ambiguous diagnostic context", () => {
+    const input = waitingCustomerWorkflow();
+    input.recommendations = [
+      recommendation({
+        category: "performance",
+        team: "product",
+        supportState: "needs-information",
+        missingEvidence: [evidenceRequirement()],
+        knowledgeArticleIds: ["performance-troubleshooting"],
+      }),
+    ];
+
+    const guidance = buildOperatorGuidance(input);
+
+    expect(guidance.stage).toBe("waiting-customer");
+    expect(guidance.nextAction).toBe("wait-for-customer");
+    expect(guidance.customerNextStep).toMatch(/private|incognito/i);
   });
 
   it("uses first-match precedence for resolved and ready-to-close tickets", () => {
@@ -808,10 +826,57 @@ describe("shared lifecycle blockers", () => {
       "A confirmed diagnosis is required before marking a fix available.",
       "This confirmed diagnosis does not require a platform fix.",
       "A fix has already been recorded for the latest diagnosis.",
+      "Send the diagnosis response before marking a fix available.",
     ]);
 
     const input = confirmedEngineeringDiagnosisWorkflow();
     expect(fixBlockers({ audits: input.audits })).toEqual([]);
+  });
+
+  it("blocks fixes when a diagnosis still has unresolved plausible causes", () => {
+    const input = confirmedEngineeringDiagnosisWorkflow();
+    const sent = input.audits[0];
+    const diagnosisResponse = input.audits[2];
+    expect(sent).toBeDefined();
+    expect(diagnosisResponse).toBeDefined();
+    input.audits = [
+      sent,
+      audit("diagnosis-completed", "2026-06-10T09:02:00.000Z", {
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "confirmed",
+            owner: "engineering",
+            customerSafeSummary: "The editor remains ambiguous.",
+            diagnosticState: {
+              state: "ambiguous",
+              hypotheses: [
+                {
+                  id: "browser-session",
+                  label: "Browser/session issue",
+                  status: "plausible",
+                  evidenceUsed: ["blank editor"],
+                  evidenceToConfirm: ["Private window works"],
+                },
+                {
+                  id: "frontend-loading",
+                  label: "Frontend loading issue",
+                  status: "plausible",
+                  evidenceUsed: ["blank editor"],
+                  evidenceToConfirm: ["Console error persists"],
+                },
+              ],
+              evidenceToRequest: ["Try a private window."],
+            },
+          },
+        },
+      }),
+      diagnosisResponse,
+    ];
+
+    expect(fixBlockers({ audits: input.audits })).toEqual([
+      "A diagnosis with unresolved plausible causes cannot unlock a fix.",
+    ]);
   });
 
   it("returns exact close blocker arrays in enforced order", () => {
@@ -845,5 +910,49 @@ describe("shared lifecycle blockers", () => {
         audits: input.audits,
       }),
     ).toEqual([]);
+  });
+
+  it("blocks closure while the latest diagnosis remains ambiguous", () => {
+    const input = closingResponseSentWorkflow();
+    input.audits = [
+      ...input.audits,
+      audit("diagnosis-completed", "2026-06-10T09:02:00.000Z", {
+        after: {
+          diagnosis: {
+            status: "completed",
+            confidence: "likely",
+            owner: "engineering",
+            diagnosticState: {
+              state: "ambiguous",
+              hypotheses: [
+                {
+                  id: "browser-session",
+                  label: "Browser/session issue",
+                  status: "plausible",
+                  evidenceUsed: ["blank editor"],
+                  evidenceToConfirm: ["Private window works"],
+                },
+                {
+                  id: "frontend-loading",
+                  label: "Frontend loading issue",
+                  status: "plausible",
+                  evidenceUsed: ["blank editor"],
+                  evidenceToConfirm: ["Console error persists"],
+                },
+              ],
+              evidenceToRequest: ["Try a private window."],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      closeBlockers({
+        ticket: input.ticket,
+        recommendation: input.recommendations[0],
+        audits: input.audits,
+      }),
+    ).toContain("An ambiguous diagnosis cannot unlock ticket closure.");
   });
 });

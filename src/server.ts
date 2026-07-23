@@ -54,6 +54,7 @@ import {
   closeBlockers,
   diagnosisBlockers,
   fixBlockers,
+  latestDiagnosisAudit,
 } from "./approval-desk/workflow-guidance.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import {
@@ -914,22 +915,6 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
     receivedAt: plusMilliseconds(input.sentAt, 1),
     source: "demo-auto-reply",
   });
-}
-
-function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(
-      ({ event }) =>
-        event.action === "diagnosis-completed" &&
-        typeof event.after.diagnosis === "object" &&
-        event.after.diagnosis !== null,
-    )
-    .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
-    )[0]?.event;
 }
 
 function latestDiagnosisContext(

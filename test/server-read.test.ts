@@ -524,6 +524,21 @@ describe("createTriageServer read protocol", () => {
         result: "success",
       }),
     );
+    await diagnosisFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000007",
+        timestamp: "2026-06-10T09:07:00.000Z",
+        actor: "product-support",
+        action: "customer-response-sent",
+        ticketId: "TKT-1001",
+        recommendationId: "d61bba15-41f4-495b-a794-93696343cc9d",
+        before: {},
+        after: { sentAt: "2026-06-10T09:07:00.000Z" },
+        rationale: "Sent the approved diagnosis update before fix work.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
     const diagnosed = await callTool(await connect(diagnosisFixture), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },

@@ -12,7 +12,8 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Complete: semantic fixture-independent playbook, fix, and simulated-reply routing (`799c498`).
 - Complete first increment: persisted `diagnosticState` snapshots for ambiguous campaign-editor diagnoses (`276e667`).
 - Complete first increment: Skill wording now treats backend workflow guidance as the only operational instruction (`d3ab333`; official validator passes).
-- Next: use diagnostic state to enforce ambiguity blockers, targeted questions, and specialist escalation.
+- Complete increment: the shared workflow authority now uses persisted diagnostic state to block ambiguous fixes, requires the approved diagnosis response before fix availability, and surfaces targeted evidence requests to both UI and MCP read models.
+- Next: use diagnostic state to enforce escalation for unresolvable ambiguity and add the multi-turn evaluation harness.
 
 ## Current audit
 
@@ -22,6 +23,7 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Missing required evidence blocks diagnosis except for deterministic known-cause paths.
 - `likely` and `confirmed` diagnosis confidence are distinct. The shared diagnostic playbook keeps platform and campaign-editor diagnoses `likely` until confirming reply evidence exists.
 - Fix availability requires a recorded `confirmed` diagnosis owned by engineering or an integration partner.
+- Fix availability also requires that the diagnosis response has been sent and that no newer customer reply is awaiting evaluation. An `ambiguous` diagnostic state remains a permissible working diagnosis for evidence gathering, but it cannot unlock a fix.
 - Close actions require a `ready-for-close` recommendation and an explicitly approved/sent closing response.
 - Approval is a hard boundary in both HTTP and MCP paths. Only explicitly approved fields can be applied or sent.
 - Prompt-injection detection is a deterministic preflight. GPT classification/drafting is skipped for affected tickets, the operator/audit warning is retained, and the customer response does not expose the internal detection.
@@ -30,7 +32,7 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 ### Partially enforced
 
 - Evidence readiness is separate from confidence in the current `DiagnosisContext`, and the first persisted `diagnosticState` snapshot now represents multiple plausible campaign-editor candidates and evidence requests. The broader candidate/refutation/escalation model is still incomplete.
-- The workflow exposes `diagnosis-ready`, `diagnosis-recorded`, `fix-ready`, and `verification` stages, but diagnostic ambiguity is not a first-class blocker. A broad fallback can still produce a `likely` completed context instead of an explicit ambiguous/escalated state.
+- The workflow exposes `diagnosis-ready`, `diagnosis-recorded`, `fix-ready`, and `verification` stages. Ambiguity is now a first-class fix blocker and targeted evidence is shown as the customer next step; a broad fallback can still produce a `likely` working diagnosis so the workflow can ask the customer for discriminating evidence.
 - Fix verification re-enters evaluation through the workflow, but the terminal conditions are encoded mainly through recommendation lifecycle rules rather than a dedicated verification state/result.
 - The triaging Skill now requires workflow reads, full conversation evaluation, approval, and stopping while waiting without exposing GPT next-step text as agent instructions. `operatorGuidance.nextAction`, evidence, blockers, and approval fields remain the only operational authority.
 
@@ -78,7 +80,7 @@ Files:
 
 - Create `src/approval-desk/diagnostic-state.ts` with Zod-validated candidate/state types and deterministic helpers.
 - Extend `src/approval-desk/diagnostic-playbooks.ts` to return candidate state and evidence discrimination metadata while preserving the existing `DiagnosisContext` projection for audit compatibility.
-- Modify `src/approval-desk/workflow-guidance.ts` so ambiguous states block `record_diagnosis` and either request targeted evidence or surface specialist escalation.
+- Modify `src/approval-desk/workflow-guidance.ts` so ambiguous states block fix availability/closure, require the diagnosis response to be sent before fix work, and surface targeted evidence requests. Keep a `likely`/ambiguous result recordable as a working diagnosis so the customer can supply the evidence needed to discriminate hypotheses.
 - Modify `src/approval-desk/recommendation-builder.ts` and deterministic drafting helpers so likely/ambiguous wording cannot claim a final root cause or fix.
 - Modify `src/triage-service.ts` schemas only when the projected audit needs persisted diagnostic-state fields.
 

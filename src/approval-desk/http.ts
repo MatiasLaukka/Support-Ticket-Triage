@@ -47,6 +47,12 @@ import {
 } from "./diagnostic-workflow.js";
 import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
+import {
+  closeBlockers,
+  diagnosisBlockers,
+  fixBlockers,
+  latestDiagnosisAudit,
+} from "./workflow-guidance.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -551,22 +557,6 @@ function latestCurrentRecommendation(
     .sort(compareRecommendationsNewestFirst(audits))[0];
 }
 
-function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(
-      ({ event }) =>
-        event.action === "diagnosis-completed" &&
-        typeof event.after.diagnosis === "object" &&
-        event.after.diagnosis !== null,
-    )
-    .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
-    )[0]?.event;
-}
-
 function latestDiagnosisContext(
   audits: readonly AuditEvent[],
 ): DiagnosisContext | undefined {
@@ -882,44 +872,24 @@ async function recordDiagnosis(
     deps.recommendations.list(),
   ]);
   const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
-  if (latest === undefined) {
-    throw invalidRequest("A completed evaluation is required before diagnosis.");
+  const [diagnosisBlocker] = diagnosisBlockers({
+    recommendation: latest,
+    audits,
+  });
+  if (diagnosisBlocker !== undefined) {
+    throw invalidRequest(diagnosisBlocker);
   }
-  const knownCauseReady = latest.supportState === "known-cause";
-  if (!knownCauseReady && (latest.missingEvidence?.length ?? 0) > 0) {
-    throw invalidRequest("Diagnosis requires all required evidence to be gathered.");
-  }
-  if (
-    !knownCauseReady &&
-    !["diagnosing", "waiting-on-platform-fix"].includes(latest.supportState ?? "")
-  ) {
-    throw invalidRequest("Diagnosis requires a diagnosis-ready ticket state.");
-  }
-  const sentAt = latestSentAtForRecommendation(audits, latest.id);
-  if (sentAt === undefined) {
-    throw invalidRequest("The evaluated response must be marked done before diagnosis.");
-  }
-  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
-  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
-    throw invalidRequest("Evaluate the latest customer reply before diagnosis.");
-  }
-  const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
-  if (
-    latestDiagnosisAt !== undefined &&
-    (latestReplyAt === undefined || latestDiagnosisAt > latestReplyAt)
-  ) {
-    throw invalidRequest("Diagnosis has already been recorded for the latest context.");
-  }
+  const diagnosisContext = diagnosisContextForTicket(ticket, latest!, audits);
 
   return {
     auditEvent: await deps.service.recordDiagnosis({
       ticketId,
       actor: body.actor,
       diagnosedAt: deps.now().toISOString(),
-      diagnosis: diagnosisContextForTicket(ticket, latest, audits),
-      knowledgeArticleIds: latest.knowledgeArticleIds.length > 0
-        ? latest.knowledgeArticleIds
-        : [latest.knownCause ?? "known-cause"],
+      diagnosis: diagnosisContext,
+      knowledgeArticleIds: latest!.knowledgeArticleIds.length > 0
+        ? latest!.knowledgeArticleIds
+        : [latest!.knownCause ?? "known-cause"],
     }),
   };
 }
@@ -935,29 +905,11 @@ async function recordFix(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const latestDiagnosis = latestDiagnosisAudit(audits);
-  if (latestDiagnosis === undefined) {
-    throw invalidRequest("A completed diagnosis is required before marking a fix available.");
+  const [fixBlocker] = fixBlockers({ audits });
+  if (fixBlocker !== undefined) {
+    throw invalidRequest(fixBlocker);
   }
-  const diagnosisContext = parseDiagnosisContext(latestDiagnosis.after.diagnosis);
-  if (diagnosisContext?.confidence !== "confirmed") {
-    throw invalidRequest("A confirmed diagnosis is required before marking a fix available.");
-  }
-  if (!["engineering", "integration-partner"].includes(diagnosisContext.owner)) {
-    throw invalidRequest("This confirmed diagnosis does not require a platform fix.");
-  }
-  const latestFixAt = latestAuditTimestamp(audits, "fix-available");
-  if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
-    throw invalidRequest("A fix has already been recorded for the latest diagnosis.");
-  }
-  const sentAt = latestAuditTimestamp(audits, "customer-response-sent");
-  if (sentAt === undefined || sentAt < latestDiagnosis.timestamp) {
-    throw invalidRequest("Send the diagnosis response before marking a fix available.");
-  }
-  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
-  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
-    throw invalidRequest("Evaluate the latest customer reply before marking a fix available.");
-  }
+  const latestDiagnosis = latestDiagnosisAudit(audits)!;
   const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
 
   return {
@@ -982,26 +934,19 @@ async function closeTicket(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  if (ticket.status === "resolved") {
-    throw invalidRequest("Ticket is already closed.");
-  }
-
   const summary = summarizeRecommendationsForTicket(
     ticket,
     recommendations,
     audits,
   );
   const latest = summary.latest;
-  if (latest?.supportState !== "ready-for-close") {
-    throw invalidRequest(
-      "Ticket must have a ready-to-close recommendation before it can be closed.",
-    );
-  }
-  const sentAt = latestSentAtForRecommendation(audits, latest.id);
-  if (sentAt === undefined) {
-    throw invalidRequest(
-      "The ready-to-close response must be marked done before the ticket can be closed.",
-    );
+  const [closeBlocker] = closeBlockers({
+    ticket,
+    recommendation: latest,
+    audits,
+  });
+  if (closeBlocker !== undefined) {
+    throw invalidRequest(closeBlocker);
   }
 
   const closedAt = deps.now().toISOString();
@@ -1021,7 +966,7 @@ async function closeTicket(
           actor: body.actor,
           action: "ticket-updated",
           ticketId,
-          recommendationId: latest.id,
+          recommendationId: latest!.id,
           before: {
             status: previousTicket.status,
             revision: previousTicket.revision,
@@ -1033,7 +978,7 @@ async function closeTicket(
           },
           rationale:
             "Ticket closed after the customer confirmed resolution and the closing response was sent.",
-          knowledgeArticleIds: latest.knowledgeArticleIds,
+          knowledgeArticleIds: latest!.knowledgeArticleIds,
           result: "success",
         });
         await deps.audits.append(event);
