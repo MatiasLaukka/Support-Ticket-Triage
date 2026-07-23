@@ -734,9 +734,9 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - Fixture SLA deadlines are fixed on June 10, 2026. Runs after that date
   classify due open tickets as breached unless an explicit historical `asOf`
   value is used with `list_tickets`.
-- The official Python Skill validator was not run in the recorded Skill
-  evaluation because Python was unavailable. `test/skill.test.ts` provides
-  narrower structural checks.
+- The official Python Skill validator was run in the current Skill evaluation
+  and reported `Skill is valid!`. `test/skill.test.ts` adds narrower
+  structural regression checks.
 
 ## Repository Guide
 
