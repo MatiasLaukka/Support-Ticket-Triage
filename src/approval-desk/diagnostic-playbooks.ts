@@ -67,6 +67,7 @@ function diagnoseCampaignEditorLoading(customerReplyText: string): DiagnosisCont
         "Do not ask for another screenshot of the blank page.",
         "Do not call this a browser-session issue after the customer confirmed cross-browser and another-admin impact.",
       ],
+      diagnosticState: campaignEditorDiagnosticState("confirmed", "frontend-loading"),
     };
   }
 
@@ -85,6 +86,7 @@ function diagnoseCampaignEditorLoading(customerReplyText: string): DiagnosisCont
         "Do not claim engineering has applied a platform mitigation.",
         "Do not ask for frontend console evidence after the browser-session issue is confirmed.",
       ],
+      diagnosticState: campaignEditorDiagnosticState("confirmed", "browser-session"),
     };
   }
 
@@ -110,6 +112,7 @@ function diagnoseCampaignEditorLoading(customerReplyText: string): DiagnosisCont
     ],
     diagnosticState: {
       state: "ambiguous",
+      diagnosticAttempts: 0,
       hypotheses: [
         {
           id: "browser-session",
@@ -136,6 +139,41 @@ function diagnoseCampaignEditorLoading(customerReplyText: string): DiagnosisCont
         "Share any browser console loading error and retry time if it remains blank.",
       ],
     },
+  };
+}
+
+function campaignEditorDiagnosticState(
+  state: "confirmed",
+  confirmedHypothesisId: "browser-session" | "frontend-loading",
+) {
+  return {
+    state,
+    diagnosticAttempts: 0,
+    hypotheses: [
+      {
+        id: "browser-session",
+        label: "Browser/session issue",
+        status: confirmedHypothesisId === "browser-session"
+          ? "confirmed" as const
+          : "ruled-out" as const,
+        evidenceUsed: ["browser/session isolation evidence"],
+        evidenceToConfirm: [
+          "The editor works in a private window, another browser, or after clearing site data.",
+        ],
+      },
+      {
+        id: "frontend-loading",
+        label: "Frontend loading issue",
+        status: confirmedHypothesisId === "frontend-loading"
+          ? "confirmed" as const
+          : "ruled-out" as const,
+        evidenceUsed: ["cross-browser or cross-admin loading evidence"],
+        evidenceToConfirm: [
+          "The editor fails across browser sessions and admins with a browser console loading error.",
+        ],
+      },
+    ],
+    evidenceToRequest: [],
   };
 }
 

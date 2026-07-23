@@ -2,6 +2,11 @@ import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
 import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
 import { getKnownCause } from "./known-cause-catalog.js";
+import {
+  advanceDiagnosticState,
+  DiagnosticStateSnapshotSchema,
+  type DiagnosticStateSnapshot,
+} from "./diagnostic-state.js";
 
 export function diagnosisContextForTicket(
   ticket: Ticket,
@@ -14,7 +19,7 @@ export function diagnosisContextForTicket(
     customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
   });
   if (playbookDiagnosis !== undefined) {
-    return playbookDiagnosis;
+    return applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
   }
 
   if (
@@ -71,6 +76,97 @@ export function diagnosisContextForTicket(
       "Share the diagnosis with the customer and explain the next safe action.",
     doNotSay: ["Do not claim a fix until a fix event is recorded."],
   };
+}
+
+function applyPersistedDiagnosticState(
+  diagnosis: DiagnosisContext,
+  ticketId: string,
+  audits: readonly AuditEvent[],
+): DiagnosisContext {
+  const latest = latestDiagnosticSnapshot(audits, ticketId);
+  if (latest === undefined || diagnosis.diagnosticState === undefined) {
+    return diagnosis;
+  }
+
+  const replyText = customerReplyTextAfter(
+    ticketId,
+    audits,
+    latest.timestamp,
+  );
+  if (replyText.trim() === "") {
+    return { ...diagnosis, diagnosticState: latest.snapshot };
+  }
+
+  if (diagnosis.diagnosticState.state === "confirmed") {
+    return diagnosis;
+  }
+
+  const nextState = advanceDiagnosticState({
+    current: latest.snapshot,
+    customerReplyText: replyText,
+    contradicted: containsContradictoryEvidence(replyText),
+  });
+  return {
+    ...diagnosis,
+    confidence: nextState.state === "confirmed" ? "confirmed" : "likely",
+    diagnosticState: nextState,
+  };
+}
+
+function latestDiagnosticSnapshot(
+  audits: readonly AuditEvent[],
+  ticketId: string,
+): { snapshot: DiagnosticStateSnapshot; timestamp: string } | undefined {
+  return audits
+    .map((event, index) => ({ event, index }))
+    .filter(
+      ({ event }) =>
+        event.ticketId === ticketId &&
+        (event.action === "diagnosis-completed" ||
+          event.action === "diagnostic-escalated") &&
+        typeof event.after.diagnosis === "object" &&
+        event.after.diagnosis !== null,
+    )
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index,
+    )
+    .map(({ event }) => {
+      const diagnosis = event.after.diagnosis;
+      if (typeof diagnosis !== "object" || diagnosis === null) {
+        return undefined;
+      }
+      const parsed = DiagnosticStateSnapshotSchema.safeParse(
+        (diagnosis as { diagnosticState?: unknown }).diagnosticState,
+      );
+      return parsed.success
+        ? { snapshot: parsed.data, timestamp: event.timestamp }
+        : undefined;
+    })
+    .find((value): value is { snapshot: DiagnosticStateSnapshot; timestamp: string } => value !== undefined);
+}
+
+function customerReplyTextAfter(
+  ticketId: string,
+  audits: readonly AuditEvent[],
+  timestamp: string,
+): string {
+  return audits
+    .filter(
+      (event) =>
+        event.ticketId === ticketId &&
+        event.action === "customer-reply-received" &&
+        event.timestamp > timestamp &&
+        typeof event.after.body === "string",
+    )
+    .map((event) => event.after.body as string)
+    .join("\n\n");
+}
+
+function containsContradictoryEvidence(value: string): boolean {
+  return /\b(?:works|loads|opens)\b/i.test(value) &&
+    /\b(?:still blank|also blank|fails in the same|does not load in the same)\b/i.test(value);
 }
 
 export function fixContextForTicket(

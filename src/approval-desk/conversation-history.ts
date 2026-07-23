@@ -228,6 +228,8 @@ function summarizeAuditEvent(event: AuditEvent): string {
       return "Customer reply was added to the ticket conversation.";
     case "diagnosis-completed":
       return "Diagnosis was completed for the ticket.";
+    case "diagnostic-escalated":
+      return "Diagnostic ambiguity was escalated for specialist review.";
     case "fix-available":
       return "Fix or mitigation is available for customer verification.";
     case "ticket-updated":

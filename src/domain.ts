@@ -111,6 +111,7 @@ export const RequiredEscalationSchema = z.enum([
   "low-confidence",
   "sla",
   "missing-information",
+  "diagnostic-ambiguity",
   "policy-conflict",
 ]);
 
@@ -119,6 +120,7 @@ export const SupportStateSchema = z.enum([
   "information-received",
   "diagnosing",
   "known-cause",
+  "escalated",
   "no-known-cause",
   "waiting-on-platform-fix",
   "waiting-on-customer-action",
@@ -511,10 +513,11 @@ export const AuditActionSchema = z.enum([
   "recommendation-rejected",
   "recommendation-canceled",
   "recommendation-superseded",
-  "customer-response-sent",
-  "customer-reply-received",
-  "diagnosis-completed",
-  "fix-available",
+    "customer-response-sent",
+    "customer-reply-received",
+    "diagnosis-completed",
+    "diagnostic-escalated",
+    "fix-available",
   "ticket-updated",
   "approval-rejected",
 ]);
